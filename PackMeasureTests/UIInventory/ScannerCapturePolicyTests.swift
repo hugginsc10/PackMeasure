@@ -13,7 +13,7 @@ struct ScannerCapturePolicyTests {
 
         #expect(
             state == .retryRequired(
-                "Scan rejected: the object was not separated clearly enough. Keep the target on the object—not the floor or wall—and scan again."
+                ScannerGuidanceCopy.lowConfidenceRetry
             )
         )
         #expect(!state.canSave)
@@ -21,14 +21,44 @@ struct ScannerCapturePolicyTests {
 
     @Test
     func scannerRejectionWinsEvenIfAStaleEstimateExists() {
+        let scannerDiagnostic =
+            "The center target was on a horizontal surface. Aim at the object's front or side face and scan again."
         let state = ScannerCapturePolicy.reviewState(
-            phase: .failed("No centered object was detected."),
+            phase: .failed(scannerDiagnostic),
             estimate: estimate(confidence: .high),
             targetConfirmed: true
         )
 
-        #expect(state == .retryRequired("No centered object was detected."))
+        #expect(state == .retryRequired(scannerDiagnostic))
         #expect(!state.canSave)
+    }
+
+    @Test
+    func guidanceKeepsTopVisibleButTargetsOnlyVerticalFace() {
+        #expect(
+            ScannerGuidanceCopy.previewTarget
+                == "Aim center dot at a vertical front or side face — not the top, floor, or wall"
+        )
+        #expect(
+            ScannerGuidanceCopy.setup
+                == "Stand at a 3/4 angle so the front, side, and top are visible. Put the whole object inside the yellow frame, then place the center dot on a vertical front or side face. Do not aim at the horizontal top."
+        )
+        #expect(
+            ScannerGuidanceCopy.targetConfirmation
+                == "Center dot stayed on a vertical front or side face"
+        )
+    }
+
+    @Test
+    func genericRetryCopyDescribesResultWithoutBlamingUser() {
+        #expect(
+            ScannerGuidanceCopy.lowConfidenceRetry
+                == "This scan did not produce a reliable object measurement. Aim the center dot at a vertical front or side face and scan again."
+        )
+        #expect(
+            ScannerGuidanceCopy.missingEstimateRetry
+                == "No object measurement was produced. Aim the center dot at a vertical front or side face and scan again."
+        )
     }
 
     @Test
@@ -60,7 +90,7 @@ struct ScannerCapturePolicyTests {
 
         #expect(
             state == .retryRequired(
-                "No valid object measurement was produced. Center the target on the object and scan again."
+                ScannerGuidanceCopy.missingEstimateRetry
             )
         )
         #expect(!state.canSave)
