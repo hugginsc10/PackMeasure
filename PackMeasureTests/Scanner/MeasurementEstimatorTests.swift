@@ -225,6 +225,96 @@ struct MeasurementEstimatorTests {
     }
 
     @Test
+    func temporalSupportRemovesShallowHaloAndPreservesDeepVisibleSide() {
+        let elevatedCore: [SIMD3<Float>] = [
+            SIMD3<Float>(-0.24, 0.18, -1.00),
+            SIMD3<Float>(0.00, 0.18, -1.00),
+            SIMD3<Float>(0.24, 0.18, -1.00),
+            SIMD3<Float>(-0.24, 0.48, -1.00),
+            SIMD3<Float>(0.00, 0.48, -1.00),
+            SIMD3<Float>(0.24, 0.48, -1.00),
+        ]
+        let deepVisibleSide = [Float(0.18), Float(0.48)].flatMap { y in
+            (1...7).map { step in
+                SIMD3<Float>(0.24, y, -1.00 - Float(step) * 0.06)
+            }
+        }
+        let shallowRamp = (0...9).map { step in
+            SIMD3<Float>(
+                0.28 + Float(step) * 0.04,
+                0.48,
+                -1.02 - Float(step) * 0.025
+            )
+        }
+        let aboveFloorBackground: [SIMD3<Float>] = [
+            SIMD3<Float>(0.68, 0.18, -1.25),
+            SIMD3<Float>(0.76, 0.18, -1.25),
+            SIMD3<Float>(0.68, 0.48, -1.25),
+            SIMD3<Float>(0.76, 0.48, -1.25),
+        ]
+        let jitter = SIMD3<Float>(0.008, -0.004, 0.007)
+        let frames = [
+            elevatedCore + deepVisibleSide,
+            (elevatedCore + deepVisibleSide).map { $0 + jitter },
+            elevatedCore.map { $0 - jitter } + shallowRamp + aboveFloorBackground,
+        ]
+
+        let result = TemporalWorldPointSupportFilter().filter(frames: frames)
+
+        #expect(result.contributingFrameCount == 3)
+        #expect(result.requiredSupportingFrameCount == 2)
+        #expect(result.points.contains { $0.z < -1.38 })
+        #expect(!result.points.contains { $0.x > 0.30 })
+        #expect(result.points.count < frames.flatMap { $0 }.count)
+    }
+
+    @Test
+    func temporalSupportRejectsTwoFrameFringeInTypicalCapture() {
+        let stableCore = SIMD3<Float>(0, 0.35, -1)
+        let partiallyVisibleSide = SIMD3<Float>(0.24, 0.35, -1.40)
+        let repeatedFringe = SIMD3<Float>(0.48, 0.35, -1.18)
+        let frames = (0..<10).map { frameIndex in
+            let jitter = Float((frameIndex % 3) - 1) * 0.004
+            var points = [stableCore + SIMD3<Float>(jitter, 0, -jitter)]
+            if frameIndex < 3 {
+                points.append(partiallyVisibleSide + SIMD3<Float>(jitter, 0, -jitter))
+            }
+            if frameIndex < 2 {
+                points.append(repeatedFringe + SIMD3<Float>(jitter, 0, -jitter))
+            }
+            return points
+        }
+
+        let result = TemporalWorldPointSupportFilter().filter(frames: frames)
+
+        #expect(result.requiredSupportingFrameCount == 3)
+        #expect(result.points.contains { $0.z < -1.35 })
+        #expect(!result.points.contains { $0.x > 0.40 })
+    }
+
+    @Test
+    func temporalSupportMatchesNeighboringVoxelsAcrossDepthJitter() {
+        let frames = [
+            [SIMD3<Float>(0.024, 0.30, -1.024)],
+            [SIMD3<Float>(0.026, 0.30, -1.026)],
+            [SIMD3<Float>(0.023, 0.30, -1.023)],
+        ]
+
+        let result = TemporalWorldPointSupportFilter().filter(frames: frames)
+
+        #expect(result.points.count == 3)
+    }
+
+    @Test
+    func temporalSupportHandlesEmptyCapture() {
+        let result = TemporalWorldPointSupportFilter().filter(frames: [])
+
+        #expect(result.points.isEmpty)
+        #expect(result.contributingFrameCount == 0)
+        #expect(result.requiredSupportingFrameCount == 0)
+    }
+
+    @Test
     func measurementOutcomePreservesTargetRejectionReason() {
         let points = boxSurfacePoints(
             length: 0.8,
