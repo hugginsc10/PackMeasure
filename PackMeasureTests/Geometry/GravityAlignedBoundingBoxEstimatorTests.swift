@@ -57,6 +57,99 @@ final class GravityAlignedBoundingBoxEstimatorTests: XCTestCase {
         XCTAssertGreaterThan(estimate.confidence.inlierRatio, 0.98)
     }
 
+    func testTrimsDenseHorizontalSilhouetteHaloWithoutChangingHeight() throws {
+        let boxLength: Float = 0.6096 // 24 inches
+        let boxWidth: Float = 0.508 // 20 inches
+        let boxHeight: Float = 0.508 // 20 inches
+        let yaw: Float = 0.31
+        let center = SIMD3<Float>(0, boxHeight / 2, 0)
+        let box = cuboidSurfacePoints(
+            length: boxLength,
+            width: boxWidth,
+            height: boxHeight,
+            yaw: yaw,
+            center: center,
+            subdivisions: 30
+        )
+        let halo = horizontalSilhouetteHaloPoints(
+            length: 0.7112, // observed false 28-inch length
+            width: 0.6096, // observed false 24-inch width
+            height: boxHeight,
+            yaw: yaw,
+            center: center,
+            perimeterSubdivisions: 30
+        )
+
+        let estimate = try estimator.estimate(points: box + halo)
+        let inches = estimate.dimensions.converted(to: .inches)
+
+        XCTAssertGreaterThanOrEqual(inches.length, 23.9)
+        XCTAssertLessThanOrEqual(inches.length, 25.0)
+        XCTAssertGreaterThanOrEqual(inches.width, 19.9)
+        XCTAssertLessThanOrEqual(inches.width, 21.0)
+        XCTAssertEqual(inches.height, 20, accuracy: 0.1)
+    }
+
+    func testPreservesSparseFurnitureHandleProtrusion() throws {
+        let boxLength: Float = 0.6096
+        let boxWidth: Float = 0.508
+        let boxHeight: Float = 0.508
+        let yaw: Float = 0.22
+        let center = SIMD3<Float>(0, boxHeight / 2, 0)
+        let body = cuboidSurfacePoints(
+            length: boxLength,
+            width: boxWidth,
+            height: boxHeight,
+            yaw: yaw,
+            center: center,
+            subdivisions: 20
+        )
+        let handleLength: Float = 0.0508 // a real two-inch protrusion
+        let handleCenter = worldPoint(
+            boxLength / 2 + handleLength / 2,
+            0,
+            0,
+            yaw,
+            center
+        )
+        let sparseHandle = cuboidSurfacePoints(
+            length: handleLength,
+            width: 0.10,
+            height: 0.10,
+            yaw: yaw,
+            center: handleCenter,
+            subdivisions: 2
+        )
+
+        let estimate = try estimator.estimate(points: body + sparseHandle)
+        let inches = estimate.dimensions.converted(to: .inches)
+
+        XCTAssertGreaterThanOrEqual(inches.length, 25.5)
+        XCTAssertEqual(inches.width, 20, accuracy: 0.5)
+        XCTAssertEqual(inches.height, 20, accuracy: 0.5)
+    }
+
+    func testKeepsDensePartialBoxDimensionsConservative() throws {
+        let points = partialBoxPoints(
+            length: 0.6096,
+            width: 0.508,
+            height: 0.508,
+            yaw: 0.37,
+            center: SIMD3<Float>(0.15, 0.254, -0.20),
+            subdivisions: 18
+        )
+
+        let estimate = try estimator.estimate(points: points)
+
+        assertDimensions(
+            estimate.dimensions,
+            0.6096,
+            0.508,
+            0.508,
+            accuracy: 0.0127 // within half an inch without requiring hidden faces
+        )
+    }
+
     func testRecoversKnownBoxFromGroundSkirtAndBackgroundWall() throws {
         let boxLength: Float = 0.6096 // 24 inches
         let boxWidth: Float = 0.508 // 20 inches
@@ -397,6 +490,73 @@ final class GravityAlignedBoundingBoxEstimatorTests: XCTestCase {
                     )
                 }
             }
+        }
+    }
+
+    private func partialBoxPoints(
+        length: Float,
+        width: Float,
+        height: Float,
+        yaw: Float,
+        center: SIMD3<Float>,
+        subdivisions: Int
+    ) -> [SIMD3<Float>] {
+        let samples = (0...subdivisions).map { index in
+            -0.5 + Float(index) / Float(subdivisions)
+        }
+        var points: [SIMD3<Float>] = []
+
+        for first in samples {
+            for second in samples {
+                points.append(worldPoint(
+                    first * length,
+                    second * width,
+                    height / 2,
+                    yaw,
+                    center
+                ))
+                points.append(worldPoint(
+                    length / 2,
+                    first * width,
+                    second * height,
+                    yaw,
+                    center
+                ))
+                points.append(worldPoint(
+                    -length / 2,
+                    first * width,
+                    second * height,
+                    yaw,
+                    center
+                ))
+                points.append(worldPoint(
+                    first * length,
+                    width / 2,
+                    second * height,
+                    yaw,
+                    center
+                ))
+            }
+        }
+        return points
+    }
+
+    private func horizontalSilhouetteHaloPoints(
+        length: Float,
+        width: Float,
+        height: Float,
+        yaw: Float,
+        center: SIMD3<Float>,
+        perimeterSubdivisions: Int
+    ) -> [SIMD3<Float>] {
+        (0...perimeterSubdivisions).flatMap { index in
+            let ratio = -0.5 + Float(index) / Float(perimeterSubdivisions)
+            return [
+                worldPoint(-length / 2, ratio * width, height / 2, yaw, center),
+                worldPoint(length / 2, ratio * width, height / 2, yaw, center),
+                worldPoint(ratio * length, -width / 2, height / 2, yaw, center),
+                worldPoint(ratio * length, width / 2, height / 2, yaw, center),
+            ]
         }
     }
 
