@@ -16,7 +16,7 @@ absolute error = |measured - actual|
 percent error = absolute error / actual × 100
 ```
 
-## Tonight's acceptance check
+## Physical-device acceptance check
 
 - Camera permission appears once and the live preview opens.
 - Each known box returns all three dimensions after a one-second capture.

@@ -1,7 +1,7 @@
 name: PackMeasure
 
 options:
-  bundleIdPrefix: com.chasstudio
+  bundleIdPrefix: org.example
   createIntermediateGroups: true
   deploymentTarget:
     iOS: "18.0"
@@ -11,7 +11,6 @@ settings:
   base:
     SWIFT_VERSION: "6.0"
     CODE_SIGN_STYLE: Automatic
-    DEVELOPMENT_TEAM: SMCQX7ZNDA
     CURRENT_PROJECT_VERSION: "7"
     MARKETING_VERSION: "0.1.6"
 
@@ -42,7 +41,7 @@ targets:
           - UIInterfaceOrientationPortrait
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.chasstudio.PackMeasure
+        PRODUCT_BUNDLE_IDENTIFIER: org.example.PackMeasure
         PRODUCT_NAME: PackMeasure
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
@@ -58,7 +57,7 @@ targets:
       - target: PackMeasure
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.chasstudio.PackMeasureTests
+        PRODUCT_BUNDLE_IDENTIFIER: org.example.PackMeasureTests
         GENERATE_INFOPLIST_FILE: YES
         TARGETED_DEVICE_FAMILY: "1"
 

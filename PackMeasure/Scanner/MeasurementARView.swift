@@ -116,7 +116,7 @@ struct MeasurementARView: UIViewRepresentable {
         }
 
         private static let calibrationLogger = Logger(
-            subsystem: "com.chasstudio.PackMeasure",
+            subsystem: "org.example.PackMeasure",
             category: "calibration"
         )
         private static let captureDuration: TimeInterval = 1.0

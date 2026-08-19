@@ -302,11 +302,9 @@
 				LastUpgradeCheck = 2700;
 				TargetAttributes = {
 					A7F71C84CC6B097693872246 = {
-						DevelopmentTeam = SMCQX7ZNDA;
 						ProvisioningStyle = Automatic;
 					};
 					E19486109CAC1284B0ED3103 = {
-						DevelopmentTeam = SMCQX7ZNDA;
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -408,7 +406,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.chasstudio.PackMeasure;
+				PRODUCT_BUNDLE_IDENTIFIER = org.example.PackMeasure;
 				PRODUCT_NAME = PackMeasure;
 				SDKROOT = iphoneos;
 				SUPPORTS_MACCATALYST = NO;
@@ -427,7 +425,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.chasstudio.PackMeasure;
+				PRODUCT_BUNDLE_IDENTIFIER = org.example.PackMeasure;
 				PRODUCT_NAME = PackMeasure;
 				SDKROOT = iphoneos;
 				SUPPORTS_MACCATALYST = NO;
@@ -472,7 +470,6 @@
 				COPY_PHASE_STRIP = NO;
 				CURRENT_PROJECT_VERSION = 7;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				DEVELOPMENT_TEAM = SMCQX7ZNDA;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
@@ -505,7 +502,7 @@
 					"@executable_path/Frameworks",
 					"@loader_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.chasstudio.PackMeasureTests;
+				PRODUCT_BUNDLE_IDENTIFIER = org.example.PackMeasureTests;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = 1;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/PackMeasure.app/PackMeasure";
@@ -522,7 +519,7 @@
 					"@executable_path/Frameworks",
 					"@loader_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.chasstudio.PackMeasureTests;
+				PRODUCT_BUNDLE_IDENTIFIER = org.example.PackMeasureTests;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = 1;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/PackMeasure.app/PackMeasure";
@@ -566,7 +563,6 @@
 				COPY_PHASE_STRIP = NO;
 				CURRENT_PROJECT_VERSION = 7;
 				DEBUG_INFORMATION_FORMAT = dwarf;
-				DEVELOPMENT_TEAM = SMCQX7ZNDA;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;

@@ -13,9 +13,10 @@ not place a reference object, calibrate a scale, or tap measurement endpoints.
 
 1. Frame a box or object at a three-quarter angle so its front, side, and top
    are visible.
-2. Tap **Scan object** and keep the object inside the reticle for roughly one
+2. Tap **Start measurement** and keep the object inside the reticle for roughly one
    second.
-3. Review the estimated length, width, and height, plus an accuracy indicator.
+3. Review the estimated length, width, and height, plus a point-cloud quality
+   indicator that does not claim dimensional accuracy.
 4. Name the item, adjust quantity and stackability, then save it.
 5. Review total floor footprint, cubic volume, largest-item constraints, and
    the smallest planning vehicle that fits.
@@ -39,13 +40,14 @@ not place a reference object, calibrate a scale, or tap measurement endpoints.
 - Vehicle profiles are planning estimates and must expose their assumed cargo
   dimensions and usable-volume factor.
 
-## Definition of done for tonight
+## MVP acceptance criteria
 
-- App builds for iOS 27 and launches on Chas's iPhone 16 Pro.
+- App builds for iOS 27 and launches on a LiDAR-capable iPhone.
 - Camera permission and LiDAR support checks are handled.
 - A known rectangular box can be scanned, reviewed, and saved.
 - Inventory survives relaunch.
 - Totals and a vehicle recommendation update after adding/removing items.
 - Geometry and packing math unit tests pass.
-- Known-box device checks record error on all three dimensions; results are
-  labeled honestly if the desired tolerance is not yet met.
+- Known-box device checks record error on all three dimensions; results and
+  project documentation are labeled honestly if the desired tolerance is not
+  yet met.
