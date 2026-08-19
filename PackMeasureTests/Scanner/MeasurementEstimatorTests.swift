@@ -256,13 +256,15 @@ struct MeasurementEstimatorTests {
         let frames = [
             elevatedCore + deepVisibleSide,
             (elevatedCore + deepVisibleSide).map { $0 + jitter },
-            elevatedCore.map { $0 - jitter } + shallowRamp + aboveFloorBackground,
+            (elevatedCore + deepVisibleSide).map { $0 - jitter }
+                + shallowRamp
+                + aboveFloorBackground,
         ]
 
         let result = TemporalWorldPointSupportFilter().filter(frames: frames)
 
         #expect(result.contributingFrameCount == 3)
-        #expect(result.requiredSupportingFrameCount == 2)
+        #expect(result.requiredSupportingFrameCount == 3)
         #expect(result.points.contains { $0.z < -1.38 })
         #expect(!result.points.contains { $0.x > 0.30 })
         #expect(result.points.count < frames.flatMap { $0 }.count)

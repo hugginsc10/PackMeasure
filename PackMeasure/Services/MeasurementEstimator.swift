@@ -330,7 +330,7 @@ struct TemporalWorldPointSupportFilter: Sendable {
         voxelSizeMeters: Float = 0.02,
         requiredFrameFraction: Double = 0.25,
         neighborRadius: Int = 1,
-        minimumSupportingFrames: Int = 2
+        minimumSupportingFrames: Int = 3
     ) {
         precondition(voxelSizeMeters.isFinite && voxelSizeMeters > 0)
         precondition(requiredFrameFraction > 0 && requiredFrameFraction <= 1)
