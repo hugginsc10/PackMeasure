@@ -24,6 +24,23 @@ struct MeasurementEstimatorTests {
     }
 
     @Test
+    func previewAndCaptureRequestsRouteAsSeparateLifecycleCommands() {
+        var tracker = ScannerViewRequestTracker()
+
+        #expect(
+            tracker.commands(previewRequestID: 0, captureRequestID: 0).isEmpty
+        )
+        #expect(
+            tracker.commands(previewRequestID: 1, captureRequestID: 0)
+                == [.resumePreview]
+        )
+        #expect(
+            tracker.commands(previewRequestID: 1, captureRequestID: 1)
+                == [.startCapture]
+        )
+    }
+
+    @Test
     func acceptsCenterSeedOnVerticalObjectFace() {
         let sample = CenteredTargetSurfaceSample(
             center: SIMD3<Float>(0, 0.50, -1),
