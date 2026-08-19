@@ -62,6 +62,22 @@ struct ScannerCapturePolicyTests {
     }
 
     @Test
+    func measuredDimensionsAreExplicitlyLabeledAsAnEstimate() {
+        #expect(ScannerResultCopy.sizeSectionTitle == "Estimated size")
+    }
+
+    @Test
+    func scanQualitySummaryDoesNotClaimMeasurementAccuracy() {
+        let summary = ScannerResultCopy.qualitySummary(
+            for: estimate(confidence: .high)
+        )
+
+        #expect(summary == "High point-cloud quality • 800 points")
+        #expect(!summary.localizedCaseInsensitiveContains("confidence"))
+        #expect(!summary.localizedCaseInsensitiveContains("accuracy"))
+    }
+
+    @Test
     func usableCaptureCannotSaveUntilUserConfirmsTargetStayedOnObject() {
         let unconfirmed = ScannerCapturePolicy.reviewState(
             phase: .measured,
