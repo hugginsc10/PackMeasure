@@ -22,7 +22,7 @@ struct ScannerCapturePolicyTests {
     @Test
     func scannerRejectionWinsEvenIfAStaleEstimateExists() {
         let scannerDiagnostic =
-            "The center target was on a horizontal surface. Aim at the object's front or side face and scan again."
+            "The measurement could not isolate the object from its surroundings. Keep the object centered with clear edges and scan again."
         let state = ScannerCapturePolicy.reviewState(
             phase: .failed(scannerDiagnostic),
             estimate: estimate(confidence: .high),
@@ -34,18 +34,18 @@ struct ScannerCapturePolicyTests {
     }
 
     @Test
-    func guidanceKeepsTopVisibleButTargetsOnlyVerticalFace() {
+    func guidanceAllowsAnyClearObjectFaceAndSeparatesBackground() {
         #expect(
             ScannerGuidanceCopy.previewTarget
-                == "Aim center dot at a vertical front or side face — not the top, floor, or wall"
+                == "Put center dot on a clear object face — keep floor and background outside the object"
         )
         #expect(
             ScannerGuidanceCopy.setup
-                == "Stand at a 3/4 angle so the front, side, and top are visible. Put the whole object inside the yellow frame, then place the center dot on a vertical front or side face. Do not aim at the horizontal top."
+                == "Stand at a 3/4 angle so the front, side, and top are visible. Put the whole object inside the yellow frame, place the center dot on a clear object face, and keep visible floor or background around the object's edges."
         )
         #expect(
             ScannerGuidanceCopy.targetConfirmation
-                == "Center dot stayed on a vertical front or side face"
+                == "Center dot stayed on a clear object face"
         )
     }
 
@@ -53,11 +53,11 @@ struct ScannerCapturePolicyTests {
     func genericRetryCopyDescribesResultWithoutBlamingUser() {
         #expect(
             ScannerGuidanceCopy.lowConfidenceRetry
-                == "This scan did not produce a reliable object measurement. Aim the center dot at a vertical front or side face and scan again."
+                == "This scan could not isolate a reliable object measurement. Keep the object inside the frame, put the center dot on a clear object face, and scan again."
         )
         #expect(
             ScannerGuidanceCopy.missingEstimateRetry
-                == "No object measurement was produced. Aim the center dot at a vertical front or side face and scan again."
+                == "No object measurement was produced. Keep the object inside the frame, put the center dot on a clear object face, and scan again."
         )
     }
 
