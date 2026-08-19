@@ -64,7 +64,12 @@ final class GuidedBoxMeasurementTests: XCTestCase {
 
         let measurement = try GuidedBoxMeasurementEstimator().estimate(capture)
 
-        XCTAssertEqual(measurement.dimensions.heightMeters, 0.5, accuracy: 0.000_01)
+        XCTAssertEqual(measurement.rawEdgeLengthsMeters.height, 0.5, accuracy: 0.000_01)
+        XCTAssertEqual(
+            measurement.dimensions.converted(to: .inches).height,
+            20,
+            accuracy: 0.001
+        )
     }
 
     func testRejectsEveryEdgeShorterThanMinimum() {
