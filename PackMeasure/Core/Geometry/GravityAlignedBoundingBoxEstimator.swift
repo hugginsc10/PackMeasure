@@ -101,6 +101,10 @@ struct GravityAlignedBoundingBoxEstimator: Sendable {
             recoveredGroundPlane = true
         }
 
+        guard !hasPersistentFullHeightHorizontalHalo(in: projections) else {
+            throw BoundingBoxEstimationError.sceneContamination
+        }
+
         let horizontalCenter = axes.point(
             first: horizontalBounds.first.midpoint,
             second: horizontalBounds.second.midpoint
@@ -390,6 +394,78 @@ struct GravityAlignedBoundingBoxEstimator: Sendable {
             lower: max(raw.lower, lower - safetyMargin),
             upper: min(raw.upper, upper + safetyMargin)
         )
+    }
+
+    /// A transient fringe is removed before geometry fitting, but a coherent
+    /// outer shell can survive across frames. If broad, full-height sheets wrap
+    /// both horizontal axes around a denser inner body, the cloud is ambiguous:
+    /// geometry alone cannot know whether the inner or outer envelope is real.
+    /// Reject that scan rather than silently shortening a legitimate object.
+    private func hasPersistentFullHeightHorizontalHalo(
+        in projections: Projections
+    ) -> Bool {
+        persistentHaloEvidence(
+            values: projections.first,
+            orthogonal: projections.second,
+            vertical: projections.vertical
+        ) && persistentHaloEvidence(
+            values: projections.second,
+            orthogonal: projections.first,
+            vertical: projections.vertical
+        )
+    }
+
+    private func persistentHaloEvidence(
+        values: [Double],
+        orthogonal: [Double],
+        vertical: [Double]
+    ) -> Bool {
+        guard values.count >= 200,
+              values.count == orthogonal.count,
+              values.count == vertical.count else {
+            return false
+        }
+
+        let raw = AxisBounds(values: values)
+        let lower = quantile(values, at: 0.03)
+        let upper = quantile(values, at: 0.97)
+        let centralSpan = max(0, upper - lower)
+        let lowerInflation = lower - raw.lower
+        let upperInflation = raw.upper - upper
+        guard raw.span - centralSpan >= 0.0254,
+              lowerInflation >= 0.00635,
+              upperInflation >= 0.00635 else {
+            return false
+        }
+
+        let safetyMargin = configuration.voxelSizeMeters * 2
+        let lowerTail = values.indices.filter { values[$0] < lower - safetyMargin }
+        let upperTail = values.indices.filter { values[$0] > upper + safetyMargin }
+        let minimumTailSupport = max(8, configuration.minimumPointCount)
+        guard lowerTail.count >= minimumTailSupport,
+              upperTail.count >= minimumTailSupport else {
+            return false
+        }
+
+        let objectVerticalSpan = AxisBounds(values: vertical).span
+        let orthogonalLower = quantile(orthogonal, at: 0.03)
+        let orthogonalUpper = quantile(orthogonal, at: 0.97)
+        let objectOrthogonalSpan = max(0, orthogonalUpper - orthogonalLower)
+        guard objectVerticalSpan >= configuration.minimumDimensionMeters,
+              objectOrthogonalSpan >= configuration.minimumDimensionMeters else {
+            return false
+        }
+
+        return [lowerTail, upperTail].allSatisfy { indices in
+            let tailVerticalSpan = AxisBounds(
+                values: indices.map { vertical[$0] }
+            ).span
+            let tailOrthogonalSpan = AxisBounds(
+                values: indices.map { orthogonal[$0] }
+            ).span
+            return tailVerticalSpan >= objectVerticalSpan * 0.60
+                && tailOrthogonalSpan >= objectOrthogonalSpan * 0.60
+        }
     }
 
     private func recoverGroundContaminatedObject(

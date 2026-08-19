@@ -225,6 +225,235 @@ struct MeasurementEstimatorTests {
     }
 
     @Test
+    func temporalSupportRemovesShallowHaloAndPreservesDeepVisibleSide() {
+        let elevatedCore: [SIMD3<Float>] = [
+            SIMD3<Float>(-0.24, 0.18, -1.00),
+            SIMD3<Float>(0.00, 0.18, -1.00),
+            SIMD3<Float>(0.24, 0.18, -1.00),
+            SIMD3<Float>(-0.24, 0.48, -1.00),
+            SIMD3<Float>(0.00, 0.48, -1.00),
+            SIMD3<Float>(0.24, 0.48, -1.00),
+        ]
+        let deepVisibleSide = [Float(0.18), Float(0.48)].flatMap { y in
+            (1...7).map { step in
+                SIMD3<Float>(0.24, y, -1.00 - Float(step) * 0.06)
+            }
+        }
+        let shallowRamp = (0...9).map { step in
+            SIMD3<Float>(
+                0.28 + Float(step) * 0.04,
+                0.48,
+                -1.02 - Float(step) * 0.025
+            )
+        }
+        let aboveFloorBackground: [SIMD3<Float>] = [
+            SIMD3<Float>(0.68, 0.18, -1.25),
+            SIMD3<Float>(0.76, 0.18, -1.25),
+            SIMD3<Float>(0.68, 0.48, -1.25),
+            SIMD3<Float>(0.76, 0.48, -1.25),
+        ]
+        let jitter = SIMD3<Float>(0.008, -0.004, 0.007)
+        let frames = [
+            elevatedCore + deepVisibleSide,
+            (elevatedCore + deepVisibleSide).map { $0 + jitter },
+            (elevatedCore + deepVisibleSide).map { $0 - jitter }
+                + shallowRamp
+                + aboveFloorBackground,
+        ]
+
+        let result = TemporalWorldPointSupportFilter().filter(frames: frames)
+
+        #expect(result.contributingFrameCount == 3)
+        #expect(result.requiredSupportingFrameCount == 3)
+        #expect(result.points.contains { $0.z < -1.38 })
+        #expect(!result.points.contains { $0.x > 0.30 })
+        #expect(result.points.count < frames.flatMap { $0 }.count)
+    }
+
+    @Test
+    func temporalSupportRejectsTwoFrameFringeInTypicalCapture() {
+        let stableCore = SIMD3<Float>(0, 0.35, -1)
+        let partiallyVisibleSide = SIMD3<Float>(0.24, 0.35, -1.40)
+        let repeatedFringe = SIMD3<Float>(0.48, 0.35, -1.18)
+        let frames = (0..<10).map { frameIndex in
+            let jitter = Float((frameIndex % 3) - 1) * 0.004
+            var points = [stableCore + SIMD3<Float>(jitter, 0, -jitter)]
+            if frameIndex < 3 {
+                points.append(partiallyVisibleSide + SIMD3<Float>(jitter, 0, -jitter))
+            }
+            if frameIndex < 2 {
+                points.append(repeatedFringe + SIMD3<Float>(jitter, 0, -jitter))
+            }
+            return points
+        }
+
+        let result = TemporalWorldPointSupportFilter().filter(frames: frames)
+
+        #expect(result.requiredSupportingFrameCount == 3)
+        #expect(result.points.contains { $0.z < -1.35 })
+        #expect(!result.points.contains { $0.x > 0.40 })
+    }
+
+    @Test
+    func temporalSupportRejectsTwoFrameFringeInShortCaptures() {
+        let stableCore = SIMD3<Float>(0, 0.35, -1)
+        let legitimateSide = SIMD3<Float>(0.24, 0.35, -1.40)
+        let repeatedFringe = SIMD3<Float>(0.48, 0.35, -1.18)
+
+        for frameCount in [3, 4, 7] {
+            let frames = (0..<frameCount).map { frameIndex in
+                var points = [stableCore]
+                if frameIndex < 3 {
+                    points.append(legitimateSide)
+                }
+                if frameIndex < 2 {
+                    points.append(repeatedFringe)
+                }
+                return points
+            }
+
+            let result = TemporalWorldPointSupportFilter().filter(frames: frames)
+
+            #expect(result.requiredSupportingFrameCount == 3)
+            #expect(result.points.contains(legitimateSide))
+            #expect(!result.points.contains(repeatedFringe))
+        }
+    }
+
+    @Test
+    func temporalSupportDistinguishesNeighborToleranceFromParallelSlab() {
+        let stableSurface = SIMD3<Float>(0.001, 0.35, -1)
+        let withinNeighborTolerance = SIMD3<Float>(0.039, 0.35, -1)
+        let outsideNeighborTolerance = SIMD3<Float>(0.041, 0.35, -1)
+        let frames = (0..<4).map { frameIndex in
+            frameIndex < 2
+                ? [stableSurface, withinNeighborTolerance, outsideNeighborTolerance]
+                : [stableSurface]
+        }
+
+        let result = TemporalWorldPointSupportFilter().filter(frames: frames)
+
+        #expect(result.points.contains(withinNeighborTolerance))
+        #expect(!result.points.contains(outsideNeighborTolerance))
+    }
+
+    @Test
+    func temporallyFilteredCaptureMatchesStableMeasurementPipeline() {
+        let stableObject = boxSurfacePoints(
+            length: 0.60,
+            width: 0.40,
+            height: 0.50,
+            yaw: 0
+        )
+        let parallelFringe = (0...16).flatMap { yIndex in
+            (0...18).map { zIndex in
+                SIMD3<Float>(
+                    0.90,
+                    0.50 * Float(yIndex) / 16,
+                    -0.20 + 0.40 * Float(zIndex) / 18
+                )
+            }
+        }
+        let frames = [
+            stableObject + parallelFringe,
+            stableObject + parallelFringe,
+            stableObject,
+        ]
+
+        let filtered = TemporalWorldPointSupportFilter().filter(frames: frames)
+        let filteredOutcome = MeasurementEstimator.outcome(
+            from: filtered.points,
+            frameCount: frames.count
+        )
+        let stableOutcome = MeasurementEstimator.outcome(
+            from: stableObject,
+            frameCount: frames.count
+        )
+
+        #expect(filteredOutcome == stableOutcome)
+    }
+
+    @Test
+    func temporalSupportMatchesNeighboringVoxelsAcrossDepthJitter() {
+        let frames = [
+            [SIMD3<Float>(0.024, 0.30, -1.024)],
+            [SIMD3<Float>(0.026, 0.30, -1.026)],
+            [SIMD3<Float>(0.023, 0.30, -1.023)],
+        ]
+
+        let result = TemporalWorldPointSupportFilter().filter(frames: frames)
+
+        #expect(result.points.count == 3)
+    }
+
+    @Test
+    func temporalSupportHandlesEmptyCapture() {
+        let result = TemporalWorldPointSupportFilter().filter(frames: [])
+
+        #expect(result.points.isEmpty)
+        #expect(result.contributingFrameCount == 0)
+        #expect(result.requiredSupportingFrameCount == 0)
+    }
+
+    @Test
+    func fullyFramedTwentyInchSideRemainsMeasurable() throws {
+        let inchInMeters: Float = 0.0254
+        let points = boxSurfacePoints(
+            length: 24 * inchInMeters,
+            width: 20 * inchInMeters,
+            height: 20 * inchInMeters,
+            yaw: .pi / 6
+        )
+
+        let outcome = PersistentEdgeContaminationPolicy().outcome(
+            retainedEdgeFrameCount: 0,
+            requiredSupportingFrameCount: 3,
+            otherwise: MeasurementEstimator.outcome(
+                from: points,
+                frameCount: 9
+            )
+        )
+
+        guard case .success(let estimate) = outcome else {
+            Issue.record("A fully framed 20-inch side should remain measurable")
+            return
+        }
+        #expect(estimate.widthMeters >= Double(19 * inchInMeters))
+        #expect(estimate.heightMeters >= Double(19 * inchInMeters))
+    }
+
+    @Test
+    func persistentEdgeSupportRejectsBeforeGeometry() {
+        for retainedEdgeFrameCount in [3, 4, 7] {
+            let outcome = PersistentEdgeContaminationPolicy().outcome(
+                retainedEdgeFrameCount: retainedEdgeFrameCount,
+                requiredSupportingFrameCount: 3,
+                otherwise: MeasurementEstimator.outcome(
+                    from: [],
+                    frameCount: 0
+                )
+            )
+
+            #expect(outcome == .failure(.geometry(.sceneContamination)))
+        }
+    }
+
+    @Test
+    func sporadicEdgeContactBelowSupportDoesNotReject() {
+        let estimatorOutcome = MeasurementEstimationOutcome.failure(
+            .insufficientFrames(actual: 2, minimum: 3)
+        )
+
+        let outcome = PersistentEdgeContaminationPolicy().outcome(
+            retainedEdgeFrameCount: 2,
+            requiredSupportingFrameCount: 3,
+            otherwise: estimatorOutcome
+        )
+
+        #expect(outcome == estimatorOutcome)
+    }
+
+    @Test
     func measurementOutcomePreservesTargetRejectionReason() {
         let points = boxSurfacePoints(
             length: 0.8,
@@ -264,6 +493,49 @@ struct MeasurementEstimatorTests {
                 == .failure(
                     .geometry(.insufficientUniquePoints(actual: 1, minimum: 8))
                 )
+        )
+    }
+
+    @Test
+    func sceneContaminationUsesFloorAndBackgroundRetryGuidance() {
+        let sceneMessage = ScannerMeasurementFailureCopy.message(
+            for: .geometry(.sceneContamination)
+        )
+        let groundMessage = ScannerMeasurementFailureCopy.message(
+            for: .geometry(.groundPlaneContamination)
+        )
+
+        #expect(sceneMessage == groundMessage)
+        #expect(
+            sceneMessage
+                == "Too much floor or background entered the scan. Keep the whole object centered with space around its edges."
+        )
+    }
+
+    @Test
+    func measurementFailureCopyCoversFloorAndWeakRetryPaths() {
+        let weakMessage = "Scan was too weak. Back up slightly and retake with the item centered."
+
+        #expect(
+            ScannerMeasurementFailureCopy.message(
+                for: .targetRejected(.floorSurface)
+            )
+                == "The center reticle appears to be on the floor. Center it on the object and try again."
+        )
+        #expect(
+            ScannerMeasurementFailureCopy.message(
+                for: .targetRejected(.insufficientSurfaceEvidence)
+            ) == weakMessage
+        )
+        #expect(
+            ScannerMeasurementFailureCopy.message(
+                for: .insufficientFrames(actual: 2, minimum: 3)
+            ) == weakMessage
+        )
+        #expect(
+            ScannerMeasurementFailureCopy.message(
+                for: .geometry(.degeneratePointCloud)
+            ) == weakMessage
         )
     }
 

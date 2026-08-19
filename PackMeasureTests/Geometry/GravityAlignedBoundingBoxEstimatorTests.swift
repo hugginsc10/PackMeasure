@@ -90,6 +90,46 @@ final class GravityAlignedBoundingBoxEstimatorTests: XCTestCase {
         XCTAssertEqual(inches.height, 20, accuracy: 0.1)
     }
 
+    func testRejectsPersistentAngleDependentVerticalSilhouetteHalo() {
+        let boxLength: Float = 0.6096 // 24 inches
+        let boxWidth: Float = 0.508 // 20 inches
+        let boxHeight: Float = 0.508 // 20 inches
+        let calibrationCases: [(yaw: Float, falseLength: Float, falseWidth: Float)] = [
+            (0.17, 0.6858, 0.6096), // observed 27 x 24 x 19 inches
+            (0.44, 0.7366, 0.5334), // observed 29 x 21 x 19 inches
+            (-0.36, 0.7112, 0.635), // observed 28 x 25 x 20 inches
+        ]
+
+        for calibration in calibrationCases {
+            let center = SIMD3<Float>(0, boxHeight / 2, 0)
+            let box = cuboidSurfacePoints(
+                length: boxLength,
+                width: boxWidth,
+                height: boxHeight,
+                yaw: calibration.yaw,
+                center: center,
+                subdivisions: 30
+            )
+            let halo = verticalSilhouetteHaloPoints(
+                falseLength: calibration.falseLength,
+                falseWidth: calibration.falseWidth,
+                objectLength: boxLength,
+                objectWidth: boxWidth,
+                height: boxHeight,
+                yaw: calibration.yaw,
+                center: center,
+                faceSubdivisions: 9
+            )
+
+            XCTAssertThrowsError(try estimator.estimate(points: box + halo)) { error in
+                XCTAssertEqual(
+                    error as? BoundingBoxEstimationError,
+                    .sceneContamination
+                )
+            }
+        }
+    }
+
     func testPreservesSparseFurnitureHandleProtrusion() throws {
         let boxLength: Float = 0.6096
         let boxWidth: Float = 0.508
@@ -616,6 +656,56 @@ final class GravityAlignedBoundingBoxEstimatorTests: XCTestCase {
                 worldPoint(ratio * length, width / 2, height / 2, yaw, center),
             ]
         }
+    }
+
+    private func verticalSilhouetteHaloPoints(
+        falseLength: Float,
+        falseWidth: Float,
+        objectLength: Float,
+        objectWidth: Float,
+        height: Float,
+        yaw: Float,
+        center: SIMD3<Float>,
+        faceSubdivisions: Int
+    ) -> [SIMD3<Float>] {
+        let samples = (0...faceSubdivisions).map { index in
+            -0.5 + Float(index) / Float(faceSubdivisions)
+        }
+        var points: [SIMD3<Float>] = []
+
+        for horizontal in samples {
+            for vertical in samples {
+                points.append(worldPoint(
+                    -falseLength / 2,
+                    horizontal * objectWidth,
+                    vertical * height,
+                    yaw,
+                    center
+                ))
+                points.append(worldPoint(
+                    falseLength / 2,
+                    horizontal * objectWidth,
+                    vertical * height,
+                    yaw,
+                    center
+                ))
+                points.append(worldPoint(
+                    horizontal * objectLength,
+                    -falseWidth / 2,
+                    vertical * height,
+                    yaw,
+                    center
+                ))
+                points.append(worldPoint(
+                    horizontal * objectLength,
+                    falseWidth / 2,
+                    vertical * height,
+                    yaw,
+                    center
+                ))
+            }
+        }
+        return points
     }
 
     private func horizontalPlanePoints(

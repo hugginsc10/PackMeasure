@@ -304,6 +304,130 @@ struct CenteredTargetCapturePolicy: Sendable {
     }
 }
 
+struct TemporalWorldPointSupportResult: Equatable, Sendable {
+    let points: [SIMD3<Float>]
+    let inputPointCount: Int
+    let contributingFrameCount: Int
+    let requiredSupportingFrameCount: Int
+}
+
+/// Keeps world-space surfaces seen across multiple depth frames while dropping
+/// transient silhouette mixtures. Neighboring voxels count as the same support
+/// so normal LiDAR jitter does not erase a legitimate face or protrusion.
+struct TemporalWorldPointSupportFilter: Sendable {
+    private struct VoxelKey: Hashable, Sendable {
+        let x: Int
+        let y: Int
+        let z: Int
+    }
+
+    private let voxelSizeMeters: Float
+    private let requiredFrameFraction: Double
+    private let neighborRadius: Int
+    private let minimumSupportingFrames: Int
+
+    init(
+        voxelSizeMeters: Float = 0.02,
+        requiredFrameFraction: Double = 0.25,
+        neighborRadius: Int = 1,
+        minimumSupportingFrames: Int = 3
+    ) {
+        precondition(voxelSizeMeters.isFinite && voxelSizeMeters > 0)
+        precondition(requiredFrameFraction > 0 && requiredFrameFraction <= 1)
+        precondition(neighborRadius >= 0)
+        precondition(minimumSupportingFrames > 0)
+        self.voxelSizeMeters = voxelSizeMeters
+        self.requiredFrameFraction = requiredFrameFraction
+        self.neighborRadius = neighborRadius
+        self.minimumSupportingFrames = minimumSupportingFrames
+    }
+
+    func filter(frames: [[SIMD3<Float>]]) -> TemporalWorldPointSupportResult {
+        let inputPointCount = frames.reduce(0) { $0 + $1.count }
+        let finiteFrames = frames.compactMap { frame -> [SIMD3<Float>]? in
+            let finitePoints = frame.filter(isFinite)
+            return finitePoints.isEmpty ? nil : finitePoints
+        }
+        guard !finiteFrames.isEmpty else {
+            return TemporalWorldPointSupportResult(
+                points: [],
+                inputPointCount: inputPointCount,
+                contributingFrameCount: 0,
+                requiredSupportingFrameCount: 0
+            )
+        }
+
+        let proportionalRequirement = Int(
+            ceil(Double(finiteFrames.count) * requiredFrameFraction)
+        )
+        let requiredSupportingFrameCount = min(
+            finiteFrames.count,
+            max(minimumSupportingFrames, proportionalRequirement)
+        )
+        let occupiedVoxels = finiteFrames.map { frame in
+            Set(frame.map(voxelKey))
+        }
+        let allVoxels = Set(occupiedVoxels.flatMap { $0 })
+        var supportByVoxel: [VoxelKey: Int] = [:]
+        supportByVoxel.reserveCapacity(allVoxels.count)
+
+        for voxel in allVoxels {
+            supportByVoxel[voxel] = occupiedVoxels.reduce(into: 0) { support, frame in
+                if frameHasSupport(near: voxel, occupiedVoxels: frame) {
+                    support += 1
+                }
+            }
+        }
+
+        let retainedPoints = finiteFrames.flatMap { frame in
+            frame.filter { point in
+                supportByVoxel[voxelKey(point), default: 0]
+                    >= requiredSupportingFrameCount
+            }
+        }
+        return TemporalWorldPointSupportResult(
+            points: retainedPoints,
+            inputPointCount: inputPointCount,
+            contributingFrameCount: finiteFrames.count,
+            requiredSupportingFrameCount: requiredSupportingFrameCount
+        )
+    }
+
+    private func isFinite(_ point: SIMD3<Float>) -> Bool {
+        point.x.isFinite && point.y.isFinite && point.z.isFinite
+    }
+
+    private func voxelKey(_ point: SIMD3<Float>) -> VoxelKey {
+        VoxelKey(
+            x: Int((point.x / voxelSizeMeters).rounded(.down)),
+            y: Int((point.y / voxelSizeMeters).rounded(.down)),
+            z: Int((point.z / voxelSizeMeters).rounded(.down))
+        )
+    }
+
+    private func frameHasSupport(
+        near voxel: VoxelKey,
+        occupiedVoxels: Set<VoxelKey>
+    ) -> Bool {
+        for xOffset in -neighborRadius...neighborRadius {
+            for yOffset in -neighborRadius...neighborRadius {
+                for zOffset in -neighborRadius...neighborRadius {
+                    if occupiedVoxels.contains(
+                        VoxelKey(
+                            x: voxel.x + xOffset,
+                            y: voxel.y + yOffset,
+                            z: voxel.z + zOffset
+                        )
+                    ) {
+                        return true
+                    }
+                }
+            }
+        }
+        return false
+    }
+}
+
 enum MeasurementEstimationFailure: Equatable, Sendable {
     case insufficientFrames(actual: Int, minimum: Int)
     case targetRejected(CenteredTargetRejection)
@@ -313,6 +437,24 @@ enum MeasurementEstimationFailure: Equatable, Sendable {
 enum MeasurementEstimationOutcome: Equatable, Sendable {
     case success(MeasurementEstimate)
     case failure(MeasurementEstimationFailure)
+}
+
+/// Rejects a retained component that repeatedly reaches the image boundary.
+/// A fully framed object should have visible separation from every edge; once
+/// edge contact has the same temporal support required for geometry, the scan
+/// is ambiguous and should retry rather than estimate the attached scene.
+struct PersistentEdgeContaminationPolicy: Sendable {
+    func outcome(
+        retainedEdgeFrameCount: Int,
+        requiredSupportingFrameCount: Int,
+        otherwise measurementOutcome: @autoclosure () -> MeasurementEstimationOutcome
+    ) -> MeasurementEstimationOutcome {
+        guard requiredSupportingFrameCount > 0,
+              retainedEdgeFrameCount >= requiredSupportingFrameCount else {
+            return measurementOutcome()
+        }
+        return .failure(.geometry(.sceneContamination))
+    }
 }
 
 /// Adapts the shared geometry result into the scanner-facing measurement model.
