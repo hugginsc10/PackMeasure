@@ -74,7 +74,8 @@ struct MeasurementARView: UIViewRepresentable {
         }
 
         private struct FrameCalibrationDiagnostics: Sendable {
-            let regionPixelCount: Int
+            let rawRegionPixelCount: Int
+            let retainedRegionPixelCount: Int
             let regionCoverage: Float
             let absoluteUpNormal: Float?
             let elevationAboveFloorMeters: Float?
@@ -99,6 +100,7 @@ struct MeasurementARView: UIViewRepresentable {
         private static let maximumRegionCoverage = 0.94
         private static let peripheralSampleTarget = 1_200
         private static let edgeMarginPixels = 2
+        private static let minimumTargetElevationForFloorFiltering: Float = 0.08
 
         private let processingQueue = DispatchQueue(
             label: "PackMeasure.scan.queue",
@@ -110,6 +112,7 @@ struct MeasurementARView: UIViewRepresentable {
         private let targetValidator = CenteredTargetValidator()
         private let targetCapturePolicy = CenteredTargetCapturePolicy()
         private let peripheralFloorEstimator = PeripheralFloorEstimator()
+        private let objectRegionFilter = ReticleSeededObjectRegionFilter()
 
         // Accessed only on processingQueue.
         private var capture: CaptureAccumulator?
@@ -320,15 +323,15 @@ struct MeasurementARView: UIViewRepresentable {
             guard maximumCount > 0,
                   let depthData = frame.smoothedSceneDepth ?? frame.sceneDepth,
                   let grid = depthGrid(from: depthData),
-                  let region = segmenter.segment(grid) else {
+                  let rawRegion = segmenter.segment(grid) else {
                 return .unavailable(nil)
             }
 
-            let coverage = Float(region.pixelCount) / Float(grid.depths.count)
-            let touchesEdge = region.bounds.minX <= Self.edgeMarginPixels
-                || region.bounds.minY <= Self.edgeMarginPixels
-                || region.bounds.maxX >= grid.width - 1 - Self.edgeMarginPixels
-                || region.bounds.maxY >= grid.height - 1 - Self.edgeMarginPixels
+            let rawCoverage = Float(rawRegion.pixelCount) / Float(grid.depths.count)
+            let touchesEdge = rawRegion.bounds.minX <= Self.edgeMarginPixels
+                || rawRegion.bounds.minY <= Self.edgeMarginPixels
+                || rawRegion.bounds.maxX >= grid.width - 1 - Self.edgeMarginPixels
+                || rawRegion.bounds.maxY >= grid.height - 1 - Self.edgeMarginPixels
 
             let imageResolution = frame.camera.imageResolution
             let scaleX = imageResolution.width / CGFloat(grid.width)
@@ -336,8 +339,9 @@ struct MeasurementARView: UIViewRepresentable {
             guard scaleX > 0, scaleY > 0 else {
                 return .unavailable(
                     FrameCalibrationDiagnostics(
-                        regionPixelCount: region.pixelCount,
-                        regionCoverage: coverage,
+                        rawRegionPixelCount: rawRegion.pixelCount,
+                        retainedRegionPixelCount: rawRegion.pixelCount,
+                        regionCoverage: rawCoverage,
                         absoluteUpNormal: nil,
                         elevationAboveFloorMeters: nil,
                         floorEstimate: nil
@@ -353,8 +357,9 @@ struct MeasurementARView: UIViewRepresentable {
             guard intrinsics[0][0] > 0, intrinsics[1][1] > 0 else {
                 return .unavailable(
                     FrameCalibrationDiagnostics(
-                        regionPixelCount: region.pixelCount,
-                        regionCoverage: coverage,
+                        rawRegionPixelCount: rawRegion.pixelCount,
+                        retainedRegionPixelCount: rawRegion.pixelCount,
+                        regionCoverage: rawCoverage,
                         absoluteUpNormal: nil,
                         elevationAboveFloorMeters: nil,
                         floorEstimate: nil
@@ -365,18 +370,18 @@ struct MeasurementARView: UIViewRepresentable {
             let cameraTransform = frame.camera.transform
             let floorEstimate = sceneFloorEstimate(
                 from: frame,
-                region: region,
+                region: rawRegion,
                 grid: grid,
                 intrinsics: intrinsics,
                 cameraTransform: cameraTransform
             )
             let context = CenteredTargetContext(
                 floorEstimate: floorEstimate,
-                regionCoverage: coverage,
+                regionCoverage: rawCoverage,
                 regionTouchesImageEdge: touchesEdge
             )
             guard let targetSample = centeredTargetSurfaceSample(
-                region: region,
+                region: rawRegion,
                 grid: grid,
                 intrinsics: intrinsics,
                 cameraTransform: cameraTransform
@@ -384,8 +389,9 @@ struct MeasurementARView: UIViewRepresentable {
                 return .rejected(
                     .insufficientSurfaceEvidence,
                     FrameCalibrationDiagnostics(
-                        regionPixelCount: region.pixelCount,
-                        regionCoverage: coverage,
+                        rawRegionPixelCount: rawRegion.pixelCount,
+                        retainedRegionPixelCount: rawRegion.pixelCount,
+                        regionCoverage: rawCoverage,
                         absoluteUpNormal: nil,
                         elevationAboveFloorMeters: nil,
                         floorEstimate: floorEstimate
@@ -393,20 +399,64 @@ struct MeasurementARView: UIViewRepresentable {
                 )
             }
             let assessment = targetValidator.assess(targetSample, context: context)
-            let diagnostics = FrameCalibrationDiagnostics(
-                regionPixelCount: region.pixelCount,
-                regionCoverage: coverage,
-                absoluteUpNormal: assessment.absoluteUpNormal,
-                elevationAboveFloorMeters: assessment.elevationAboveFloorMeters,
-                floorEstimate: floorEstimate
-            )
             guard assessment.validation == .valid else {
+                let diagnostics = FrameCalibrationDiagnostics(
+                    rawRegionPixelCount: rawRegion.pixelCount,
+                    retainedRegionPixelCount: rawRegion.pixelCount,
+                    regionCoverage: rawCoverage,
+                    absoluteUpNormal: assessment.absoluteUpNormal,
+                    elevationAboveFloorMeters: assessment.elevationAboveFloorMeters,
+                    floorEstimate: floorEstimate
+                )
                 if case .rejected(let reason) = assessment.validation {
                     return .rejected(reason, diagnostics)
                 }
                 return .unavailable(diagnostics)
             }
 
+            let usableFloorEstimate: SceneFloorEstimate? = if let elevation = assessment
+                .elevationAboveFloorMeters,
+                elevation > Self.minimumTargetElevationForFloorFiltering {
+                floorEstimate
+            } else {
+                nil
+            }
+            guard let region = objectRegionFilter.filter(
+                region: rawRegion,
+                gridWidth: grid.width,
+                gridHeight: grid.height,
+                floorEstimate: usableFloorEstimate,
+                worldPointAt: { index in
+                    worldPoint(
+                        at: index,
+                        grid: grid,
+                        intrinsics: intrinsics,
+                        cameraTransform: cameraTransform
+                    )
+                }
+            ) else {
+                return .rejected(
+                    .insufficientSurfaceEvidence,
+                    FrameCalibrationDiagnostics(
+                        rawRegionPixelCount: rawRegion.pixelCount,
+                        retainedRegionPixelCount: 0,
+                        regionCoverage: 0,
+                        absoluteUpNormal: assessment.absoluteUpNormal,
+                        elevationAboveFloorMeters: assessment.elevationAboveFloorMeters,
+                        floorEstimate: floorEstimate
+                    )
+                )
+            }
+
+            let coverage = Float(region.pixelCount) / Float(grid.depths.count)
+            let diagnostics = FrameCalibrationDiagnostics(
+                rawRegionPixelCount: rawRegion.pixelCount,
+                retainedRegionPixelCount: region.pixelCount,
+                regionCoverage: coverage,
+                absoluteUpNormal: assessment.absoluteUpNormal,
+                elevationAboveFloorMeters: assessment.elevationAboveFloorMeters,
+                floorEstimate: floorEstimate
+            )
             guard region.pixelCount >= Self.minimumRegionPixelCount else {
                 return .rejected(.insufficientSurfaceEvidence, diagnostics)
             }
@@ -424,8 +474,8 @@ struct MeasurementARView: UIViewRepresentable {
             var points: [SIMD3<Float>] = []
             points.reserveCapacity(min(maximumCount, region.pixelCount))
 
-            // Only pixels accepted by the centered connected-depth segment are
-            // unprojected. The background ROI never reaches the geometry stage.
+            // Only the center-connected object component that remains after
+            // removing the observed floor band reaches geometry accumulation.
             for index in region.indices {
                 let x = index % grid.width
                 let y = index / grid.width
@@ -472,7 +522,19 @@ struct MeasurementARView: UIViewRepresentable {
                 return SceneFloorEstimate(y: y, source: .classifiedPlane)
             }
 
-            let centerRegion = Set(region.indices)
+            let regionTouchesEdge = region.bounds.minX <= Self.edgeMarginPixels
+                || region.bounds.minY <= Self.edgeMarginPixels
+                || region.bounds.maxX >= grid.width - 1 - Self.edgeMarginPixels
+                || region.bounds.maxY >= grid.height - 1 - Self.edgeMarginPixels
+            let regionCoverage = Float(region.pixelCount) / Float(grid.depths.count)
+            // A leaked region often owns the peripheral floor pixels itself.
+            // Include those pixels in fallback floor estimation only when the
+            // raw region is already broad or reaches the frame boundary.
+            let centerRegion: Set<Int> = if regionTouchesEdge || regionCoverage >= 0.55 {
+                []
+            } else {
+                Set(region.indices)
+            }
             let peripheralPoints = peripheralWorldPoints(
                 grid: grid,
                 excluding: centerRegion,
@@ -776,7 +838,8 @@ struct MeasurementARView: UIViewRepresentable {
             }
 
             let diagnostics = capture.lastCalibration
-            let regionPixels = diagnostics?.regionPixelCount ?? 0
+            let rawRegionPixels = diagnostics?.rawRegionPixelCount ?? 0
+            let retainedRegionPixels = diagnostics?.retainedRegionPixelCount ?? 0
             let coverage = diagnosticString(diagnostics?.regionCoverage)
             let seedUpNormal = diagnosticString(diagnostics?.absoluteUpNormal)
             let elevation = diagnosticString(diagnostics?.elevationAboveFloorMeters)
@@ -795,7 +858,7 @@ struct MeasurementARView: UIViewRepresentable {
                 .map(String.init(describing:)) ?? "none"
 
             Self.calibrationLogger.notice(
-                "scan_calibration request_id=\(capture.requestID, privacy: .public) result=\(resultDescription, privacy: .public) attempts=\(capture.sampleAttemptCount, privacy: .public) accepted_frames=\(capture.frameCount, privacy: .public) rejected_frames=\(capture.rejectedFrameCount, privacy: .public) floor_rejected_frames=\(capture.floorRejectedFrameCount, privacy: .public) unavailable_frames=\(capture.unavailableFrameCount, privacy: .public) points=\(capture.worldPoints.count, privacy: .public) region_pixels=\(regionPixels, privacy: .public) coverage=\(coverage, privacy: .public) seed_abs_up_normal=\(seedUpNormal, privacy: .public) elevation_m=\(elevation, privacy: .public) background_floor_y_m=\(floorY, privacy: .public) floor_source=\(floorSource, privacy: .public) target_reason=\(finalTargetReasonDescription, privacy: .public) last_frame_rejection=\(lastRejectionDescription, privacy: .public) estimation_failure=\(failureDescription, privacy: .public) geometry_error=\(geometryErrorDescription, privacy: .public)"
+                "scan_calibration request_id=\(capture.requestID, privacy: .public) result=\(resultDescription, privacy: .public) attempts=\(capture.sampleAttemptCount, privacy: .public) accepted_frames=\(capture.frameCount, privacy: .public) rejected_frames=\(capture.rejectedFrameCount, privacy: .public) floor_rejected_frames=\(capture.floorRejectedFrameCount, privacy: .public) unavailable_frames=\(capture.unavailableFrameCount, privacy: .public) points=\(capture.worldPoints.count, privacy: .public) raw_region_pixels=\(rawRegionPixels, privacy: .public) retained_region_pixels=\(retainedRegionPixels, privacy: .public) coverage=\(coverage, privacy: .public) seed_abs_up_normal=\(seedUpNormal, privacy: .public) elevation_m=\(elevation, privacy: .public) background_floor_y_m=\(floorY, privacy: .public) floor_source=\(floorSource, privacy: .public) target_reason=\(finalTargetReasonDescription, privacy: .public) last_frame_rejection=\(lastRejectionDescription, privacy: .public) estimation_failure=\(failureDescription, privacy: .public) geometry_error=\(geometryErrorDescription, privacy: .public)"
             )
         }
 

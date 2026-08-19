@@ -91,6 +91,115 @@ struct PeripheralFloorEstimator: Sendable {
     }
 }
 
+/// Removes the observed floor band, then repeats connected-component selection
+/// from the reticle seed. Background geometry that was reachable only through
+/// the floor is therefore excluded without cropping the object's upper faces.
+struct ReticleSeededObjectRegionFilter: Sendable {
+    var floorClearanceMeters: Float = 0.025
+
+    func filter(
+        region: DepthRegion,
+        gridWidth: Int,
+        gridHeight: Int,
+        floorEstimate: SceneFloorEstimate?,
+        worldPointAt: (Int) -> SIMD3<Float>?
+    ) -> DepthRegion? {
+        guard gridWidth > 0, gridHeight > 0,
+              floorClearanceMeters >= 0,
+              let floorEstimate,
+              floorEstimate.y.isFinite else {
+            return region
+        }
+
+        let pixelCount = gridWidth * gridHeight
+        let validIndices = region.indices.filter { 0..<pixelCount ~= $0 }
+        guard !validIndices.isEmpty else { return nil }
+
+        let centerX = gridWidth / 2
+        let centerY = gridHeight / 2
+        guard let seedIndex = validIndices.min(by: { lhs, rhs in
+            let lhsX = lhs % gridWidth
+            let lhsY = lhs / gridWidth
+            let rhsX = rhs % gridWidth
+            let rhsY = rhs / gridWidth
+            let lhsDistance = (lhsX - centerX) * (lhsX - centerX)
+                + (lhsY - centerY) * (lhsY - centerY)
+            let rhsDistance = (rhsX - centerX) * (rhsX - centerX)
+                + (rhsY - centerY) * (rhsY - centerY)
+            return lhsDistance < rhsDistance
+        }) else {
+            return nil
+        }
+
+        let minimumObjectY = floorEstimate.y + floorClearanceMeters
+        let eligible = Set(validIndices.filter { index in
+            guard let point = worldPointAt(index) else { return false }
+            return point.x.isFinite
+                && point.y.isFinite
+                && point.z.isFinite
+                && point.y > minimumObjectY
+        })
+        guard eligible.contains(seedIndex) else { return nil }
+
+        var connected = Set([seedIndex])
+        var queue = [seedIndex]
+        var readIndex = 0
+        while readIndex < queue.count {
+            let index = queue[readIndex]
+            readIndex += 1
+            let x = index % gridWidth
+            let y = index / gridWidth
+
+            if x > 0 {
+                enqueue(index - 1, eligible: eligible, connected: &connected, queue: &queue)
+            }
+            if x + 1 < gridWidth {
+                enqueue(index + 1, eligible: eligible, connected: &connected, queue: &queue)
+            }
+            if y > 0 {
+                enqueue(
+                    index - gridWidth,
+                    eligible: eligible,
+                    connected: &connected,
+                    queue: &queue
+                )
+            }
+            if y + 1 < gridHeight {
+                enqueue(
+                    index + gridWidth,
+                    eligible: eligible,
+                    connected: &connected,
+                    queue: &queue
+                )
+            }
+        }
+
+        guard !queue.isEmpty else { return nil }
+        let xs = queue.map { $0 % gridWidth }
+        let ys = queue.map { $0 / gridWidth }
+        return DepthRegion(
+            indices: queue,
+            seedDepthMeters: region.seedDepthMeters,
+            bounds: PixelBounds(
+                minX: xs.min() ?? centerX,
+                minY: ys.min() ?? centerY,
+                maxX: xs.max() ?? centerX,
+                maxY: ys.max() ?? centerY
+            )
+        )
+    }
+
+    private func enqueue(
+        _ index: Int,
+        eligible: Set<Int>,
+        connected: inout Set<Int>,
+        queue: inout [Int]
+    ) {
+        guard eligible.contains(index), connected.insert(index).inserted else { return }
+        queue.append(index)
+    }
+}
+
 /// Distinguishes a legitimate elevated top from the floor by combining its
 /// gravity-aligned normal with scene-floor and connected-region context.
 struct CenteredTargetValidator: Sendable {
