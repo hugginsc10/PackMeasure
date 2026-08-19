@@ -57,7 +57,7 @@ final class GravityAlignedBoundingBoxEstimatorTests: XCTestCase {
         XCTAssertGreaterThan(estimate.confidence.inlierRatio, 0.98)
     }
 
-    func testRejectsGroundDominantCloudWhoseFootprintDwarfsRaisedObject() {
+    func testRecoversKnownBoxFromGroundSkirtAndBackgroundWall() throws {
         let boxLength: Float = 0.6096 // 24 inches
         let boxWidth: Float = 0.508 // 20 inches
         let boxHeight: Float = 0.508 // 20 inches
@@ -77,8 +77,58 @@ final class GravityAlignedBoundingBoxEstimatorTests: XCTestCase {
             lengthSubdivisions: 40,
             widthSubdivisions: 24
         )
+        let backgroundWall = verticalPlanePoints(
+            length: 1.80,
+            height: 0.70,
+            yBase: -0.01,
+            z: 0.72,
+            lengthSubdivisions: 30,
+            heightSubdivisions: 14
+        )
 
-        XCTAssertThrowsError(try estimator.estimate(points: box + leakedFloor))
+        let estimate = try estimator.estimate(
+            points: box + leakedFloor + backgroundWall
+        )
+
+        assertDimensions(
+            estimate.dimensions,
+            Double(boxLength),
+            Double(boxWidth),
+            Double(boxHeight),
+            accuracy: 0.0254 // recover within one inch
+        )
+        XCTAssertNotEqual(estimate.confidence.level, .high)
+    }
+
+    func testRejectsGroundRecoveryWhenTwoRaisedObjectsArePlausible() {
+        let firstBox = cuboidSurfacePoints(
+            length: 0.50,
+            width: 0.40,
+            height: 0.50,
+            yaw: 0.18,
+            center: SIMD3<Float>(-0.45, 0.25, 0),
+            subdivisions: 8
+        )
+        let secondBox = cuboidSurfacePoints(
+            length: 0.48,
+            width: 0.38,
+            height: 0.52,
+            yaw: -0.12,
+            center: SIMD3<Float>(0.45, 0.26, 0.05),
+            subdivisions: 8
+        )
+        let leakedFloor = horizontalPlanePoints(
+            length: 2.03,
+            width: 1.20,
+            y: -0.01,
+            yaw: 0,
+            lengthSubdivisions: 40,
+            widthSubdivisions: 24
+        )
+
+        XCTAssertThrowsError(
+            try estimator.estimate(points: firstBox + secondBox + leakedFloor)
+        )
     }
 
     func testAcceptsDenseBottomSurfaceWhenItMatchesRaisedObjectFootprint() throws {
@@ -307,6 +357,25 @@ final class GravityAlignedBoundingBoxEstimatorTests: XCTestCase {
                 let localWidth = -width / 2
                     + width * Float(widthIndex) / Float(widthSubdivisions)
                 return worldPoint(localLength, localWidth, y, yaw, .zero)
+            }
+        }
+    }
+
+    private func verticalPlanePoints(
+        length: Float,
+        height: Float,
+        yBase: Float,
+        z: Float,
+        lengthSubdivisions: Int,
+        heightSubdivisions: Int
+    ) -> [SIMD3<Float>] {
+        (0...lengthSubdivisions).flatMap { lengthIndex in
+            (0...heightSubdivisions).map { heightIndex in
+                SIMD3<Float>(
+                    -length / 2 + length * Float(lengthIndex) / Float(lengthSubdivisions),
+                    yBase + height * Float(heightIndex) / Float(heightSubdivisions),
+                    z
+                )
             }
         }
     }
