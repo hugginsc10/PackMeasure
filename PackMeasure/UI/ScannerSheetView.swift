@@ -18,6 +18,7 @@ struct ScannerSheetView: View {
     @State private var isStackable = false
     @State private var maxStackLayers = 2
     @State private var mayRotate = false
+    @State private var targetConfirmed = false
 
     var body: some View {
         NavigationStack {
@@ -27,23 +28,24 @@ struct ScannerSheetView: View {
                 .frame(minHeight: 260, idealHeight: 360, maxHeight: 420)
                 .clipShape(RoundedRectangle(cornerRadius: 24))
                 .overlay {
-                    ScanReticle()
+                    ObjectTargetGuide(phase: scannerState.phase)
                 }
-                .overlay(alignment: .topLeading) {
+                .overlay(alignment: .top) {
                     Text(statusText)
-                        .padding(12)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
                         .font(.footnote.weight(.semibold))
                         .foregroundStyle(.white)
                         .background(.black.opacity(0.55), in: Capsule())
                         .padding()
                 }
                 .overlay(alignment: .bottom) {
-                    Text("Keep the center target on the object")
+                    Text("Target on object — never the floor or wall")
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(.black)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 7)
-                        .background(.black.opacity(0.55), in: Capsule())
+                        .background(.yellow, in: Capsule())
                         .padding()
                 }
 
@@ -60,23 +62,57 @@ struct ScannerSheetView: View {
                                 .foregroundStyle(.secondary)
                         }
 
-                        Section("Save Item") {
-                            TextField("Item name", text: $draftName)
-                            Stepper("Quantity: \(quantity)", value: $quantity, in: 1...99)
-                            Toggle("Safe to stack", isOn: $isStackable)
-                            if isStackable {
-                                Stepper(
-                                    "Maximum layers: \(maxStackLayers)",
-                                    value: $maxStackLayers,
-                                    in: 2 ... 20
-                                )
+                        if case let .retryRequired(message) = reviewState {
+                            Section("Scan rejected") {
+                                Label(message, systemImage: "exclamationmark.triangle.fill")
+                                    .foregroundStyle(.orange)
                             }
-                            Toggle("Safe to turn on its side", isOn: $mayRotate)
+                        } else {
+                            Section {
+                                Toggle(
+                                    "Center target stayed on the object",
+                                    isOn: $targetConfirmed
+                                )
+                                if reviewState == .confirmTarget {
+                                    Label(
+                                        "Confirm only if the yellow center dot was on the object—not the floor, wall, or background.",
+                                        systemImage: "scope"
+                                    )
+                                    .font(.footnote)
+                                    .foregroundStyle(.orange)
+                                } else if reviewState == .accepted {
+                                    Label("Target confirmed", systemImage: "checkmark.circle.fill")
+                                        .font(.footnote)
+                                        .foregroundStyle(.green)
+                                }
+                            } header: {
+                                Text("Target check")
+                            }
+
+                            Section("Save Item") {
+                                TextField("Item name", text: $draftName)
+                                Stepper("Quantity: \(quantity)", value: $quantity, in: 1...99)
+                                Toggle("Safe to stack", isOn: $isStackable)
+                                if isStackable {
+                                    Stepper(
+                                        "Maximum layers: \(maxStackLayers)",
+                                        value: $maxStackLayers,
+                                        in: 2 ... 20
+                                    )
+                                }
+                                Toggle("Safe to turn on its side", isOn: $mayRotate)
+                            }
                         }
                     }
-                    .frame(maxHeight: 310)
+                    .frame(maxHeight: 360)
+                } else if case let .retryRequired(message) = reviewState {
+                    Label(message, systemImage: "exclamationmark.triangle.fill")
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
+                        .multilineTextAlignment(.leading)
+                        .padding(.horizontal)
                 } else {
-                    Text("Stand at a 3/4 angle so the front, side, and top are visible. Center one object, keep some floor around it, and hold steady while it measures.")
+                    Text("Stand at a 3/4 angle so the front, side, and top are visible. Put the entire object inside the yellow frame, place the center dot on the object itself, and keep floor visible around it.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .padding(.horizontal)
@@ -98,7 +134,7 @@ struct ScannerSheetView: View {
         }
     }
 
-        @ViewBuilder
+    @ViewBuilder
     private var actionBar: some View {
         switch scannerState.phase {
         case .scanning(let progress):
@@ -110,59 +146,92 @@ struct ScannerSheetView: View {
             }
             .buttonStyle(.borderedProminent)
         case .failed:
-            HStack {
-                Button("Close") {
-                    dismiss()
-                }
-                .buttonStyle(.bordered)
-
-                Button {
-                    scannerState.estimate = nil
-                    scannerState.captureRequestID += 1
-                } label: {
-                    Label("Try again", systemImage: "arrow.clockwise")
-                }
-                .buttonStyle(.borderedProminent)
+            retryActionBar
+        case .measured where !reviewState.canSave:
+            if case .confirmTarget = reviewState {
+                measurementActionBar
+            } else {
+                retryActionBar
             }
         default:
-            HStack {
-                if scannerState.estimate == nil {
-                    measureButton
-                        .buttonStyle(.borderedProminent)
-                } else {
-                    measureButton
-                        .buttonStyle(.bordered)
-                }
+            measurementActionBar
+        }
+    }
 
-                if let estimate = scannerState.estimate {
-                    Button("Save item") {
-                        appModel.addItem(
-                            name: draftName,
-                            estimate: estimate,
-                            quantity: quantity,
-                            stackability: isStackable
-                                ? .stackable(maxLayers: maxStackLayers)
-                                : .notStackable,
-                            orientationPolicy: mayRotate ? .mayRotate : .keepUpright
-                        )
-                        dismiss()
-                    }
+    private var measurementActionBar: some View {
+        HStack {
+            if scannerState.estimate == nil {
+                measureButton
                     .buttonStyle(.borderedProminent)
-                }
+            } else {
+                measureButton
+                    .buttonStyle(.bordered)
             }
+
+            if let estimate = scannerState.estimate {
+                Button("Save item") {
+                    guard reviewState.canSave else { return }
+                    appModel.addItem(
+                        name: draftName,
+                        estimate: estimate,
+                        quantity: quantity,
+                        stackability: isStackable
+                            ? .stackable(maxLayers: maxStackLayers)
+                            : .notStackable,
+                        orientationPolicy: mayRotate ? .mayRotate : .keepUpright
+                    )
+                    dismiss()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!reviewState.canSave)
+                .accessibilityHint(
+                    reviewState.canSave
+                        ? "Saves this measurement to the packing inventory"
+                        : "Confirm that the center target stayed on the object first"
+                )
+            }
+        }
+    }
+
+    private var retryActionBar: some View {
+        HStack {
+            Button("Close") {
+                dismiss()
+            }
+            .buttonStyle(.bordered)
+
+            Button {
+                requestCapture()
+            } label: {
+                Label("Scan again", systemImage: "arrow.clockwise")
+            }
+            .buttonStyle(.borderedProminent)
         }
     }
 
     private var measureButton: some View {
         Button {
-            scannerState.estimate = nil
-            scannerState.captureRequestID += 1
+            requestCapture()
         } label: {
             Label(
                 scannerState.estimate == nil ? "Measure object" : "Measure again",
                 systemImage: "camera.aperture"
             )
         }
+    }
+
+    private var reviewState: ScannerCaptureReviewState {
+        ScannerCapturePolicy.reviewState(
+            phase: scannerState.phase,
+            estimate: scannerState.estimate,
+            targetConfirmed: targetConfirmed
+        )
+    }
+
+    private func requestCapture() {
+        targetConfirmed = false
+        scannerState.estimate = nil
+        scannerState.captureRequestID += 1
     }
 
     private var statusText: String {
@@ -174,33 +243,118 @@ struct ScannerSheetView: View {
         case .scanning:
             "Scanning..."
         case .measured:
-            scannerState.estimate?.confidence.guidance ?? "Scan complete"
-        case .unsupported(let message):
-            message
-        case .failed(let message):
-            message
+            switch reviewState {
+            case .accepted:
+                "Target confirmed"
+            case .confirmTarget:
+                "Check the target before saving"
+            case .retryRequired:
+                "Scan rejected — try again"
+            default:
+                "Review measurement"
+            }
+        case .unsupported:
+            "LiDAR unavailable"
+        case .failed:
+            "Scan rejected — try again"
         }
     }
 }
 
-private struct ScanReticle: View {
+private struct ObjectTargetGuide: View {
+    let phase: ScannerPhase
+
     var body: some View {
         ZStack {
+            RoundedRectangle(cornerRadius: 26)
+                .fill(.yellow.opacity(0.06))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 26)
+                        .strokeBorder(
+                            guideColor,
+                            style: StrokeStyle(lineWidth: 4, dash: [18, 8])
+                        )
+                }
+                .padding(.horizontal, 34)
+                .padding(.vertical, 62)
+
+            VStack {
+                Text("PUT OBJECT INSIDE FRAME")
+                    .font(.caption2.weight(.black))
+                    .foregroundStyle(.black)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(guideColor, in: Capsule())
+                Spacer()
+            }
+            .padding(.top, 48)
+
             Circle()
-                .stroke(.white.opacity(0.95), lineWidth: 2)
-                .frame(width: 52, height: 52)
+                .stroke(.black.opacity(0.8), lineWidth: 5)
+                .frame(width: 28, height: 28)
             Circle()
-                .fill(.white)
-                .frame(width: 7, height: 7)
+                .fill(guideColor)
+                .frame(width: 18, height: 18)
             Rectangle()
-                .fill(.white.opacity(0.9))
-                .frame(width: 76, height: 1)
+                .fill(guideColor)
+                .frame(width: 74, height: 4)
             Rectangle()
-                .fill(.white.opacity(0.9))
-                .frame(width: 1, height: 76)
+                .fill(guideColor)
+                .frame(width: 4, height: 74)
         }
-        .shadow(color: .black.opacity(0.75), radius: 2)
+        .shadow(color: .black.opacity(0.85), radius: 2)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+    }
+
+    private var guideColor: Color {
+        if case .scanning = phase {
+            return .green
+        }
+        return .yellow
+    }
+}
+
+enum ScannerCaptureReviewState: Equatable, Sendable {
+    case waiting
+    case capturing
+    case confirmTarget
+    case accepted
+    case retryRequired(String)
+    case unavailable(String)
+
+    var canSave: Bool {
+        self == .accepted
+    }
+}
+
+enum ScannerCapturePolicy {
+    static func reviewState(
+        phase: ScannerPhase,
+        estimate: MeasurementEstimate?,
+        targetConfirmed: Bool
+    ) -> ScannerCaptureReviewState {
+        switch phase {
+        case .checkingSupport, .ready:
+            return .waiting
+        case .scanning:
+            return .capturing
+        case let .unsupported(message):
+            return .unavailable(message)
+        case let .failed(message):
+            return .retryRequired(message)
+        case .measured:
+            guard let estimate else {
+                return .retryRequired(
+                    "No valid object measurement was produced. Center the target on the object and scan again."
+                )
+            }
+            guard estimate.confidence != .low else {
+                return .retryRequired(
+                    "Scan rejected: the object was not separated clearly enough. Keep the target on the object—not the floor or wall—and scan again."
+                )
+            }
+            return targetConfirmed ? .accepted : .confirmTarget
+        }
     }
 }
