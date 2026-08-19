@@ -40,7 +40,7 @@ struct ScannerSheetView: View {
                         .padding()
                 }
                 .overlay(alignment: .bottom) {
-                    Text("Target on object — never the floor or wall")
+                    Text(ScannerGuidanceCopy.previewTarget)
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.black)
                         .padding(.horizontal, 12)
@@ -63,19 +63,19 @@ struct ScannerSheetView: View {
                         }
 
                         if case let .retryRequired(message) = reviewState {
-                            Section("Scan rejected") {
+                            Section("Try another scan") {
                                 Label(message, systemImage: "exclamationmark.triangle.fill")
                                     .foregroundStyle(.orange)
                             }
                         } else {
                             Section {
                                 Toggle(
-                                    "Center target stayed on the object",
+                                    ScannerGuidanceCopy.targetConfirmation,
                                     isOn: $targetConfirmed
                                 )
                                 if reviewState == .confirmTarget {
                                     Label(
-                                        "Confirm only if the yellow center dot was on the object—not the floor, wall, or background.",
+                                        ScannerGuidanceCopy.targetConfirmationDetail,
                                         systemImage: "scope"
                                     )
                                     .font(.footnote)
@@ -112,7 +112,7 @@ struct ScannerSheetView: View {
                         .multilineTextAlignment(.leading)
                         .padding(.horizontal)
                 } else {
-                    Text("Stand at a 3/4 angle so the front, side, and top are visible. Put the entire object inside the yellow frame, place the center dot on the object itself, and keep floor visible around it.")
+                    Text(ScannerGuidanceCopy.setup)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .padding(.horizontal)
@@ -187,7 +187,7 @@ struct ScannerSheetView: View {
                 .accessibilityHint(
                     reviewState.canSave
                         ? "Saves this measurement to the packing inventory"
-                        : "Confirm that the center target stayed on the object first"
+                        : "Confirm that the center dot stayed on a clear object face first"
                 )
             }
         }
@@ -249,14 +249,14 @@ struct ScannerSheetView: View {
             case .confirmTarget:
                 "Check the target before saving"
             case .retryRequired:
-                "Scan rejected — try again"
+                "Try another scan"
             default:
                 "Review measurement"
             }
         case .unsupported:
             "LiDAR unavailable"
         case .failed:
-            "Scan rejected — try again"
+            "Try another scan"
         }
     }
 }
@@ -279,9 +279,11 @@ private struct ObjectTargetGuide: View {
                 .padding(.vertical, 62)
 
             VStack {
-                Text("PUT OBJECT INSIDE FRAME")
+                Text("OBJECT IN FRAME • DOT ON CLEAR FACE")
                     .font(.caption2.weight(.black))
                     .foregroundStyle(.black)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 5)
                     .background(guideColor, in: Capsule())
@@ -345,16 +347,32 @@ enum ScannerCapturePolicy {
             return .retryRequired(message)
         case .measured:
             guard let estimate else {
-                return .retryRequired(
-                    "No valid object measurement was produced. Center the target on the object and scan again."
-                )
+                return .retryRequired(ScannerGuidanceCopy.missingEstimateRetry)
             }
             guard estimate.confidence != .low else {
-                return .retryRequired(
-                    "Scan rejected: the object was not separated clearly enough. Keep the target on the object—not the floor or wall—and scan again."
-                )
+                return .retryRequired(ScannerGuidanceCopy.lowConfidenceRetry)
             }
             return targetConfirmed ? .accepted : .confirmTarget
         }
     }
+}
+
+enum ScannerGuidanceCopy {
+    static let previewTarget =
+        "Put center dot on a clear object face — keep floor and background outside the object"
+
+    static let setup =
+        "Stand at a 3/4 angle so the front, side, and top are visible. Put the whole object inside the yellow frame, place the center dot on a clear object face, and keep visible floor or background around the object's edges."
+
+    static let targetConfirmation =
+        "Center dot stayed on a clear object face"
+
+    static let targetConfirmationDetail =
+        "Confirm only if the yellow center dot was on the object—not the floor, wall, or background."
+
+    static let lowConfidenceRetry =
+        "This scan could not isolate a reliable object measurement. Keep the object inside the frame, put the center dot on a clear object face, and scan again."
+
+    static let missingEstimateRetry =
+        "No object measurement was produced. Keep the object inside the frame, put the center dot on a clear object face, and scan again."
 }
