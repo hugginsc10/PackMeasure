@@ -90,7 +90,8 @@ struct MeasurementARView: UIViewRepresentable {
             let startedAt: TimeInterval
             let deadline: TimeInterval
             var nextSampleAt: TimeInterval
-            var worldPoints: [SIMD3<Float>] = []
+            var worldPointFrames: [[SIMD3<Float>]] = []
+            var accumulatedPointCount = 0
             var frameCount = 0
             var sampleAttemptCount = 0
             var unavailableFrameCount = 0
@@ -98,6 +99,10 @@ struct MeasurementARView: UIViewRepresentable {
             var floorRejectedFrameCount = 0
             var lastRejection: CenteredTargetRejection?
             var lastCalibration: FrameCalibrationDiagnostics?
+            var maximumRetainedDepthSpanMeters: Float?
+            var maximumRetainedPixelWidth = 0
+            var maximumRetainedPixelHeight = 0
+            var retainedEdgeFrameCount = 0
         }
 
         private struct FrameCalibrationDiagnostics: Sendable {
@@ -107,6 +112,31 @@ struct MeasurementARView: UIViewRepresentable {
             let absoluteUpNormal: Float?
             let elevationAboveFloorMeters: Float?
             let floorEstimate: SceneFloorEstimate?
+            let retainedBounds: PixelBounds?
+            let retainedDepthSpanMeters: Float?
+            let retainedTouchesImageEdge: Bool
+
+            init(
+                rawRegionPixelCount: Int,
+                retainedRegionPixelCount: Int,
+                regionCoverage: Float,
+                absoluteUpNormal: Float?,
+                elevationAboveFloorMeters: Float?,
+                floorEstimate: SceneFloorEstimate?,
+                retainedBounds: PixelBounds? = nil,
+                retainedDepthSpanMeters: Float? = nil,
+                retainedTouchesImageEdge: Bool = false
+            ) {
+                self.rawRegionPixelCount = rawRegionPixelCount
+                self.retainedRegionPixelCount = retainedRegionPixelCount
+                self.regionCoverage = regionCoverage
+                self.absoluteUpNormal = absoluteUpNormal
+                self.elevationAboveFloorMeters = elevationAboveFloorMeters
+                self.floorEstimate = floorEstimate
+                self.retainedBounds = retainedBounds
+                self.retainedDepthSpanMeters = retainedDepthSpanMeters
+                self.retainedTouchesImageEdge = retainedTouchesImageEdge
+            }
         }
 
         private enum DepthFrameSample {
@@ -140,6 +170,7 @@ struct MeasurementARView: UIViewRepresentable {
         private let targetCapturePolicy = CenteredTargetCapturePolicy()
         private let peripheralFloorEstimator = PeripheralFloorEstimator()
         private let objectRegionFilter = ReticleSeededObjectRegionFilter()
+        private let temporalSupportFilter = TemporalWorldPointSupportFilter()
 
         // Accessed only on processingQueue.
         private var capture: CaptureAccumulator?
@@ -268,18 +299,38 @@ struct MeasurementARView: UIViewRepresentable {
             publishProgress(progress, requestID: activeCapture.requestID)
 
             if now >= activeCapture.nextSampleAt,
-               activeCapture.worldPoints.count < Self.maximumAccumulatedPoints {
+               activeCapture.accumulatedPointCount < Self.maximumAccumulatedPoints {
                 activeCapture.nextSampleAt = now + Self.sampleInterval
                 activeCapture.sampleAttemptCount += 1
                 let capacity = min(
                     Self.maximumPointsPerFrame,
-                    Self.maximumAccumulatedPoints - activeCapture.worldPoints.count
+                    Self.maximumAccumulatedPoints - activeCapture.accumulatedPointCount
                 )
                 switch sampleDepthFrame(from: frame, maximumCount: capacity) {
                 case .accepted(let newPoints, let diagnostics):
-                    activeCapture.worldPoints.append(contentsOf: newPoints)
+                    activeCapture.worldPointFrames.append(newPoints)
+                    activeCapture.accumulatedPointCount += newPoints.count
                     activeCapture.frameCount += 1
                     activeCapture.lastCalibration = diagnostics
+                    if let span = diagnostics.retainedDepthSpanMeters {
+                        activeCapture.maximumRetainedDepthSpanMeters = max(
+                            activeCapture.maximumRetainedDepthSpanMeters ?? span,
+                            span
+                        )
+                    }
+                    if let bounds = diagnostics.retainedBounds {
+                        activeCapture.maximumRetainedPixelWidth = max(
+                            activeCapture.maximumRetainedPixelWidth,
+                            bounds.maxX - bounds.minX + 1
+                        )
+                        activeCapture.maximumRetainedPixelHeight = max(
+                            activeCapture.maximumRetainedPixelHeight,
+                            bounds.maxY - bounds.minY + 1
+                        )
+                    }
+                    if diagnostics.retainedTouchesImageEdge {
+                        activeCapture.retainedEdgeFrameCount += 1
+                    }
                 case .rejected(let reason, let diagnostics):
                     activeCapture.rejectedFrameCount += 1
                     activeCapture.lastRejection = reason
@@ -337,8 +388,11 @@ struct MeasurementARView: UIViewRepresentable {
                 acceptedObjectFrameCount: capture.frameCount,
                 floorRejectedFrameCount: capture.floorRejectedFrameCount
             )
+            let temporalSupport = temporalSupportFilter.filter(
+                frames: capture.worldPointFrames
+            )
             let outcome = MeasurementEstimator.outcome(
-                from: capture.worldPoints,
+                from: temporalSupport.points,
                 frameCount: capture.frameCount,
                 targetValidation: targetValidation
             )
@@ -350,7 +404,11 @@ struct MeasurementARView: UIViewRepresentable {
                 } else {
                     failure = .geometry(.degeneratePointCloud)
                 }
-                logCalibrationSummary(capture, result: .failure(failure))
+                logCalibrationSummary(
+                    capture,
+                    temporalSupport: temporalSupport,
+                    result: .failure(failure)
+                )
                 resumePreviewAfterFailedCapture(requestID: capture.requestID)
                 let message: String
                 switch failure {
@@ -370,7 +428,11 @@ struct MeasurementARView: UIViewRepresentable {
                 return
             }
 
-            logCalibrationSummary(capture, result: .success(estimate))
+            logCalibrationSummary(
+                capture,
+                temporalSupport: temporalSupport,
+                result: .success(estimate)
+            )
             publishEstimate(estimate, requestID: capture.requestID)
         }
 
@@ -507,13 +569,20 @@ struct MeasurementARView: UIViewRepresentable {
             }
 
             let coverage = Float(region.pixelCount) / Float(grid.depths.count)
+            let retainedTouchesEdge = region.bounds.minX <= Self.edgeMarginPixels
+                || region.bounds.minY <= Self.edgeMarginPixels
+                || region.bounds.maxX >= grid.width - 1 - Self.edgeMarginPixels
+                || region.bounds.maxY >= grid.height - 1 - Self.edgeMarginPixels
             let diagnostics = FrameCalibrationDiagnostics(
                 rawRegionPixelCount: rawRegion.pixelCount,
                 retainedRegionPixelCount: region.pixelCount,
                 regionCoverage: coverage,
                 absoluteUpNormal: assessment.absoluteUpNormal,
                 elevationAboveFloorMeters: assessment.elevationAboveFloorMeters,
-                floorEstimate: floorEstimate
+                floorEstimate: floorEstimate,
+                retainedBounds: region.bounds,
+                retainedDepthSpanMeters: depthSpanMeters(for: region, grid: grid),
+                retainedTouchesImageEdge: retainedTouchesEdge
             )
             guard region.pixelCount >= Self.minimumRegionPixelCount else {
                 return .rejected(.insufficientSurfaceEvidence, diagnostics)
@@ -558,6 +627,19 @@ struct MeasurementARView: UIViewRepresentable {
             return points.isEmpty
                 ? .unavailable(diagnostics)
                 : .accepted(points, diagnostics)
+        }
+
+        private func depthSpanMeters(for region: DepthRegion, grid: DepthGrid) -> Float? {
+            var minimumDepth = Float.greatestFiniteMagnitude
+            var maximumDepth = -Float.greatestFiniteMagnitude
+            for index in region.indices where grid.depths.indices.contains(index) {
+                let depth = grid.depths[index]
+                guard depth.isFinite else { continue }
+                minimumDepth = min(minimumDepth, depth)
+                maximumDepth = max(maximumDepth, depth)
+            }
+            guard minimumDepth <= maximumDepth else { return nil }
+            return maximumDepth - minimumDepth
         }
 
         private func sceneFloorEstimate(
@@ -875,6 +957,7 @@ struct MeasurementARView: UIViewRepresentable {
 
         private func logCalibrationSummary(
             _ capture: CaptureAccumulator,
+            temporalSupport: TemporalWorldPointSupportResult,
             result: MeasurementEstimationOutcome
         ) {
             let resultDescription: String
@@ -903,6 +986,9 @@ struct MeasurementARView: UIViewRepresentable {
             let elevation = diagnosticString(diagnostics?.elevationAboveFloorMeters)
             let floorY = diagnosticString(diagnostics?.floorEstimate?.y)
             let floorSource = diagnostics?.floorEstimate?.source.rawValue ?? "none"
+            let maximumRetainedDepthSpan = diagnosticString(
+                capture.maximumRetainedDepthSpanMeters
+            )
             let finalTargetReason: CenteredTargetRejection? = if case .failure(
                 .targetRejected(let reason)
             ) = result {
@@ -916,7 +1002,7 @@ struct MeasurementARView: UIViewRepresentable {
                 .map(String.init(describing:)) ?? "none"
 
             Self.calibrationLogger.notice(
-                "scan_calibration request_id=\(capture.requestID, privacy: .public) result=\(resultDescription, privacy: .public) attempts=\(capture.sampleAttemptCount, privacy: .public) accepted_frames=\(capture.frameCount, privacy: .public) rejected_frames=\(capture.rejectedFrameCount, privacy: .public) floor_rejected_frames=\(capture.floorRejectedFrameCount, privacy: .public) unavailable_frames=\(capture.unavailableFrameCount, privacy: .public) points=\(capture.worldPoints.count, privacy: .public) raw_region_pixels=\(rawRegionPixels, privacy: .public) retained_region_pixels=\(retainedRegionPixels, privacy: .public) coverage=\(coverage, privacy: .public) seed_abs_up_normal=\(seedUpNormal, privacy: .public) elevation_m=\(elevation, privacy: .public) background_floor_y_m=\(floorY, privacy: .public) floor_source=\(floorSource, privacy: .public) target_reason=\(finalTargetReasonDescription, privacy: .public) last_frame_rejection=\(lastRejectionDescription, privacy: .public) estimation_failure=\(failureDescription, privacy: .public) geometry_error=\(geometryErrorDescription, privacy: .public)"
+                "scan_calibration request_id=\(capture.requestID, privacy: .public) result=\(resultDescription, privacy: .public) attempts=\(capture.sampleAttemptCount, privacy: .public) accepted_frames=\(capture.frameCount, privacy: .public) rejected_frames=\(capture.rejectedFrameCount, privacy: .public) floor_rejected_frames=\(capture.floorRejectedFrameCount, privacy: .public) unavailable_frames=\(capture.unavailableFrameCount, privacy: .public) input_points=\(temporalSupport.inputPointCount, privacy: .public) stable_points=\(temporalSupport.points.count, privacy: .public) support_frames=\(temporalSupport.contributingFrameCount, privacy: .public) support_frames_required=\(temporalSupport.requiredSupportingFrameCount, privacy: .public) last_raw_region_pixels=\(rawRegionPixels, privacy: .public) last_retained_region_pixels=\(retainedRegionPixels, privacy: .public) last_coverage=\(coverage, privacy: .public) max_retained_depth_span_m=\(maximumRetainedDepthSpan, privacy: .public) max_retained_pixel_width=\(capture.maximumRetainedPixelWidth, privacy: .public) max_retained_pixel_height=\(capture.maximumRetainedPixelHeight, privacy: .public) retained_edge_frames=\(capture.retainedEdgeFrameCount, privacy: .public) last_seed_abs_up_normal=\(seedUpNormal, privacy: .public) last_elevation_m=\(elevation, privacy: .public) last_background_floor_y_m=\(floorY, privacy: .public) last_floor_source=\(floorSource, privacy: .public) target_reason=\(finalTargetReasonDescription, privacy: .public) last_frame_rejection=\(lastRejectionDescription, privacy: .public) estimation_failure=\(failureDescription, privacy: .public) geometry_error=\(geometryErrorDescription, privacy: .public)"
             )
         }
 
