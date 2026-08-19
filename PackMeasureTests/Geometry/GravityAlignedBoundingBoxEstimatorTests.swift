@@ -57,6 +57,63 @@ final class GravityAlignedBoundingBoxEstimatorTests: XCTestCase {
         XCTAssertGreaterThan(estimate.confidence.inlierRatio, 0.98)
     }
 
+    func testRejectsGroundDominantCloudWhoseFootprintDwarfsRaisedObject() {
+        let boxLength: Float = 0.6096 // 24 inches
+        let boxWidth: Float = 0.508 // 20 inches
+        let boxHeight: Float = 0.508 // 20 inches
+        let box = cuboidSurfacePoints(
+            length: boxLength,
+            width: boxWidth,
+            height: boxHeight,
+            yaw: 0.31,
+            center: SIMD3<Float>(0, boxHeight / 2, 0),
+            subdivisions: 10
+        )
+        let leakedFloor = horizontalPlanePoints(
+            length: 2.03, // 80 inches: one of the observed false lengths
+            width: 1.20, // 47 inches: the repeated observed false width
+            y: -0.01,
+            yaw: 0,
+            lengthSubdivisions: 40,
+            widthSubdivisions: 24
+        )
+
+        XCTAssertThrowsError(try estimator.estimate(points: box + leakedFloor))
+    }
+
+    func testAcceptsDenseBottomSurfaceWhenItMatchesRaisedObjectFootprint() throws {
+        let length: Float = 0.6096
+        let width: Float = 0.508
+        let height: Float = 0.508
+        let yaw: Float = 0.31
+        let box = cuboidSurfacePoints(
+            length: length,
+            width: width,
+            height: height,
+            yaw: yaw,
+            center: SIMD3<Float>(0, height / 2, 0),
+            subdivisions: 8
+        )
+        let denseBottom = horizontalPlanePoints(
+            length: length,
+            width: width,
+            y: 0,
+            yaw: yaw,
+            lengthSubdivisions: 40,
+            widthSubdivisions: 34
+        )
+
+        let estimate = try estimator.estimate(points: box + denseBottom)
+
+        assertDimensions(
+            estimate.dimensions,
+            Double(length),
+            Double(width),
+            Double(height),
+            accuracy: 0.012
+        )
+    }
+
     func testVoxelDeduplicationPreventsDenseSamplesBiasingBounds() throws {
         let base = cuboidSurfacePoints(
             length: 1.25,
@@ -231,6 +288,25 @@ final class GravityAlignedBoundingBoxEstimatorTests: XCTestCase {
                         .zero
                     )
                 }
+            }
+        }
+    }
+
+    private func horizontalPlanePoints(
+        length: Float,
+        width: Float,
+        y: Float,
+        yaw: Float,
+        lengthSubdivisions: Int,
+        widthSubdivisions: Int
+    ) -> [SIMD3<Float>] {
+        (0...lengthSubdivisions).flatMap { lengthIndex in
+            (0...widthSubdivisions).map { widthIndex in
+                let localLength = -length / 2
+                    + length * Float(lengthIndex) / Float(lengthSubdivisions)
+                let localWidth = -width / 2
+                    + width * Float(widthIndex) / Float(widthSubdivisions)
+                return worldPoint(localLength, localWidth, y, yaw, .zero)
             }
         }
     }
