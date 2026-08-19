@@ -18,10 +18,11 @@ struct ScannerSheetView: View {
         }
 
         func startMeasurement() {
-            guard phase == .ready else { return }
+            guard ScannerActionPolicy.canStartMeasurement(phase: phase) else { return }
             estimate = nil
             isPreparingForAiming = false
             captureRequestID += 1
+            phase = .scanning(progress: 0)
         }
     }
 
@@ -159,6 +160,9 @@ struct ScannerSheetView: View {
     @ViewBuilder
     private var actionBar: some View {
         switch scannerState.phase {
+        case .checkingSupport:
+            ProgressView(ScannerActionCopy.checkingSupport)
+                .padding(.horizontal)
         case .scanning(let progress):
             ProgressView(value: progress)
                 .padding(.horizontal)
@@ -253,6 +257,10 @@ struct ScannerSheetView: View {
                 systemImage: "camera.aperture"
             )
         }
+        .disabled(
+            scannerState.estimate == nil
+                && !ScannerActionPolicy.canStartMeasurement(phase: scannerState.phase)
+        )
     }
 
     private var reviewState: ScannerCaptureReviewState {
@@ -282,7 +290,7 @@ struct ScannerSheetView: View {
     private var statusText: String {
         switch scannerState.phase {
         case .checkingSupport:
-            return "Checking LiDAR support..."
+            return ScannerActionCopy.checkingSupport
         case .ready:
             return "Ready to scan"
         case .scanning:
@@ -434,7 +442,14 @@ enum ScannerResultCopy {
 }
 
 enum ScannerActionCopy {
+    static let checkingSupport = "Checking LiDAR support…"
     static let measureAgain = "Measure again"
     static let preparingPreview = "Starting live preview…"
     static let startMeasurement = "Start measurement"
+}
+
+enum ScannerActionPolicy {
+    static func canStartMeasurement(phase: ScannerPhase) -> Bool {
+        phase == .ready
+    }
 }
