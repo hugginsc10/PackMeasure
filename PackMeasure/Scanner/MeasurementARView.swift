@@ -3,6 +3,28 @@ import RealityKit
 import SwiftUI
 import simd
 
+enum ScannerPreviewCommand: Equatable, Sendable {
+    case none
+    case pause
+    case resume
+}
+
+struct ScannerPreviewLifecycle: Equatable, Sendable {
+    private(set) var isFrozen = false
+
+    mutating func measurementFinalized() -> ScannerPreviewCommand {
+        guard !isFrozen else { return .none }
+        isFrozen = true
+        return .pause
+    }
+
+    mutating func scanRequested() -> ScannerPreviewCommand {
+        guard isFrozen else { return .none }
+        isFrozen = false
+        return .resume
+    }
+}
+
 struct MeasurementARView: UIViewRepresentable {
     @Bindable var scannerState: ScannerSheetView.ScannerStateModel
 
@@ -71,6 +93,8 @@ struct MeasurementARView: UIViewRepresentable {
 
         @MainActor private weak var arView: ARView?
         @MainActor private var depthSupported = false
+        @MainActor private var previewLifecycle = ScannerPreviewLifecycle()
+        @MainActor private var sessionConfiguration: ARWorldTrackingConfiguration?
         @MainActor weak var scannerState: ScannerSheetView.ScannerStateModel?
         @MainActor var lastCaptureRequestID = 0
 
@@ -98,6 +122,11 @@ struct MeasurementARView: UIViewRepresentable {
                     "LiDAR scene depth is not available on this device."
                 )
                 return
+            }
+
+            if previewLifecycle.scanRequested() == .resume,
+               let sessionConfiguration {
+                arView?.session.run(sessionConfiguration)
             }
 
             let requestID = lastCaptureRequestID
@@ -133,6 +162,7 @@ struct MeasurementARView: UIViewRepresentable {
                 depthSupported = true
             }
 
+            sessionConfiguration = configuration
             arView?.session.run(configuration)
             scannerState?.phase = depthSupported
                 ? .ready
@@ -173,6 +203,9 @@ struct MeasurementARView: UIViewRepresentable {
             }
 
             if now >= activeCapture.deadline {
+                // Stop on the exact frame boundary before geometry work so the
+                // preview shows the framing that produced the measurement.
+                session.pause()
                 capture = nil
                 finalizeCapture(activeCapture)
             } else {
@@ -217,6 +250,7 @@ struct MeasurementARView: UIViewRepresentable {
                 frameCount: capture.frameCount,
                 targetValidation: targetValidation
             ) else {
+                resumePreviewAfterFailedCapture(requestID: capture.requestID)
                 let message = if capture.targetRejection == .horizontalSurface {
                     "Put the center reticle on the object's front or side, not the floor, then try again."
                 } else {
@@ -550,12 +584,29 @@ struct MeasurementARView: UIViewRepresentable {
 
         private func publishEstimate(_ estimate: MeasurementEstimate, requestID: Int) {
             Task { @MainActor [weak self] in
-                guard let state = self?.scannerState,
+                guard let self,
+                      let state = scannerState,
                       state.captureRequestID == requestID else {
                     return
                 }
+                if previewLifecycle.measurementFinalized() == .pause {
+                    // The delegate already pauses at the deadline. Repeating
+                    // here is an idempotent fallback if ARKit races a final frame.
+                    arView?.session.pause()
+                }
                 state.estimate = estimate
                 state.phase = .measured
+            }
+        }
+
+        private func resumePreviewAfterFailedCapture(requestID: Int) {
+            Task { @MainActor [weak self] in
+                guard let self,
+                      scannerState?.captureRequestID == requestID,
+                      let sessionConfiguration else {
+                    return
+                }
+                arView?.session.run(sessionConfiguration)
             }
         }
     }
