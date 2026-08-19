@@ -143,6 +143,61 @@ struct MeasurementEstimatorTests {
     }
 
     @Test
+    func floorBridgeCannotPullBackgroundIntoReticleSeededObject() throws {
+        let width = 11
+        let height = 9
+        func index(_ x: Int, _ y: Int) -> Int { y * width + x }
+
+        let objectIndices = Set(
+            (2...6).flatMap { y in (4...6).map { x in index(x, y) } }
+        )
+        let floorIndices = Set((0..<width).map { x in index(x, 7) })
+        let backgroundIndices = Set(
+            (1...6).flatMap { y in (0...2).map { x in index(x, y) } }
+        )
+        let contaminatedIndices = objectIndices
+            .union(floorIndices)
+            .union(backgroundIndices)
+        let region = DepthRegion(
+            indices: contaminatedIndices.sorted(),
+            seedDepthMeters: 1,
+            bounds: PixelBounds(minX: 0, minY: 1, maxX: 10, maxY: 7)
+        )
+
+        var worldPointsByIndex: [Int: SIMD3<Float>] = [:]
+        for contaminatedIndex in contaminatedIndices {
+            let x = contaminatedIndex % width
+            let y = contaminatedIndex / width
+            let worldY: Float
+            if floorIndices.contains(contaminatedIndex) {
+                worldY = 0
+            } else if objectIndices.contains(contaminatedIndex) {
+                worldY = 0.05 + Float(6 - y) * 0.10
+            } else {
+                worldY = 0.08 + Float(6 - y) * 0.07
+            }
+            worldPointsByIndex[contaminatedIndex] = SIMD3<Float>(
+                Float(x) * 0.05,
+                worldY,
+                -1 - Float(y) * 0.02
+            )
+        }
+
+        let filtered = try #require(
+            ReticleSeededObjectRegionFilter().filter(
+                region: region,
+                gridWidth: width,
+                gridHeight: height,
+                floorEstimate: SceneFloorEstimate(y: 0, source: .peripheralDepth),
+                worldPointAt: { worldPointsByIndex[$0] }
+            )
+        )
+
+        #expect(Set(filtered.indices) == objectIndices)
+        #expect(filtered.bounds == PixelBounds(minX: 4, minY: 2, maxX: 6, maxY: 6))
+    }
+
+    @Test
     func measurementOutcomePreservesTargetRejectionReason() {
         let points = boxSurfacePoints(
             length: 0.8,
