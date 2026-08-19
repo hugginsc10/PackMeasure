@@ -11,7 +11,12 @@ struct ScannerSheetView: View {
         private(set) var isPreparingForAiming = false
 
         func prepareForAiming() {
-            guard phase == .measured, estimate != nil else { return }
+            switch phase {
+            case .measured where estimate != nil, .failed:
+                break
+            default:
+                return
+            }
             estimate = nil
             isPreparingForAiming = true
             previewRequestID += 1
@@ -44,7 +49,9 @@ struct ScannerSheetView: View {
                 .frame(minHeight: 260, idealHeight: 360, maxHeight: 420)
                 .clipShape(RoundedRectangle(cornerRadius: 24))
                 .overlay {
-                    ObjectTargetGuide(phase: scannerState.phase)
+                    if showsCameraGuide {
+                        CameraObjectFrame()
+                    }
                 }
                 .overlay(alignment: .top) {
                     Text(statusText)
@@ -56,13 +63,15 @@ struct ScannerSheetView: View {
                         .padding()
                 }
                 .overlay(alignment: .bottom) {
-                    Text(ScannerGuidanceCopy.previewTarget)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.black)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 7)
-                        .background(.yellow, in: Capsule())
-                        .padding()
+                    if showsCameraGuide, !scannerState.phase.isCapturing {
+                        Text(ScannerGuidanceCopy.previewTarget)
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 7)
+                            .background(.black.opacity(0.55), in: Capsule())
+                            .padding()
+                    }
                 }
 
                 if let estimate = scannerState.estimate {
@@ -79,7 +88,7 @@ struct ScannerSheetView: View {
                         }
 
                         if case let .retryRequired(message) = reviewState {
-                            Section("Try another scan") {
+                            Section("Try another photo") {
                                 Label(message, systemImage: "exclamationmark.triangle.fill")
                                     .foregroundStyle(.orange)
                             }
@@ -100,24 +109,12 @@ struct ScannerSheetView: View {
                         }
                     }
                     .frame(maxHeight: 360)
-                } else if scannerState.isPreparingForAiming {
-                    Text(ScannerGuidanceCopy.setup)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal)
-                        .multilineTextAlignment(.center)
                 } else if case let .retryRequired(message) = reviewState {
                     Label(message, systemImage: "exclamationmark.triangle.fill")
                         .font(.footnote)
                         .foregroundStyle(.orange)
                         .multilineTextAlignment(.leading)
                         .padding(.horizontal)
-                } else {
-                    Text(ScannerGuidanceCopy.setup)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal)
-                        .multilineTextAlignment(.center)
                 }
 
                 actionBar
@@ -142,13 +139,16 @@ struct ScannerSheetView: View {
             ProgressView(ScannerActionCopy.checkingSupport)
                 .padding(.horizontal)
         case .scanning(let progress):
-            ProgressView(value: progress)
+            ProgressView(ScannerActionCopy.processingPhoto, value: progress)
                 .padding(.horizontal)
         case .unsupported:
             Button("Close") {
                 dismiss()
             }
             .buttonStyle(.borderedProminent)
+        case .failed where scannerState.isPreparingForAiming:
+            ProgressView(ScannerActionCopy.preparingPreview)
+                .padding(.horizontal)
         case .failed:
             retryActionBar
         case .measured where scannerState.isPreparingForAiming:
@@ -204,13 +204,9 @@ struct ScannerSheetView: View {
             .buttonStyle(.bordered)
 
             Button {
-                if scannerState.estimate == nil {
-                    requestCaptureAfterFailure()
-                } else {
-                    prepareForAiming()
-                }
+                prepareForAiming()
             } label: {
-                Label("Scan again", systemImage: "arrow.clockwise")
+                Label(ScannerActionCopy.retryPhoto, systemImage: "arrow.clockwise")
             }
             .buttonStyle(.borderedProminent)
         }
@@ -228,7 +224,9 @@ struct ScannerSheetView: View {
                 scannerState.estimate == nil
                     ? ScannerActionCopy.startMeasurement
                     : ScannerActionCopy.measureAgain,
-                systemImage: "camera.aperture"
+                systemImage: scannerState.estimate == nil
+                    ? "camera.fill"
+                    : "arrow.clockwise"
             )
         }
         .disabled(
@@ -252,92 +250,51 @@ struct ScannerSheetView: View {
         scannerState.startMeasurement()
     }
 
-    private func requestCaptureAfterFailure() {
-        scannerState.estimate = nil
-        scannerState.captureRequestID += 1
-    }
-
     private var statusText: String {
         switch scannerState.phase {
         case .checkingSupport:
             return ScannerActionCopy.checkingSupport
         case .ready:
-            return "Ready to scan"
+            return "Ready"
         case .scanning:
-            return "Scanning..."
+            return ScannerActionCopy.processingPhoto
         case .measured:
             if scannerState.isPreparingForAiming {
                 return ScannerActionCopy.preparingPreview
             }
             return switch reviewState {
             case .accepted:
-                "Measurement ready"
+                "Dimensions ready"
             case .retryRequired:
-                "Try another scan"
+                "Try another photo"
             default:
-                "Review measurement"
+                "Review dimensions"
             }
         case .unsupported:
-            return "LiDAR unavailable"
+            return "Measurement unavailable"
         case .failed:
-            return "Try another scan"
+            return scannerState.isPreparingForAiming
+                ? ScannerActionCopy.preparingPreview
+                : "Try another photo"
         }
+    }
+
+    private var showsCameraGuide: Bool {
+        guard scannerState.estimate == nil else { return false }
+        if case .unsupported = scannerState.phase { return false }
+        return true
     }
 }
 
-private struct ObjectTargetGuide: View {
-    let phase: ScannerPhase
-
+private struct CameraObjectFrame: View {
     var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 26)
-                .fill(.yellow.opacity(0.06))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 26)
-                        .strokeBorder(
-                            guideColor,
-                            style: StrokeStyle(lineWidth: 4, dash: [18, 8])
-                        )
-                }
-                .padding(.horizontal, 34)
-                .padding(.vertical, 62)
-
-            VStack {
-                Text("OBJECT IN FRAME • DOT ON CLEAR FACE")
-                    .font(.caption2.weight(.black))
-                    .foregroundStyle(.black)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.75)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .background(guideColor, in: Capsule())
-                Spacer()
-            }
-            .padding(.top, 48)
-
-            Circle()
-                .stroke(.black.opacity(0.8), lineWidth: 5)
-                .frame(width: 28, height: 28)
-            Circle()
-                .fill(guideColor)
-                .frame(width: 18, height: 18)
-            Rectangle()
-                .fill(guideColor)
-                .frame(width: 74, height: 4)
-            Rectangle()
-                .fill(guideColor)
-                .frame(width: 4, height: 74)
-        }
-        .shadow(color: .black.opacity(0.85), radius: 2)
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
-    }
-
-    private var guideColor: Color {
-        if case .scanning = phase {
-            return .green
-        }
-        return .yellow
+        RoundedRectangle(cornerRadius: 24)
+            .strokeBorder(.white.opacity(0.78), lineWidth: 2)
+            .padding(.horizontal, 28)
+            .padding(.vertical, 36)
+            .shadow(color: .black.opacity(0.45), radius: 2)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 }
 
@@ -381,35 +338,46 @@ enum ScannerCapturePolicy {
 
 enum ScannerGuidanceCopy {
     static let previewTarget =
-        "Keep one whole item inside the frame with a little space around it"
+        "Fit one object inside the frame"
 
     static let setup =
-        "Point the camera at one object so the whole item is visible with a little floor or background around its edges. Tap Take measurement to capture one frame and estimate its overall size."
+        "Keep the whole object visible, then take a photo."
 
     static let lowConfidenceRetry =
-        "This photo produced a weak depth sample. Retake it with one whole object in frame and clearer separation from the room."
+        "We couldn't get clear dimensions from this photo. Keep one object fully visible and try again."
 
     static let missingEstimateRetry =
-        "No usable object measurement was produced from this photo. Retake it with one whole object in frame."
+        "We couldn't measure this photo. Keep one object fully visible and try again."
 }
 
 enum ScannerResultCopy {
-    static let sizeSectionTitle = "Estimated size"
+    static let sizeSectionTitle = "Estimated dimensions"
 
     static func qualitySummary(for estimate: MeasurementEstimate) -> String {
-        "\(estimate.confidence.title) point-cloud quality • \(estimate.sampleCount) points"
+        "\(estimate.confidence.title) scan quality"
     }
 }
 
 enum ScannerActionCopy {
-    static let checkingSupport = "Checking LiDAR support…"
-    static let measureAgain = "Measure again"
-    static let preparingPreview = "Returning to camera…"
-    static let startMeasurement = "Take measurement"
+    static let checkingSupport = "Starting camera…"
+    static let measureAgain = "Retake photo"
+    static let retryPhoto = "Retake photo"
+    static let preparingPreview = "Opening camera…"
+    static let processingPhoto = "Measuring…"
+    static let startMeasurement = "Take photo"
 }
 
 enum ScannerActionPolicy {
     static func canStartMeasurement(phase: ScannerPhase) -> Bool {
         phase == .ready
+    }
+}
+
+private extension ScannerPhase {
+    var isCapturing: Bool {
+        if case .scanning = self {
+            return true
+        }
+        return false
     }
 }
