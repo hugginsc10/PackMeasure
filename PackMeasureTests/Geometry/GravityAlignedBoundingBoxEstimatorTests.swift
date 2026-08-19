@@ -131,6 +131,64 @@ final class GravityAlignedBoundingBoxEstimatorTests: XCTestCase {
         )
     }
 
+    func testRejectsDenseRoomCornerMasqueradingAsHighConfidenceBox() {
+        let knownBox = cuboidSurfacePoints(
+            length: 0.6096, // 24 inches
+            width: 0.508, // 20 inches
+            height: 0.508, // 20 inches
+            yaw: 0,
+            center: SIMD3<Float>(0, 0.254, 0),
+            subdivisions: 14
+        )
+        let sceneLength: Float = 1.4732 // observed false 58-inch length
+        let sceneWidth: Float = 1.1176 // observed false 44-inch width
+        let sceneHeight: Float = 0.6096 // observed false 24-inch height
+        let leakedFloor = horizontalPlanePoints(
+            length: sceneLength,
+            width: sceneWidth,
+            y: 0,
+            yaw: 0,
+            lengthSubdivisions: 100,
+            widthSubdivisions: 75
+        )
+        let backgroundWall = verticalPlanePoints(
+            length: sceneLength,
+            height: sceneHeight,
+            yBase: 0,
+            z: sceneWidth / 2,
+            lengthSubdivisions: 100,
+            heightSubdivisions: 40
+        )
+        let sideWall = sideVerticalPlanePoints(
+            width: sceneWidth,
+            height: sceneHeight,
+            yBase: 0,
+            x: sceneLength / 2,
+            widthSubdivisions: 75,
+            heightSubdivisions: 40
+        )
+
+        let result = Result {
+            try estimator.estimate(
+                points: knownBox + leakedFloor + backgroundWall + sideWall
+            )
+        }
+
+        switch result {
+        case .success(let estimate):
+            let dimensions = estimate.dimensions.converted(to: .inches)
+            XCTFail(
+                "Accepted scene envelope as \(dimensions.length)x\(dimensions.width)x"
+                    + "\(dimensions.height) inches at \(estimate.confidence.level) confidence"
+            )
+        case .failure(let error):
+            XCTAssertEqual(
+                error as? BoundingBoxEstimationError,
+                .groundPlaneContamination
+            )
+        }
+    }
+
     func testAcceptsDenseBottomSurfaceWhenItMatchesRaisedObjectFootprint() throws {
         let length: Float = 0.6096
         let width: Float = 0.508
@@ -375,6 +433,25 @@ final class GravityAlignedBoundingBoxEstimatorTests: XCTestCase {
                     -length / 2 + length * Float(lengthIndex) / Float(lengthSubdivisions),
                     yBase + height * Float(heightIndex) / Float(heightSubdivisions),
                     z
+                )
+            }
+        }
+    }
+
+    private func sideVerticalPlanePoints(
+        width: Float,
+        height: Float,
+        yBase: Float,
+        x: Float,
+        widthSubdivisions: Int,
+        heightSubdivisions: Int
+    ) -> [SIMD3<Float>] {
+        (0...widthSubdivisions).flatMap { widthIndex in
+            (0...heightSubdivisions).map { heightIndex in
+                SIMD3<Float>(
+                    x,
+                    yBase + height * Float(heightIndex) / Float(heightSubdivisions),
+                    -width / 2 + width * Float(widthIndex) / Float(widthSubdivisions)
                 )
             }
         }
