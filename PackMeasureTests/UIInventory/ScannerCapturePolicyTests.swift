@@ -111,6 +111,21 @@ struct ScannerCapturePolicyTests {
         #expect(!state.isPreparingForAiming)
     }
 
+    @Test @MainActor
+    func tappingVisibleStartImmediatelyShowsCaptureInProgress() {
+        let state = ScannerSheetView.ScannerStateModel()
+        state.captureRequestID = 7
+        state.phase = .measured
+        state.estimate = estimate(confidence: .high)
+        state.prepareForAiming()
+        state.phase = .ready
+
+        state.startMeasurement()
+
+        #expect(state.captureRequestID == 8)
+        #expect(state.phase == .scanning(progress: 0))
+    }
+
     @Test
     func retakeFlowUsesDistinctAimAndCaptureActions() {
         #expect(ScannerActionCopy.measureAgain == "Measure again")
