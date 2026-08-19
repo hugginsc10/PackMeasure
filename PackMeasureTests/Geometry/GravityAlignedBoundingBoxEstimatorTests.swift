@@ -129,6 +129,64 @@ final class GravityAlignedBoundingBoxEstimatorTests: XCTestCase {
         XCTAssertEqual(inches.height, 20, accuracy: 0.5)
     }
 
+    func testPreservesSparseVerticalFurnitureProtrusions() throws {
+        let bodyLength: Float = 0.6096
+        let bodyWidth: Float = 0.508
+        let bodyHeight: Float = 0.508
+        let protrusionLength: Float = 0.0508
+        let protrusionHeight: Float = 0.381
+        let yaw: Float = 0.22
+        let center = SIMD3<Float>(0, bodyHeight / 2, 0)
+        let body = cuboidSurfacePoints(
+            length: bodyLength,
+            width: bodyWidth,
+            height: bodyHeight,
+            yaw: yaw,
+            center: center,
+            subdivisions: 20
+        )
+        let protrusionY = -bodyHeight / 2 + protrusionHeight / 2
+        let leftCenter = worldPoint(
+            -(bodyLength + protrusionLength) / 2,
+            0,
+            protrusionY,
+            yaw,
+            center
+        )
+        let rightCenter = worldPoint(
+            (bodyLength + protrusionLength) / 2,
+            0,
+            protrusionY,
+            yaw,
+            center
+        )
+        let leftProtrusion = cuboidSurfacePoints(
+            length: protrusionLength,
+            width: 0.05,
+            height: protrusionHeight,
+            yaw: yaw,
+            center: leftCenter,
+            subdivisions: 2
+        )
+        let rightProtrusion = cuboidSurfacePoints(
+            length: protrusionLength,
+            width: 0.05,
+            height: protrusionHeight,
+            yaw: yaw,
+            center: rightCenter,
+            subdivisions: 2
+        )
+
+        let estimate = try estimator.estimate(
+            points: body + leftProtrusion + rightProtrusion
+        )
+        let inches = estimate.dimensions.converted(to: .inches)
+
+        XCTAssertGreaterThanOrEqual(inches.length, 27.5)
+        XCTAssertEqual(inches.width, 20, accuracy: 0.5)
+        XCTAssertEqual(inches.height, 20, accuracy: 0.5)
+    }
+
     func testKeepsDensePartialBoxDimensionsConservative() throws {
         let points = partialBoxPoints(
             length: 0.6096,
