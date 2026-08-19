@@ -77,6 +77,47 @@ struct ScannerCapturePolicyTests {
         #expect(!summary.localizedCaseInsensitiveContains("accuracy"))
     }
 
+    @Test @MainActor
+    func successfulResultPreparesLiveAimingWithoutStartingCapture() {
+        let state = ScannerSheetView.ScannerStateModel()
+        state.captureRequestID = 7
+        state.phase = .measured
+        state.estimate = estimate(confidence: .high)
+
+        state.prepareForAiming()
+
+        #expect(state.estimate == nil)
+        #expect(state.phase == .measured)
+        #expect(state.previewRequestID == 1)
+        #expect(state.captureRequestID == 7)
+        #expect(state.isPreparingForAiming)
+    }
+
+    @Test @MainActor
+    func captureStartsOnlyAfterPreviewPublishesReady() {
+        let state = ScannerSheetView.ScannerStateModel()
+        state.captureRequestID = 7
+        state.phase = .measured
+        state.estimate = estimate(confidence: .high)
+        state.prepareForAiming()
+
+        state.startMeasurement()
+        #expect(state.captureRequestID == 7)
+
+        state.phase = .ready
+        state.startMeasurement()
+
+        #expect(state.captureRequestID == 8)
+        #expect(!state.isPreparingForAiming)
+    }
+
+    @Test
+    func retakeFlowUsesDistinctAimAndCaptureActions() {
+        #expect(ScannerActionCopy.measureAgain == "Measure again")
+        #expect(ScannerActionCopy.preparingPreview == "Starting live preview…")
+        #expect(ScannerActionCopy.startMeasurement == "Start measurement")
+    }
+
     @Test
     func usableCaptureCannotSaveUntilUserConfirmsTargetStayedOnObject() {
         let unconfirmed = ScannerCapturePolicy.reviewState(
