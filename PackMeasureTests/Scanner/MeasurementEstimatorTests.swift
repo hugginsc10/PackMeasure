@@ -293,6 +293,85 @@ struct MeasurementEstimatorTests {
     }
 
     @Test
+    func temporalSupportRejectsTwoFrameFringeInShortCaptures() {
+        let stableCore = SIMD3<Float>(0, 0.35, -1)
+        let legitimateSide = SIMD3<Float>(0.24, 0.35, -1.40)
+        let repeatedFringe = SIMD3<Float>(0.48, 0.35, -1.18)
+
+        for frameCount in [3, 4, 7] {
+            let frames = (0..<frameCount).map { frameIndex in
+                var points = [stableCore]
+                if frameIndex < 3 {
+                    points.append(legitimateSide)
+                }
+                if frameIndex < 2 {
+                    points.append(repeatedFringe)
+                }
+                return points
+            }
+
+            let result = TemporalWorldPointSupportFilter().filter(frames: frames)
+
+            #expect(result.requiredSupportingFrameCount == 3)
+            #expect(result.points.contains(legitimateSide))
+            #expect(!result.points.contains(repeatedFringe))
+        }
+    }
+
+    @Test
+    func temporalSupportDistinguishesNeighborToleranceFromParallelSlab() {
+        let stableSurface = SIMD3<Float>(0.001, 0.35, -1)
+        let withinNeighborTolerance = SIMD3<Float>(0.039, 0.35, -1)
+        let outsideNeighborTolerance = SIMD3<Float>(0.041, 0.35, -1)
+        let frames = (0..<4).map { frameIndex in
+            frameIndex < 2
+                ? [stableSurface, withinNeighborTolerance, outsideNeighborTolerance]
+                : [stableSurface]
+        }
+
+        let result = TemporalWorldPointSupportFilter().filter(frames: frames)
+
+        #expect(result.points.contains(withinNeighborTolerance))
+        #expect(!result.points.contains(outsideNeighborTolerance))
+    }
+
+    @Test
+    func temporallyFilteredCaptureMatchesStableMeasurementPipeline() {
+        let stableObject = boxSurfacePoints(
+            length: 0.60,
+            width: 0.40,
+            height: 0.50,
+            yaw: 0
+        )
+        let parallelFringe = (0...16).flatMap { yIndex in
+            (0...18).map { zIndex in
+                SIMD3<Float>(
+                    0.90,
+                    0.50 * Float(yIndex) / 16,
+                    -0.20 + 0.40 * Float(zIndex) / 18
+                )
+            }
+        }
+        let frames = [
+            stableObject + parallelFringe,
+            stableObject + parallelFringe,
+            stableObject,
+        ]
+
+        let filtered = TemporalWorldPointSupportFilter().filter(frames: frames)
+        let filteredOutcome = MeasurementEstimator.outcome(
+            from: filtered.points,
+            frameCount: frames.count
+        )
+        let stableOutcome = MeasurementEstimator.outcome(
+            from: stableObject,
+            frameCount: frames.count
+        )
+
+        #expect(filteredOutcome == stableOutcome)
+    }
+
+    @Test
     func temporalSupportMatchesNeighboringVoxelsAcrossDepthJitter() {
         let frames = [
             [SIMD3<Float>(0.024, 0.30, -1.024)],
