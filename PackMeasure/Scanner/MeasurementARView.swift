@@ -27,6 +27,32 @@ struct ScannerPreviewLifecycle: Equatable, Sendable {
     }
 }
 
+enum ScannerViewRequestCommand: Equatable, Sendable {
+    case resumePreview
+    case startCapture
+}
+
+struct ScannerViewRequestTracker: Equatable, Sendable {
+    private(set) var lastPreviewRequestID = 0
+    private(set) var lastCaptureRequestID = 0
+
+    mutating func commands(
+        previewRequestID: Int,
+        captureRequestID: Int
+    ) -> [ScannerViewRequestCommand] {
+        var commands: [ScannerViewRequestCommand] = []
+        if previewRequestID != lastPreviewRequestID {
+            lastPreviewRequestID = previewRequestID
+            commands.append(.resumePreview)
+        }
+        if captureRequestID != lastCaptureRequestID {
+            lastCaptureRequestID = captureRequestID
+            commands.append(.startCapture)
+        }
+        return commands
+    }
+}
+
 struct MeasurementARView: UIViewRepresentable {
     @Bindable var scannerState: ScannerSheetView.ScannerStateModel
 
@@ -43,11 +69,10 @@ struct MeasurementARView: UIViewRepresentable {
 
     func updateUIView(_ uiView: ARView, context: Context) {
         context.coordinator.scannerState = scannerState
-
-        if context.coordinator.lastCaptureRequestID != scannerState.captureRequestID {
-            context.coordinator.lastCaptureRequestID = scannerState.captureRequestID
-            context.coordinator.startCapture()
-        }
+        context.coordinator.handleRequests(
+            previewRequestID: scannerState.previewRequestID,
+            captureRequestID: scannerState.captureRequestID
+        )
     }
 
     static func dismantleUIView(_ uiView: ARView, coordinator: Coordinator) {
@@ -121,8 +146,8 @@ struct MeasurementARView: UIViewRepresentable {
         @MainActor private var depthSupported = false
         @MainActor private var previewLifecycle = ScannerPreviewLifecycle()
         @MainActor private var sessionConfiguration: ARWorldTrackingConfiguration?
+        @MainActor private var requestTracker = ScannerViewRequestTracker()
         @MainActor weak var scannerState: ScannerSheetView.ScannerStateModel?
-        @MainActor var lastCaptureRequestID = 0
 
         @MainActor
         func attach(to view: ARView) {
@@ -142,6 +167,37 @@ struct MeasurementARView: UIViewRepresentable {
         }
 
         @MainActor
+        func handleRequests(previewRequestID: Int, captureRequestID: Int) {
+            let commands = requestTracker.commands(
+                previewRequestID: previewRequestID,
+                captureRequestID: captureRequestID
+            )
+            for command in commands {
+                switch command {
+                case .resumePreview:
+                    resumePreviewForAiming()
+                case .startCapture:
+                    startCapture()
+                }
+            }
+        }
+
+        @MainActor
+        private func resumePreviewForAiming() {
+            guard depthSupported, let sessionConfiguration else {
+                scannerState?.phase = .unsupported(
+                    "LiDAR scene depth is not available on this device."
+                )
+                return
+            }
+
+            if previewLifecycle.scanRequested() == .resume {
+                arView?.session.run(sessionConfiguration)
+            }
+            scannerState?.phase = .ready
+        }
+
+        @MainActor
         func startCapture() {
             guard depthSupported else {
                 scannerState?.phase = .unsupported(
@@ -155,7 +211,7 @@ struct MeasurementARView: UIViewRepresentable {
                 arView?.session.run(sessionConfiguration)
             }
 
-            let requestID = lastCaptureRequestID
+            let requestID = requestTracker.lastCaptureRequestID
             let now = CACurrentMediaTime()
             scannerState?.estimate = nil
             scannerState?.phase = .scanning(progress: 0)
