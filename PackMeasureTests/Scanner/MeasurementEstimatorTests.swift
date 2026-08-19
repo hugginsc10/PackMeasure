@@ -439,6 +439,22 @@ struct MeasurementEstimatorTests {
     }
 
     @Test
+    func sceneContaminationUsesFloorAndBackgroundRetryGuidance() {
+        let sceneMessage = ScannerMeasurementFailureCopy.message(
+            for: .geometry(.sceneContamination)
+        )
+        let groundMessage = ScannerMeasurementFailureCopy.message(
+            for: .geometry(.groundPlaneContamination)
+        )
+
+        #expect(sceneMessage == groundMessage)
+        #expect(
+            sceneMessage
+                == "Too much floor or background entered the scan. Keep the whole object centered with space around its edges."
+        )
+    }
+
+    @Test
     func invalidFloorTargetCannotReturnHighConfidenceMeasurement() throws {
         let misleadingFloorRegion = boxSurfacePoints(
             length: 2.1,
