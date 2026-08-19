@@ -7,8 +7,7 @@ struct ScannerCapturePolicyTests {
     func lowConfidenceCaptureRequiresVisibleRetryAndCannotSave() {
         let state = ScannerCapturePolicy.reviewState(
             phase: .measured,
-            estimate: estimate(confidence: .low),
-            targetConfirmed: true
+            estimate: estimate(confidence: .low)
         )
 
         #expect(
@@ -22,11 +21,10 @@ struct ScannerCapturePolicyTests {
     @Test
     func scannerRejectionWinsEvenIfAStaleEstimateExists() {
         let scannerDiagnostic =
-            "The measurement could not isolate the object from its surroundings. Keep the object centered with clear edges and scan again."
+            "The app could not isolate one clear object from this capture. Center one item in frame and retake the photo."
         let state = ScannerCapturePolicy.reviewState(
             phase: .failed(scannerDiagnostic),
-            estimate: estimate(confidence: .high),
-            targetConfirmed: true
+            estimate: estimate(confidence: .high)
         )
 
         #expect(state == .retryRequired(scannerDiagnostic))
@@ -34,18 +32,14 @@ struct ScannerCapturePolicyTests {
     }
 
     @Test
-    func guidanceAllowsAnyClearObjectFaceAndSeparatesBackground() {
+    func guidanceExplainsSinglePhotoCapture() {
         #expect(
             ScannerGuidanceCopy.previewTarget
-                == "Put center dot on a clear object face — keep floor and background outside the object"
+                == "Keep one whole item inside the frame with a little space around it"
         )
         #expect(
             ScannerGuidanceCopy.setup
-                == "Stand at a 3/4 angle so the front, side, and top are visible. Put the whole object inside the yellow frame, place the center dot on a clear object face, and keep visible floor or background around the object's edges."
-        )
-        #expect(
-            ScannerGuidanceCopy.targetConfirmation
-                == "Center dot stayed on a clear object face"
+                == "Point the camera at one object so the whole item is visible with a little floor or background around its edges. Tap Take measurement to capture one frame and estimate its overall size."
         )
     }
 
@@ -53,11 +47,11 @@ struct ScannerCapturePolicyTests {
     func genericRetryCopyDescribesResultWithoutBlamingUser() {
         #expect(
             ScannerGuidanceCopy.lowConfidenceRetry
-                == "This scan could not isolate a reliable object measurement. Keep the object inside the frame, put the center dot on a clear object face, and scan again."
+                == "This photo produced a weak depth sample. Retake it with one whole object in frame and clearer separation from the room."
         )
         #expect(
             ScannerGuidanceCopy.missingEstimateRetry
-                == "No object measurement was produced. Keep the object inside the frame, put the center dot on a clear object face, and scan again."
+                == "No usable object measurement was produced from this photo. Retake it with one whole object in frame."
         )
     }
 
@@ -78,7 +72,7 @@ struct ScannerCapturePolicyTests {
     }
 
     @Test @MainActor
-    func successfulResultPreparesLiveAimingWithoutStartingCapture() {
+    func successfulResultReturnsToLivePreviewWithoutStartingCapture() {
         let state = ScannerSheetView.ScannerStateModel()
         state.captureRequestID = 7
         state.phase = .measured
@@ -129,8 +123,8 @@ struct ScannerCapturePolicyTests {
     @Test
     func retakeFlowUsesDistinctAimAndCaptureActions() {
         #expect(ScannerActionCopy.measureAgain == "Measure again")
-        #expect(ScannerActionCopy.preparingPreview == "Starting live preview…")
-        #expect(ScannerActionCopy.startMeasurement == "Start measurement")
+        #expect(ScannerActionCopy.preparingPreview == "Returning to camera…")
+        #expect(ScannerActionCopy.startMeasurement == "Take measurement")
     }
 
     @Test
@@ -146,30 +140,21 @@ struct ScannerCapturePolicyTests {
     }
 
     @Test
-    func usableCaptureCannotSaveUntilUserConfirmsTargetStayedOnObject() {
-        let unconfirmed = ScannerCapturePolicy.reviewState(
+    func usableCaptureCanSaveImmediatelyWhenEvidenceIsStrong() {
+        let state = ScannerCapturePolicy.reviewState(
             phase: .measured,
-            estimate: estimate(confidence: .high),
-            targetConfirmed: false
-        )
-        let confirmed = ScannerCapturePolicy.reviewState(
-            phase: .measured,
-            estimate: estimate(confidence: .high),
-            targetConfirmed: true
+            estimate: estimate(confidence: .high)
         )
 
-        #expect(unconfirmed == .confirmTarget)
-        #expect(!unconfirmed.canSave)
-        #expect(confirmed == .accepted)
-        #expect(confirmed.canSave)
+        #expect(state == .accepted)
+        #expect(state.canSave)
     }
 
     @Test
     func measuredPhaseWithoutEstimateRequiresRetry() {
         let state = ScannerCapturePolicy.reviewState(
             phase: .measured,
-            estimate: nil,
-            targetConfirmed: true
+            estimate: nil
         )
 
         #expect(
