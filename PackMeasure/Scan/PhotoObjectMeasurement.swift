@@ -1,3 +1,4 @@
+import CoreVideo
 import Foundation
 import simd
 
@@ -5,6 +6,8 @@ enum PhotoObjectMeasurementError: Error, Equatable, Sendable {
     case invalidLabelMaskDimensions
     case invalidDepthMaskDimensions
     case invalidPolicy
+    case unsupportedLabelMaskPixelFormat(OSType)
+    case invalidLabelMaskPixelValue
     case noForegroundInstance
     case ambiguousForegroundInstances(labels: [UInt32])
     case maskAreaTooSmall(actual: Float, minimum: Float)
@@ -37,6 +40,68 @@ struct PhotoInstanceLabelMask: Equatable, Sendable {
         self.width = width
         self.height = height
         self.labels = labels
+    }
+
+    init(pixelBuffer: CVPixelBuffer) throws {
+        let width = CVPixelBufferGetWidth(pixelBuffer)
+        let height = CVPixelBufferGetHeight(pixelBuffer)
+        guard width > 0, height > 0 else {
+            throw PhotoObjectMeasurementError.invalidLabelMaskDimensions
+        }
+
+        let format = CVPixelBufferGetPixelFormatType(pixelBuffer)
+        guard CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly) == kCVReturnSuccess else {
+            throw PhotoObjectMeasurementError.unsupportedLabelMaskPixelFormat(format)
+        }
+        defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
+        guard let baseAddress = CVPixelBufferGetBaseAddress(pixelBuffer) else {
+            throw PhotoObjectMeasurementError.unsupportedLabelMaskPixelFormat(format)
+        }
+
+        switch format {
+        case kCVPixelFormatType_OneComponent8:
+            let rowStride = CVPixelBufferGetBytesPerRow(pixelBuffer) / MemoryLayout<UInt8>.stride
+            let pointer = baseAddress.assumingMemoryBound(to: UInt8.self)
+            var labels = Array(repeating: UInt32.zero, count: width * height)
+            for y in 0..<height {
+                let row = pointer.advanced(by: y * rowStride)
+                for x in 0..<width {
+                    labels[y * width + x] = UInt32(row[x])
+                }
+            }
+            try self.init(width: width, height: height, labels: labels)
+        case kCVPixelFormatType_OneComponent16:
+            let rowStride = CVPixelBufferGetBytesPerRow(pixelBuffer) / MemoryLayout<UInt16>.stride
+            let pointer = baseAddress.assumingMemoryBound(to: UInt16.self)
+            var labels = Array(repeating: UInt32.zero, count: width * height)
+            for y in 0..<height {
+                let row = pointer.advanced(by: y * rowStride)
+                for x in 0..<width {
+                    labels[y * width + x] = UInt32(row[x])
+                }
+            }
+            try self.init(width: width, height: height, labels: labels)
+        case kCVPixelFormatType_OneComponent32Float:
+            let rowStride = CVPixelBufferGetBytesPerRow(pixelBuffer)
+                / MemoryLayout<Float32>.stride
+            let pointer = baseAddress.assumingMemoryBound(to: Float32.self)
+            var labels = Array(repeating: UInt32.zero, count: width * height)
+            for y in 0..<height {
+                let row = pointer.advanced(by: y * rowStride)
+                for x in 0..<width {
+                    let value = row[x]
+                    guard value.isFinite,
+                          value >= 0,
+                          Double(value) <= Double(UInt32.max) else {
+                        throw PhotoObjectMeasurementError.invalidLabelMaskPixelValue
+                    }
+                    labels[y * width + x] = UInt32(value.rounded())
+                }
+            }
+            try self.init(width: width, height: height, labels: labels)
+        default:
+            throw PhotoObjectMeasurementError.unsupportedLabelMaskPixelFormat(format)
+        }
     }
 
     func labelAt(x: Int, y: Int) -> UInt32 {

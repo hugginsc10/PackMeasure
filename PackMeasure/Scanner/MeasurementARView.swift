@@ -151,10 +151,6 @@ struct MeasurementARView: UIViewRepresentable {
         private let segmenter = DepthRegionSegmenter(
             minimumConfidence: UInt8(ARConfidenceLevel.medium.rawValue)
         )
-        private let maskedProjector = MaskedDepthPointProjector(
-            minimumConfidence: UInt8(ARConfidenceLevel.medium.rawValue),
-            minimumMaskValue: 0.5
-        )
         private let targetValidator = CenteredTargetValidator()
         private let targetCapturePolicy = CenteredTargetCapturePolicy()
         private let peripheralFloorEstimator = PeripheralFloorEstimator()
@@ -280,13 +276,14 @@ struct MeasurementARView: UIViewRepresentable {
             capture = nil
             activeCapture.sampleAttemptCount += 1
             publishProgress(0.5, requestID: activeCapture.requestID)
+            // Freeze the exact RGB/depth pair being measured before Vision runs.
+            session.pause()
 
             switch sampleSingleShotFrame(from: frame) {
             case .accepted(let points, let diagnostics):
                 activeCapture.worldPoints = points
                 activeCapture.frameCount = 1
                 activeCapture.lastCalibration = diagnostics
-                session.pause()
                 finalizeCapture(activeCapture)
             case .rejected(let reason, let diagnostics):
                 activeCapture.rejectedFrameCount = 1
@@ -295,7 +292,6 @@ struct MeasurementARView: UIViewRepresentable {
                 if reason == .floorSurface {
                     activeCapture.floorRejectedFrameCount = 1
                 }
-                session.pause()
                 let failure = MeasurementEstimationFailure.targetRejected(reason)
                 logCalibrationSummary(activeCapture, result: .failure(failure))
                 resumePreviewAfterFailedCapture(requestID: activeCapture.requestID)
@@ -306,7 +302,6 @@ struct MeasurementARView: UIViewRepresentable {
             case .unavailable(let diagnostics):
                 activeCapture.unavailableFrameCount = 1
                 activeCapture.lastCalibration = diagnostics
-                session.pause()
                 let failure = MeasurementEstimationFailure.targetRejected(
                     .insufficientSurfaceEvidence
                 )
@@ -567,36 +562,55 @@ struct MeasurementARView: UIViewRepresentable {
         private func sampleSingleShotFrame(from frame: ARFrame) -> DepthFrameSample {
             guard let depthData = frame.smoothedSceneDepth ?? frame.sceneDepth,
                   let grid = depthGrid(from: depthData),
-                  let intrinsics = scaledIntrinsics(for: frame.camera, depthGrid: grid),
-                  let mask = centerObjectMask(
-                      from: frame.capturedImage,
-                      cameraIntrinsics: frame.camera.intrinsics
-                  ),
-                  let projection = maskedProjector.project(
-                      mask: mask,
-                      depthGrid: grid,
-                      imageResolution: frame.camera.imageResolution,
-                      intrinsics: intrinsics,
-                      cameraTransform: frame.camera.transform,
-                      maximumCount: Self.maximumAccumulatedPoints
-                  ) else {
+                  let labelMask = foregroundInstanceLabelMask(from: frame.capturedImage) else {
                 return .unavailable(nil)
             }
 
-            let diagnostics = FrameCalibrationDiagnostics(
-                rawRegionPixelCount: projection.selectedDepthSampleCount,
-                retainedRegionPixelCount: projection.selectedDepthSampleCount,
-                regionCoverage: projection.coverage,
-                absoluteUpNormal: nil,
-                elevationAboveFloorMeters: nil,
-                floorEstimate: nil
+            let imageResolution = frame.camera.imageResolution
+            let calibration = PhotoCameraCalibration(
+                imageWidth: Int(imageResolution.width),
+                imageHeight: Int(imageResolution.height),
+                intrinsics: frame.camera.intrinsics,
+                cameraTransform: frame.camera.transform
             )
-
-            if case .rejected(let reason) = SingleShotObjectMeasurement.validation(for: projection) {
-                return .rejected(reason, diagnostics)
+            do {
+                var policy = PhotoObjectMeasurementPolicy()
+                policy.protectedEdgeMarginPixels = max(
+                    1,
+                    min(labelMask.width, labelMask.height) / 50
+                )
+                let pointCloud = try PhotoObjectMeasurement(policy: policy).makePointCloud(
+                    labelMask: labelMask,
+                    depthGrid: grid,
+                    calibration: calibration
+                )
+                let diagnostics = FrameCalibrationDiagnostics(
+                    rawRegionPixelCount: pointCloud.maskQuality.selectedPixelCount,
+                    retainedRegionPixelCount: pointCloud.depthSupport.supportedSampleCount,
+                    regionCoverage: pointCloud.depthSupport.coverage,
+                    absoluteUpNormal: nil,
+                    elevationAboveFloorMeters: nil,
+                    floorEstimate: nil
+                )
+                return .accepted(pointCloud.worldPoints, diagnostics)
+            } catch let error as PhotoObjectMeasurementError {
+                let diagnostics = FrameCalibrationDiagnostics(
+                    rawRegionPixelCount: 0,
+                    retainedRegionPixelCount: 0,
+                    regionCoverage: 0,
+                    absoluteUpNormal: nil,
+                    elevationAboveFloorMeters: nil,
+                    floorEstimate: nil
+                )
+                switch SingleShotObjectMeasurement.failure(for: error) {
+                case .targetRejected(let reason):
+                    return .rejected(reason, diagnostics)
+                case .geometry, .insufficientFrames:
+                    return .unavailable(diagnostics)
+                }
+            } catch {
+                return .unavailable(nil)
             }
-
-            return .accepted(projection.points, diagnostics)
         }
 
         private func scaledIntrinsics(
@@ -617,10 +631,9 @@ struct MeasurementARView: UIViewRepresentable {
             return intrinsics
         }
 
-        private func centerObjectMask(
-            from pixelBuffer: CVPixelBuffer,
-            cameraIntrinsics: simd_float3x3
-        ) -> ImageMask? {
+        private func foregroundInstanceLabelMask(
+            from pixelBuffer: CVPixelBuffer
+        ) -> PhotoInstanceLabelMask? {
             let request = VNGenerateForegroundInstanceMaskRequest()
             let requestHandler = VNImageRequestHandler(
                 cvPixelBuffer: pixelBuffer,
@@ -633,16 +646,17 @@ struct MeasurementARView: UIViewRepresentable {
                       let instanceObservation = InstanceMaskObservation(observation) else {
                     return nil
                 }
-                let centerInstances = instanceObservation.instanceAtPoint(
-                    NormalizedPoint(x: 0.5, y: 0.5)
+                let lowResolutionMask = try PhotoInstanceLabelMask(
+                    pixelBuffer: observation.instanceMask
                 )
-                guard !centerInstances.isEmpty else { return nil }
-                let imageRequestHandler = ImageRequestHandler(pixelBuffer)
+                let selected = try PhotoForegroundInstanceSelector().select(
+                    in: lowResolutionMask
+                )
                 let scaledMask = try instanceObservation.generateScaledMask(
-                    for: centerInstances,
-                    scaledToImageFrom: imageRequestHandler
+                    for: IndexSet(integer: Int(selected.label)),
+                    scaledToImageFrom: ImageRequestHandler(pixelBuffer)
                 )
-                return try ImageMask(pixelBuffer: scaledMask)
+                return try PhotoInstanceLabelMask(pixelBuffer: scaledMask)
             } catch {
                 return nil
             }

@@ -144,7 +144,7 @@ struct SingleShotObjectMeasurementTests {
                 depths[y * width + x] = 1.45
             }
         }
-        DepthGrid(
+        return DepthGrid(
             width: width,
             height: height,
             depths: depths,
