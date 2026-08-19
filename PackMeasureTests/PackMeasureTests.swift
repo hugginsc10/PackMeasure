@@ -37,7 +37,8 @@ struct PackMeasureTests {
                 widthMeters: 0.45,
                 heightMeters: 0.45,
                 quantity: 2,
-                confidence: .medium
+                confidence: .medium,
+                capturedAt: Date(timeIntervalSince1970: 1_787_099_900.123_456)
             )
         ]
 

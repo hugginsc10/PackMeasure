@@ -13,8 +13,26 @@ struct InventoryStore {
         self.fileManager = fileManager
         explicitStorageURL = storageURL
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        encoder.dateEncodingStrategy = .iso8601
-        decoder.dateDecodingStrategy = .iso8601
+        encoder.dateEncodingStrategy = .custom { date, encoder in
+            var container = encoder.singleValueContainer()
+            try container.encode(date.timeIntervalSince1970)
+        }
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let container = try decoder.singleValueContainer()
+            if let timestamp = try? container.decode(Double.self) {
+                return Date(timeIntervalSince1970: timestamp)
+            }
+
+            let string = try container.decode(String.self)
+            if let legacyDate = Self.decodeDate(string) {
+                return legacyDate
+            }
+
+            throw DecodingError.dataCorruptedError(
+                in: container,
+                debugDescription: "Invalid inventory date value: \(string)"
+            )
+        }
     }
 
     func load() throws -> [MeasuredItem] {
@@ -48,5 +66,17 @@ struct InventoryStore {
         return base
             .appendingPathComponent("PackMeasure", isDirectory: true)
             .appendingPathComponent("inventory.json")
+    }
+
+    private static func decodeDate(_ string: String) -> Date? {
+        let preciseFormatter = ISO8601DateFormatter()
+        preciseFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let preciseDate = preciseFormatter.date(from: string) {
+            return preciseDate
+        }
+
+        let legacyFormatter = ISO8601DateFormatter()
+        legacyFormatter.formatOptions = [.withInternetDateTime]
+        return legacyFormatter.date(from: string)
     }
 }
