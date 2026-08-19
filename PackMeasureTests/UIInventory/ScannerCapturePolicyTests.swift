@@ -100,6 +100,20 @@ struct ScannerCapturePolicyTests {
     }
 
     @Test @MainActor
+    func failedPhotoReturnsToLivePreviewWithoutStartingCapture() {
+        let state = ScannerSheetView.ScannerStateModel()
+        state.captureRequestID = 7
+        state.phase = .failed("No clear object")
+
+        state.prepareForAiming()
+
+        #expect(state.estimate == nil)
+        #expect(state.previewRequestID == 1)
+        #expect(state.captureRequestID == 7)
+        #expect(state.isPreparingForAiming)
+    }
+
+    @Test @MainActor
     func captureStartsOnlyAfterPreviewPublishesReady() {
         let state = ScannerSheetView.ScannerStateModel()
         state.captureRequestID = 7
