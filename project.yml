@@ -28,6 +28,20 @@ targets:
         optional: true
     info:
       path: PackMeasure/Info.plist
+      properties:
+        CFBundleDisplayName: PackMeasure
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSRequiresIPhoneOS: true
+        NSCameraUsageDescription: PackMeasure uses the camera and LiDAR depth sensor to measure boxes and objects.
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        UILaunchScreen: {}
+        UIRequiredDeviceCapabilities:
+          - arm64
+          - arkit
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.chashuggins.PackMeasure

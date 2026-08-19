@@ -10,6 +10,7 @@
 		6F4851E6263801CC3EE55EB6 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B55DECA1C7432025218A0B8B /* Assets.xcassets */; };
 		9ACAC0C2DE532E56CF9C8912 /* PackMeasureApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D518452488C8F3B0C8FACA8 /* PackMeasureApp.swift */; };
 		C65D41867508C7250DFFCF99 /* RootPlaceholderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9E081672C02985D42710156 /* RootPlaceholderView.swift */; };
+		CC0218C6FD04167826F2EDC3 /* DepthRegionSegmenterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C14B613C8CDA24C77CB2EDC9 /* DepthRegionSegmenterTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -29,9 +30,25 @@
 		720B306F033EEFA5D3D7BADE /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		B55DECA1C7432025218A0B8B /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		B9E081672C02985D42710156 /* RootPlaceholderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootPlaceholderView.swift; sourceTree = "<group>"; };
+		C14B613C8CDA24C77CB2EDC9 /* DepthRegionSegmenterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DepthRegionSegmenterTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
+		18C0BEC3C24FEDD1348E55B2 /* Core */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = Core;
+			sourceTree = "<group>";
+		};
+		357F00626456922FCFC8A164 /* Scan */ = {
+			isa = PBXGroup;
+			children = (
+				C14B613C8CDA24C77CB2EDC9 /* DepthRegionSegmenterTests.swift */,
+			);
+			path = Scan;
+			sourceTree = "<group>";
+		};
 		4C0F5AB9E5ADAB3912678C6F /* PackMeasure */ = {
 			isa = PBXGroup;
 			children = (
@@ -39,6 +56,7 @@
 				720B306F033EEFA5D3D7BADE /* Info.plist */,
 				4D518452488C8F3B0C8FACA8 /* PackMeasureApp.swift */,
 				B9E081672C02985D42710156 /* RootPlaceholderView.swift */,
+				18C0BEC3C24FEDD1348E55B2 /* Core */,
 			);
 			path = PackMeasure;
 			sourceTree = "<group>";
@@ -56,8 +74,17 @@
 			isa = PBXGroup;
 			children = (
 				4C0F5AB9E5ADAB3912678C6F /* PackMeasure */,
+				8A99611CA21A769C0B3410A5 /* PackMeasureTests */,
 				4FC4F5428EF6EA60EC07B112 /* Products */,
 			);
+			sourceTree = "<group>";
+		};
+		8A99611CA21A769C0B3410A5 /* PackMeasureTests */ = {
+			isa = PBXGroup;
+			children = (
+				357F00626456922FCFC8A164 /* Scan */,
+			);
+			path = PackMeasureTests;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -161,6 +188,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				CC0218C6FD04167826F2EDC3 /* DepthRegionSegmenterTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
