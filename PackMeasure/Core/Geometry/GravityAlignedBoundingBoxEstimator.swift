@@ -76,6 +76,9 @@ struct GravityAlignedBoundingBoxEstimator: Sendable {
               height >= configuration.minimumDimensionMeters else {
             throw BoundingBoxEstimationError.degeneratePointCloud
         }
+        guard !hasGroundPlaneContamination(in: projections) else {
+            throw BoundingBoxEstimationError.groundPlaneContamination
+        }
 
         let horizontalCenter = axes.point(
             first: projections.firstMidpoint,
@@ -208,6 +211,65 @@ struct GravityAlignedBoundingBoxEstimator: Sendable {
         let minimumMargin = configuration.voxelSizeMeters * 2
         let margin = max(minimumMargin, centralSpan * configuration.outlierFenceScale)
         return (lower - margin)...(upper + margin)
+    }
+
+    /// A connected floor skirt is coherent enough to survive ordinary outlier
+    /// trimming. Detect it by comparing the lowest horizontal slice with the
+    /// raised object body: a real box keeps roughly the same footprint, while
+    /// leaked ground points expand only the base.
+    private func hasGroundPlaneContamination(in projections: Projections) -> Bool {
+        guard let minimumY = projections.vertical.min(),
+              let maximumY = projections.vertical.max() else {
+            return false
+        }
+
+        let height = maximumY - minimumY
+        let baseThickness = min(0.04, max(0.015, height * 0.08))
+        let bodyStart = minimumY + max(0.025, height * 0.25)
+
+        var baseFirst: [Double] = []
+        var baseSecond: [Double] = []
+        var bodyFirst: [Double] = []
+        var bodySecond: [Double] = []
+
+        for index in projections.vertical.indices {
+            let y = projections.vertical[index]
+            if y <= minimumY + baseThickness {
+                baseFirst.append(projections.first[index])
+                baseSecond.append(projections.second[index])
+            }
+            if y >= bodyStart {
+                bodyFirst.append(projections.first[index])
+                bodySecond.append(projections.second[index])
+            }
+        }
+
+        let minimumSliceSupport = max(8, configuration.minimumPointCount)
+        guard baseFirst.count >= minimumSliceSupport,
+              bodyFirst.count >= minimumSliceSupport else {
+            return false
+        }
+
+        let baseLength = centralSpan(baseFirst)
+        let baseWidth = centralSpan(baseSecond)
+        let bodyLength = centralSpan(bodyFirst)
+        let bodyWidth = centralSpan(bodySecond)
+        guard bodyLength >= configuration.minimumDimensionMeters,
+              bodyWidth >= configuration.minimumDimensionMeters else {
+            return false
+        }
+
+        let baseArea = baseLength * baseWidth
+        let bodyArea = bodyLength * bodyWidth
+        return baseLength > bodyLength * 1.20
+            || baseWidth > bodyWidth * 1.20
+            || baseArea > bodyArea * 1.30
+    }
+
+    private func centralSpan(_ values: [Double]) -> Double {
+        let lower = quantile(values, at: configuration.trimmingFraction)
+        let upper = quantile(values, at: 1 - configuration.trimmingFraction)
+        return max(0, upper - lower)
     }
 
     private func minimumAreaYaw(points: [SIMD3<Float>], around pcaYaw: Double) -> Double {
