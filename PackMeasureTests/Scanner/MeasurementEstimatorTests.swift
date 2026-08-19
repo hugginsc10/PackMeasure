@@ -37,7 +37,7 @@ struct MeasurementEstimatorTests {
         let misleadingFloorRegion = boxSurfacePoints(
             length: 2.1,
             width: 1.6,
-            height: 0.12,
+            height: 0.8,
             yaw: .pi / 14
         )
         let unvalidated = try #require(

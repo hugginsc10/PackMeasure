@@ -41,6 +41,13 @@ struct MeasurementARView: UIViewRepresentable {
             var nextSampleAt: TimeInterval
             var worldPoints: [SIMD3<Float>] = []
             var frameCount = 0
+            var targetRejection: CenteredTargetRejection?
+        }
+
+        private enum DepthFrameSample {
+            case accepted([SIMD3<Float>])
+            case rejected(CenteredTargetRejection)
+            case unavailable
         }
 
         private static let captureDuration: TimeInterval = 1.0
@@ -57,6 +64,7 @@ struct MeasurementARView: UIViewRepresentable {
         private let segmenter = DepthRegionSegmenter(
             minimumConfidence: UInt8(ARConfidenceLevel.medium.rawValue)
         )
+        private let targetValidator = CenteredTargetValidator()
 
         // Accessed only on processingQueue.
         private var capture: CaptureAccumulator?
@@ -151,10 +159,16 @@ struct MeasurementARView: UIViewRepresentable {
                     Self.maximumPointsPerFrame,
                     Self.maximumAccumulatedPoints - activeCapture.worldPoints.count
                 )
-                let newPoints = sampleWorldPoints(from: frame, maximumCount: capacity)
-                if !newPoints.isEmpty {
+                switch sampleDepthFrame(from: frame, maximumCount: capacity) {
+                case .accepted(let newPoints):
                     activeCapture.worldPoints.append(contentsOf: newPoints)
                     activeCapture.frameCount += 1
+                case .rejected(.horizontalSurface):
+                    // One confidently horizontal center seed invalidates the
+                    // capture; floor points must never become a measurement.
+                    activeCapture.targetRejection = .horizontalSurface
+                case .rejected(.insufficientSurfaceEvidence), .unavailable:
+                    break
                 }
             }
 
@@ -195,12 +209,21 @@ struct MeasurementARView: UIViewRepresentable {
         }
 
         private func finalizeCapture(_ capture: CaptureAccumulator) {
+            let targetValidation = capture.targetRejection.map {
+                CenteredTargetValidation.rejected($0)
+            } ?? .valid
             guard let estimate = MeasurementEstimator.estimate(
                 from: capture.worldPoints,
-                frameCount: capture.frameCount
+                frameCount: capture.frameCount,
+                targetValidation: targetValidation
             ) else {
+                let message = if capture.targetRejection == .horizontalSurface {
+                    "Put the center reticle on the object's front or side, not the floor, then try again."
+                } else {
+                    "Scan was too weak. Back up slightly and retake with the item centered."
+                }
                 publishFailure(
-                    "Scan was too weak. Back up slightly and retake with the item centered.",
+                    message,
                     requestID: capture.requestID
                 )
                 return
@@ -209,42 +232,60 @@ struct MeasurementARView: UIViewRepresentable {
             publishEstimate(estimate, requestID: capture.requestID)
         }
 
-        private func sampleWorldPoints(
+        private func sampleDepthFrame(
             from frame: ARFrame,
             maximumCount: Int
-        ) -> [SIMD3<Float>] {
+        ) -> DepthFrameSample {
             guard maximumCount > 0,
                   let depthData = frame.smoothedSceneDepth ?? frame.sceneDepth,
                   let grid = depthGrid(from: depthData),
                   let region = segmenter.segment(grid),
                   region.pixelCount >= Self.minimumRegionPixelCount else {
-                return []
-            }
-
-            let coverage = Double(region.pixelCount) / Double(grid.depths.count)
-            guard coverage <= Self.maximumRegionCoverage else {
-                // A nearly full-frame region is usually a wall or floor rather
-                // than a centered object with visible separation around it.
-                return []
+                return .unavailable
             }
 
             let imageResolution = frame.camera.imageResolution
             let scaleX = imageResolution.width / CGFloat(grid.width)
             let scaleY = imageResolution.height / CGFloat(grid.height)
-            guard scaleX > 0, scaleY > 0 else { return [] }
+            guard scaleX > 0, scaleY > 0 else { return .unavailable }
 
             var intrinsics = frame.camera.intrinsics
             intrinsics[0][0] /= Float(scaleX)
             intrinsics[1][1] /= Float(scaleY)
             intrinsics[2][0] /= Float(scaleX)
             intrinsics[2][1] /= Float(scaleY)
-            guard intrinsics[0][0] > 0, intrinsics[1][1] > 0 else { return [] }
+            guard intrinsics[0][0] > 0, intrinsics[1][1] > 0 else {
+                return .unavailable
+            }
+
+            let cameraTransform = frame.camera.transform
+            guard let targetSample = centeredTargetSurfaceSample(
+                region: region,
+                grid: grid,
+                intrinsics: intrinsics,
+                cameraTransform: cameraTransform
+            ) else {
+                return .rejected(.insufficientSurfaceEvidence)
+            }
+            let targetValidation = targetValidator.validate(targetSample)
+            guard targetValidation == .valid else {
+                if case .rejected(let reason) = targetValidation {
+                    return .rejected(reason)
+                }
+                return .unavailable
+            }
+
+            let coverage = Double(region.pixelCount) / Double(grid.depths.count)
+            guard coverage <= Self.maximumRegionCoverage else {
+                // A nearly full-frame vertical region is usually a wall rather
+                // than a centered object with visible separation around it.
+                return .rejected(.insufficientSurfaceEvidence)
+            }
 
             let samplingStride = max(
                 1,
                 Int(ceil(sqrt(Double(region.pixelCount) / Double(maximumCount))))
             )
-            let cameraTransform = frame.camera.transform
             var points: [SIMD3<Float>] = []
             points.reserveCapacity(min(maximumCount, region.pixelCount))
 
@@ -258,19 +299,12 @@ struct MeasurementARView: UIViewRepresentable {
                     continue
                 }
 
-                let localPoint = unproject(
-                    pixel: SIMD2<Float>(Float(x), Float(y)),
-                    depth: grid.depths[index],
-                    intrinsics: intrinsics
-                )
-                let world = cameraTransform * SIMD4<Float>(
-                    localPoint.x,
-                    localPoint.y,
-                    localPoint.z,
-                    1
-                )
-                let point = SIMD3<Float>(world.x, world.y, world.z)
-                guard point.x.isFinite, point.y.isFinite, point.z.isFinite else {
+                guard let point = worldPoint(
+                    at: index,
+                    grid: grid,
+                    intrinsics: intrinsics,
+                    cameraTransform: cameraTransform
+                ) else {
                     continue
                 }
 
@@ -278,7 +312,124 @@ struct MeasurementARView: UIViewRepresentable {
                 if points.count == maximumCount { break }
             }
 
-            return points
+            return points.isEmpty ? .unavailable : .accepted(points)
+        }
+
+        private func centeredTargetSurfaceSample(
+            region: DepthRegion,
+            grid: DepthGrid,
+            intrinsics: simd_float3x3,
+            cameraTransform: simd_float4x4
+        ) -> CenteredTargetSurfaceSample? {
+            let centerX = grid.width / 2
+            let centerY = grid.height / 2
+            guard let seedIndex = region.indices.min(by: { lhs, rhs in
+                let lhsX = lhs % grid.width
+                let lhsY = lhs / grid.width
+                let rhsX = rhs % grid.width
+                let rhsY = rhs / grid.width
+                let lhsDistance = (lhsX - centerX) * (lhsX - centerX)
+                    + (lhsY - centerY) * (lhsY - centerY)
+                let rhsDistance = (rhsX - centerX) * (rhsX - centerX)
+                    + (rhsY - centerY) * (rhsY - centerY)
+                return lhsDistance < rhsDistance
+            }) else {
+                return nil
+            }
+
+            let seedX = seedIndex % grid.width
+            let seedY = seedIndex / grid.width
+            let accepted = Set(region.indices)
+
+            // Prefer a wider local baseline for a stable normal, then fall
+            // back toward the seed if the object face is small.
+            for radius in [3, 2, 4, 1, 5] {
+                let leftX = seedX - radius
+                let rightX = seedX + radius
+                let upY = seedY - radius
+                let downY = seedY + radius
+                guard leftX >= 0, rightX < grid.width,
+                      upY >= 0, downY < grid.height else {
+                    continue
+                }
+
+                let leftIndex = seedY * grid.width + leftX
+                let rightIndex = seedY * grid.width + rightX
+                let upIndex = upY * grid.width + seedX
+                let downIndex = downY * grid.width + seedX
+                guard accepted.contains(leftIndex),
+                      accepted.contains(rightIndex),
+                      accepted.contains(upIndex),
+                      accepted.contains(downIndex),
+                      let center = worldPoint(
+                          at: seedIndex,
+                          grid: grid,
+                          intrinsics: intrinsics,
+                          cameraTransform: cameraTransform
+                      ),
+                      let left = worldPoint(
+                          at: leftIndex,
+                          grid: grid,
+                          intrinsics: intrinsics,
+                          cameraTransform: cameraTransform
+                      ),
+                      let right = worldPoint(
+                          at: rightIndex,
+                          grid: grid,
+                          intrinsics: intrinsics,
+                          cameraTransform: cameraTransform
+                      ),
+                      let up = worldPoint(
+                          at: upIndex,
+                          grid: grid,
+                          intrinsics: intrinsics,
+                          cameraTransform: cameraTransform
+                      ),
+                      let down = worldPoint(
+                          at: downIndex,
+                          grid: grid,
+                          intrinsics: intrinsics,
+                          cameraTransform: cameraTransform
+                      ) else {
+                    continue
+                }
+
+                return CenteredTargetSurfaceSample(
+                    center: center,
+                    left: left,
+                    right: right,
+                    up: up,
+                    down: down
+                )
+            }
+
+            return nil
+        }
+
+        private func worldPoint(
+            at index: Int,
+            grid: DepthGrid,
+            intrinsics: simd_float3x3,
+            cameraTransform: simd_float4x4
+        ) -> SIMD3<Float>? {
+            let x = index % grid.width
+            let y = index / grid.width
+            let localPoint = unproject(
+                pixel: SIMD2<Float>(Float(x), Float(y)),
+                depth: grid.depths[index],
+                intrinsics: intrinsics
+            )
+            let world = cameraTransform * SIMD4<Float>(
+                localPoint.x,
+                localPoint.y,
+                localPoint.z,
+                1
+            )
+            let point = SIMD3<Float>(world.x, world.y, world.z)
+            guard point.x.isFinite, point.y.isFinite, point.z.isFinite else {
+                return nil
+            }
+            return point
         }
 
         /// Copies row-strided Core Video storage while the buffers are locked,
