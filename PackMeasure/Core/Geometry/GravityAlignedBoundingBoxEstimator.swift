@@ -63,13 +63,16 @@ struct GravityAlignedBoundingBoxEstimator: Sendable {
         let refinedYaw = minimumAreaYaw(points: inlierPoints, around: initialPCA.yaw)
         var axes = HorizontalAxes(yaw: refinedYaw)
         var projections = project(inlierPoints, onto: axes)
-        var extentAlongLengthAxis = projections.firstSpan
-        var extentAlongWidthAxis = projections.secondSpan
+        var horizontalBounds = measurementBounds(in: projections)
+        var extentAlongLengthAxis = horizontalBounds.first.span
+        var extentAlongWidthAxis = horizontalBounds.second.span
 
         if extentAlongWidthAxis > extentAlongLengthAxis {
             axes = HorizontalAxes(yaw: refinedYaw + .pi / 2)
             projections = project(inlierPoints, onto: axes)
-            swap(&extentAlongLengthAxis, &extentAlongWidthAxis)
+            horizontalBounds = measurementBounds(in: projections)
+            extentAlongLengthAxis = horizontalBounds.first.span
+            extentAlongWidthAxis = horizontalBounds.second.span
         }
 
         var height = projections.verticalSpan
@@ -91,6 +94,7 @@ struct GravityAlignedBoundingBoxEstimator: Sendable {
             measurementPoints = recovery.points
             axes = recovery.axes
             projections = recovery.projections
+            horizontalBounds = recovery.horizontalBounds
             extentAlongLengthAxis = recovery.length
             extentAlongWidthAxis = recovery.width
             height = recovery.height
@@ -98,8 +102,8 @@ struct GravityAlignedBoundingBoxEstimator: Sendable {
         }
 
         let horizontalCenter = axes.point(
-            first: projections.firstMidpoint,
-            second: projections.secondMidpoint
+            first: horizontalBounds.first.midpoint,
+            second: horizontalBounds.second.midpoint
         )
         let center = SIMD3<Float>(
             Float(horizontalCenter.x),
@@ -326,6 +330,68 @@ struct GravityAlignedBoundingBoxEstimator: Sendable {
         return Double(min(lowerSupport, upperSupport)) / Double(strongerSupport)
     }
 
+    private func measurementBounds(in projections: Projections) -> HorizontalBounds {
+        HorizontalBounds(
+            first: supportBackedHorizontalBounds(
+                projections.first,
+                vertical: projections.vertical
+            ),
+            second: supportBackedHorizontalBounds(
+                projections.second,
+                vertical: projections.vertical
+            )
+        )
+    }
+
+    private func supportBackedHorizontalBounds(
+        _ values: [Double],
+        vertical: [Double]
+    ) -> AxisBounds {
+        let raw = AxisBounds(values: values)
+        guard values.count >= 200,
+              values.count == vertical.count else {
+            return raw
+        }
+
+        let lower = quantile(values, at: 0.03)
+        let upper = quantile(values, at: 0.97)
+        let centralSpan = max(0, upper - lower)
+        let totalInflation = raw.span - centralSpan
+        let lowerInflation = lower - raw.lower
+        let upperInflation = raw.upper - upper
+
+        // A real handle is normally one-sided, while a silhouette fringe wraps
+        // both ends of an axis. Preserve asymmetric tails rather than silently
+        // shortening an irregular object.
+        guard totalInflation >= 0.0254,
+              lowerInflation >= 0.00635,
+              upperInflation >= 0.00635 else {
+            return raw
+        }
+
+        let safetyMargin = configuration.voxelSizeMeters * 2
+        let tailVertical = values.indices.compactMap { index -> Double? in
+            guard values[index] < lower - safetyMargin
+                    || values[index] > upper + safetyMargin else {
+                return nil
+            }
+            return vertical[index]
+        }
+        let tailVerticalSpan = AxisBounds(values: tailVertical).span
+        let objectVerticalSpan = AxisBounds(values: vertical).span
+
+        // Long vertical tails can be furniture legs or rails. Only a thin
+        // silhouette band is safe to treat as LiDAR edge halo.
+        guard tailVerticalSpan <= max(0.04, objectVerticalSpan * 0.25) else {
+            return raw
+        }
+
+        return AxisBounds(
+            lower: max(raw.lower, lower - safetyMargin),
+            upper: min(raw.upper, upper + safetyMargin)
+        )
+    }
+
     private func recoverGroundContaminatedObject(
         from points: [SIMD3<Float>],
         contaminatedProjections: Projections
@@ -403,12 +469,15 @@ struct GravityAlignedBoundingBoxEstimator: Sendable {
         let refinedYaw = minimumAreaYaw(points: filteredPoints, around: pca.yaw)
         var axes = HorizontalAxes(yaw: refinedYaw)
         var projections = project(filteredPoints, onto: axes)
-        var length = projections.firstSpan
-        var width = projections.secondSpan
+        var horizontalBounds = measurementBounds(in: projections)
+        var length = horizontalBounds.first.span
+        var width = horizontalBounds.second.span
         if width > length {
             axes = HorizontalAxes(yaw: refinedYaw + .pi / 2)
             projections = project(filteredPoints, onto: axes)
-            swap(&length, &width)
+            horizontalBounds = measurementBounds(in: projections)
+            length = horizontalBounds.first.span
+            width = horizontalBounds.second.span
         }
 
         let height = projections.verticalSpan
@@ -423,6 +492,7 @@ struct GravityAlignedBoundingBoxEstimator: Sendable {
             pca: pca,
             axes: axes,
             projections: projections,
+            horizontalBounds: horizontalBounds,
             length: length,
             width: width,
             height: height
@@ -651,9 +721,33 @@ private struct FittedPointCloud {
     let pca: HorizontalPCA
     let axes: HorizontalAxes
     let projections: Projections
+    let horizontalBounds: HorizontalBounds
     let length: Double
     let width: Double
     let height: Double
+}
+
+private struct HorizontalBounds {
+    let first: AxisBounds
+    let second: AxisBounds
+}
+
+private struct AxisBounds {
+    let lower: Double
+    let upper: Double
+
+    init(lower: Double, upper: Double) {
+        self.lower = lower
+        self.upper = upper
+    }
+
+    init(values: [Double]) {
+        lower = values.min() ?? 0
+        upper = values.max() ?? 0
+    }
+
+    var span: Double { max(0, upper - lower) }
+    var midpoint: Double { (lower + upper) / 2 }
 }
 
 private struct HorizontalPoint {
