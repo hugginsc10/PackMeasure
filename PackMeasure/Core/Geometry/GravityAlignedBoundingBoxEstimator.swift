@@ -43,8 +43,8 @@ struct GravityAlignedBoundingBoxEstimator: Sendable {
             )
         }
 
-        let pca = try horizontalPCA(of: uniquePoints)
-        let initialAxes = HorizontalAxes(yaw: pca.yaw)
+        let initialPCA = try horizontalPCA(of: uniquePoints)
+        let initialAxes = HorizontalAxes(yaw: initialPCA.yaw)
         let initialProjections = project(uniquePoints, onto: initialAxes)
         let inlierPoints = robustInliers(
             points: uniquePoints,
@@ -58,7 +58,9 @@ struct GravityAlignedBoundingBoxEstimator: Sendable {
             )
         }
 
-        let refinedYaw = minimumAreaYaw(points: inlierPoints, around: pca.yaw)
+        var measurementPCA = initialPCA
+        var measurementPoints = inlierPoints
+        let refinedYaw = minimumAreaYaw(points: inlierPoints, around: initialPCA.yaw)
         var axes = HorizontalAxes(yaw: refinedYaw)
         var projections = project(inlierPoints, onto: axes)
         var extentAlongLengthAxis = projections.firstSpan
@@ -70,14 +72,29 @@ struct GravityAlignedBoundingBoxEstimator: Sendable {
             swap(&extentAlongLengthAxis, &extentAlongWidthAxis)
         }
 
-        let height = projections.verticalSpan
+        var height = projections.verticalSpan
         guard extentAlongLengthAxis >= configuration.minimumDimensionMeters,
               extentAlongWidthAxis >= configuration.minimumDimensionMeters,
               height >= configuration.minimumDimensionMeters else {
             throw BoundingBoxEstimationError.degeneratePointCloud
         }
-        guard !hasGroundPlaneContamination(in: projections) else {
-            throw BoundingBoxEstimationError.groundPlaneContamination
+
+        var recoveredGroundPlane = false
+        if hasGroundPlaneContamination(in: projections) {
+            guard let recovery = recoverGroundContaminatedObject(
+                from: inlierPoints,
+                contaminatedProjections: projections
+            ) else {
+                throw BoundingBoxEstimationError.groundPlaneContamination
+            }
+            measurementPCA = recovery.pca
+            measurementPoints = recovery.points
+            axes = recovery.axes
+            projections = recovery.projections
+            extentAlongLengthAxis = recovery.length
+            extentAlongWidthAxis = recovery.width
+            height = recovery.height
+            recoveredGroundPlane = true
         }
 
         let horizontalCenter = axes.point(
@@ -95,12 +112,13 @@ struct GravityAlignedBoundingBoxEstimator: Sendable {
             widthMeters: extentAlongWidthAxis,
             heightMeters: height
         )
-        let inlierRatio = Double(inlierPoints.count) / Double(uniquePoints.count)
+        let inlierRatio = Double(measurementPoints.count) / Double(uniquePoints.count)
         let confidence = confidence(
-            pointCount: inlierPoints.count,
+            pointCount: measurementPoints.count,
             inlierRatio: inlierRatio,
-            horizontalStability: pca.horizontalStability,
-            dimensions: dimensions
+            horizontalStability: measurementPCA.horizontalStability,
+            dimensions: dimensions,
+            maximumScore: recoveredGroundPlane ? 0.79 : 1
         )
 
         return GravityAlignedBoundingBoxEstimate(
@@ -112,10 +130,10 @@ struct GravityAlignedBoundingBoxEstimator: Sendable {
                 inputPointCount: points.count,
                 finitePointCount: finitePoints.count,
                 uniquePointCount: uniquePoints.count,
-                inlierPointCount: inlierPoints.count,
+                inlierPointCount: measurementPoints.count,
                 filteredNonFinitePointCount: points.count - finitePoints.count,
                 deduplicatedPointCount: finitePoints.count - uniquePoints.count,
-                rejectedOutlierCount: uniquePoints.count - inlierPoints.count
+                rejectedOutlierCount: uniquePoints.count - measurementPoints.count
             )
         )
     }
@@ -272,6 +290,178 @@ struct GravityAlignedBoundingBoxEstimator: Sendable {
         return max(0, upper - lower)
     }
 
+    private func recoverGroundContaminatedObject(
+        from points: [SIMD3<Float>],
+        contaminatedProjections: Projections
+    ) -> FittedPointCloud? {
+        guard let minimumY = contaminatedProjections.vertical.min(),
+              let maximumY = contaminatedProjections.vertical.max() else {
+            return nil
+        }
+
+        let contaminatedHeight = maximumY - minimumY
+        let bodyStart = minimumY + max(0.025, contaminatedHeight * 0.25)
+        let raisedPoints = points.filter { Double($0.y) >= bodyStart }
+        let components = connectedComponents(
+            raisedPoints,
+            maximumDistance: 0.12
+        )
+        let minimumComponentSupport = max(24, configuration.minimumPointCount * 3)
+        let minimumVerticalSupport = max(0.04, contaminatedHeight * 0.20)
+        let minimumHorizontalSupport = max(0.04, configuration.minimumDimensionMeters * 4)
+
+        let candidates = components.compactMap { component -> FittedPointCloud? in
+            guard component.count >= minimumComponentSupport,
+                  let fit = try? fitPointCloud(component),
+                  fit.height >= minimumVerticalSupport,
+                  fit.width >= minimumHorizontalSupport else {
+                return nil
+            }
+            return fit
+        }
+
+        // Picking between multiple box-like raised components would silently
+        // measure an arbitrary object. Recovery is intentionally conservative.
+        guard candidates.count == 1, let body = candidates.first,
+              let firstMinimum = body.projections.first.min(),
+              let firstMaximum = body.projections.first.max(),
+              let secondMinimum = body.projections.second.min(),
+              let secondMaximum = body.projections.second.max() else {
+            return nil
+        }
+
+        let margin = max(
+            configuration.voxelSizeMeters * 2,
+            min(body.length, body.width) * 0.02
+        )
+        let projected = project(points, onto: body.axes)
+        let recoveredPoints = points.indices.compactMap { index -> SIMD3<Float>? in
+            guard projected.first[index] >= firstMinimum - margin,
+                  projected.first[index] <= firstMaximum + margin,
+                  projected.second[index] >= secondMinimum - margin,
+                  projected.second[index] <= secondMaximum + margin else {
+                return nil
+            }
+            return points[index]
+        }
+
+        guard recoveredPoints.count >= minimumComponentSupport,
+              let recovered = try? fitPointCloud(recoveredPoints),
+              !hasGroundPlaneContamination(in: recovered.projections) else {
+            return nil
+        }
+        return recovered
+    }
+
+    private func fitPointCloud(_ points: [SIMD3<Float>]) throws -> FittedPointCloud {
+        let pca = try horizontalPCA(of: points)
+        let initialProjections = project(points, onto: HorizontalAxes(yaw: pca.yaw))
+        let filteredPoints = robustInliers(points: points, projections: initialProjections)
+        guard filteredPoints.count >= configuration.minimumPointCount else {
+            throw BoundingBoxEstimationError.insufficientUniquePoints(
+                actual: filteredPoints.count,
+                minimum: configuration.minimumPointCount
+            )
+        }
+
+        let refinedYaw = minimumAreaYaw(points: filteredPoints, around: pca.yaw)
+        var axes = HorizontalAxes(yaw: refinedYaw)
+        var projections = project(filteredPoints, onto: axes)
+        var length = projections.firstSpan
+        var width = projections.secondSpan
+        if width > length {
+            axes = HorizontalAxes(yaw: refinedYaw + .pi / 2)
+            projections = project(filteredPoints, onto: axes)
+            swap(&length, &width)
+        }
+
+        let height = projections.verticalSpan
+        guard length >= configuration.minimumDimensionMeters,
+              width >= configuration.minimumDimensionMeters,
+              height >= configuration.minimumDimensionMeters else {
+            throw BoundingBoxEstimationError.degeneratePointCloud
+        }
+
+        return FittedPointCloud(
+            points: filteredPoints,
+            pca: pca,
+            axes: axes,
+            projections: projections,
+            length: length,
+            width: width,
+            height: height
+        )
+    }
+
+    private func connectedComponents(
+        _ points: [SIMD3<Float>],
+        maximumDistance: Double
+    ) -> [[SIMD3<Float>]] {
+        guard !points.isEmpty else { return [] }
+
+        var buckets: [VoxelKey: [Int]] = [:]
+        buckets.reserveCapacity(points.count)
+        var keys: [VoxelKey] = []
+        keys.reserveCapacity(points.count)
+
+        for (index, point) in points.enumerated() {
+            let key = VoxelKey(
+                x: Int64(floor(Double(point.x) / maximumDistance)),
+                y: Int64(floor(Double(point.y) / maximumDistance)),
+                z: Int64(floor(Double(point.z) / maximumDistance))
+            )
+            keys.append(key)
+            buckets[key, default: []].append(index)
+        }
+
+        let maximumDistanceSquared = maximumDistance * maximumDistance
+        var visited = Array(repeating: false, count: points.count)
+        var components: [[SIMD3<Float>]] = []
+
+        for seed in points.indices where !visited[seed] {
+            visited[seed] = true
+            var queue = [seed]
+            var readIndex = 0
+            var component: [SIMD3<Float>] = []
+
+            while readIndex < queue.count {
+                let currentIndex = queue[readIndex]
+                readIndex += 1
+                let current = points[currentIndex]
+                component.append(current)
+                let key = keys[currentIndex]
+
+                for xOffset in -1...1 {
+                    for yOffset in -1...1 {
+                        for zOffset in -1...1 {
+                            let neighborKey = VoxelKey(
+                                x: key.x + Int64(xOffset),
+                                y: key.y + Int64(yOffset),
+                                z: key.z + Int64(zOffset)
+                            )
+                            for candidateIndex in buckets[neighborKey, default: []]
+                            where !visited[candidateIndex] {
+                                let candidate = points[candidateIndex]
+                                let deltaX = Double(candidate.x - current.x)
+                                let deltaY = Double(candidate.y - current.y)
+                                let deltaZ = Double(candidate.z - current.z)
+                                let distanceSquared = deltaX * deltaX
+                                    + deltaY * deltaY
+                                    + deltaZ * deltaZ
+                                if distanceSquared <= maximumDistanceSquared {
+                                    visited[candidateIndex] = true
+                                    queue.append(candidateIndex)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            components.append(component)
+        }
+        return components
+    }
+
     private func minimumAreaYaw(points: [SIMD3<Float>], around pcaYaw: Double) -> Double {
         let halfRange = Double.pi / 4
         let step = configuration.orientationSearchStepRadians
@@ -335,7 +525,8 @@ struct GravityAlignedBoundingBoxEstimator: Sendable {
         pointCount: Int,
         inlierRatio: Double,
         horizontalStability: Double,
-        dimensions: GeometryDimensions
+        dimensions: GeometryDimensions,
+        maximumScore: Double = 1
     ) -> GeometryMeasurementConfidence {
         let sampleSupport = min(1, Double(pointCount) / 500)
         let dimensionSupport = min(
@@ -354,7 +545,7 @@ struct GravityAlignedBoundingBoxEstimator: Sendable {
         if horizontalStability < 0.10 {
             score = min(score, 0.69)
         }
-        score = min(1, max(0, score))
+        score = min(maximumScore, max(0, score))
 
         let level: GeometryConfidenceLevel
         switch score {
@@ -417,6 +608,16 @@ struct GravityAlignedBoundingBoxEstimator: Sendable {
 private struct HorizontalPCA {
     let yaw: Double
     let horizontalStability: Double
+}
+
+private struct FittedPointCloud {
+    let points: [SIMD3<Float>]
+    let pca: HorizontalPCA
+    let axes: HorizontalAxes
+    let projections: Projections
+    let length: Double
+    let width: Double
+    let height: Double
 }
 
 private struct HorizontalPoint {
