@@ -40,6 +40,16 @@ struct MeasurementEstimatorTests {
         )
     }
 
+    @Test @MainActor
+    func coordinatorIsBoundBeforeSessionConfiguration() {
+        let state = ScannerSheetView.ScannerStateModel()
+        let view = MeasurementARView(scannerState: state)
+
+        let coordinator = view.makeCoordinator()
+
+        #expect(coordinator.scannerState === state)
+    }
+
     @Test
     func acceptsCenterSeedOnVerticalObjectFace() {
         let sample = CenteredTargetSurfaceSample(
