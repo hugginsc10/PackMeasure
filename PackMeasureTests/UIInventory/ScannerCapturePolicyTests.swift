@@ -32,32 +32,42 @@ struct ScannerCapturePolicyTests {
     }
 
     @Test
-    func guidanceExplainsSinglePhotoCapture() {
+    func cameraGuidanceIsShortAndUsesEverydayLanguage() {
         #expect(
             ScannerGuidanceCopy.previewTarget
-                == "Keep one whole item inside the frame with a little space around it"
+                == "Fit one object inside the frame"
         )
         #expect(
             ScannerGuidanceCopy.setup
-                == "Point the camera at one object so the whole item is visible with a little floor or background around its edges. Tap Take measurement to capture one frame and estimate its overall size."
+                == "Keep the whole object visible, then take a photo."
         )
+
+        let primaryCopy = [
+            ScannerGuidanceCopy.previewTarget,
+            ScannerGuidanceCopy.setup,
+            ScannerActionCopy.startMeasurement,
+        ].joined(separator: " ")
+
+        for technicalTerm in ["target", "dot", "face", "point-cloud", "LiDAR"] {
+            #expect(!primaryCopy.localizedCaseInsensitiveContains(technicalTerm))
+        }
     }
 
     @Test
     func genericRetryCopyDescribesResultWithoutBlamingUser() {
         #expect(
             ScannerGuidanceCopy.lowConfidenceRetry
-                == "This photo produced a weak depth sample. Retake it with one whole object in frame and clearer separation from the room."
+                == "We couldn't get clear dimensions from this photo. Keep one object fully visible and try again."
         )
         #expect(
             ScannerGuidanceCopy.missingEstimateRetry
-                == "No usable object measurement was produced from this photo. Retake it with one whole object in frame."
+                == "We couldn't measure this photo. Keep one object fully visible and try again."
         )
     }
 
     @Test
     func measuredDimensionsAreExplicitlyLabeledAsAnEstimate() {
-        #expect(ScannerResultCopy.sizeSectionTitle == "Estimated size")
+        #expect(ScannerResultCopy.sizeSectionTitle == "Estimated dimensions")
     }
 
     @Test
@@ -66,9 +76,11 @@ struct ScannerCapturePolicyTests {
             for: estimate(confidence: .high)
         )
 
-        #expect(summary == "High point-cloud quality • 800 points")
+        #expect(summary == "High scan quality")
         #expect(!summary.localizedCaseInsensitiveContains("confidence"))
         #expect(!summary.localizedCaseInsensitiveContains("accuracy"))
+        #expect(!summary.localizedCaseInsensitiveContains("point-cloud"))
+        #expect(!summary.localizedCaseInsensitiveContains("points"))
     }
 
     @Test @MainActor
@@ -122,9 +134,10 @@ struct ScannerCapturePolicyTests {
 
     @Test
     func retakeFlowUsesDistinctAimAndCaptureActions() {
-        #expect(ScannerActionCopy.measureAgain == "Measure again")
-        #expect(ScannerActionCopy.preparingPreview == "Returning to camera…")
-        #expect(ScannerActionCopy.startMeasurement == "Take measurement")
+        #expect(ScannerActionCopy.measureAgain == "Retake photo")
+        #expect(ScannerActionCopy.retryPhoto == "Retake photo")
+        #expect(ScannerActionCopy.preparingPreview == "Opening camera…")
+        #expect(ScannerActionCopy.startMeasurement == "Take photo")
     }
 
     @Test
@@ -136,7 +149,7 @@ struct ScannerCapturePolicyTests {
             !ScannerActionPolicy.canStartMeasurement(phase: .scanning(progress: 0))
         )
         #expect(ScannerActionPolicy.canStartMeasurement(phase: .ready))
-        #expect(ScannerActionCopy.checkingSupport == "Checking LiDAR support…")
+        #expect(ScannerActionCopy.checkingSupport == "Starting camera…")
     }
 
     @Test
