@@ -396,6 +396,64 @@ struct MeasurementEstimatorTests {
     }
 
     @Test
+    func fullyFramedTwentyInchSideRemainsMeasurable() throws {
+        let inchInMeters: Float = 0.0254
+        let points = boxSurfacePoints(
+            length: 24 * inchInMeters,
+            width: 20 * inchInMeters,
+            height: 20 * inchInMeters,
+            yaw: .pi / 6
+        )
+
+        let outcome = PersistentEdgeContaminationPolicy().outcome(
+            retainedEdgeFrameCount: 0,
+            requiredSupportingFrameCount: 3,
+            otherwise: MeasurementEstimator.outcome(
+                from: points,
+                frameCount: 9
+            )
+        )
+
+        guard case .success(let estimate) = outcome else {
+            Issue.record("A fully framed 20-inch side should remain measurable")
+            return
+        }
+        #expect(estimate.widthMeters >= Double(19 * inchInMeters))
+        #expect(estimate.heightMeters >= Double(19 * inchInMeters))
+    }
+
+    @Test
+    func persistentEdgeSupportRejectsBeforeGeometry() {
+        for retainedEdgeFrameCount in [3, 4, 7] {
+            let outcome = PersistentEdgeContaminationPolicy().outcome(
+                retainedEdgeFrameCount: retainedEdgeFrameCount,
+                requiredSupportingFrameCount: 3,
+                otherwise: MeasurementEstimator.outcome(
+                    from: [],
+                    frameCount: 0
+                )
+            )
+
+            #expect(outcome == .failure(.geometry(.sceneContamination)))
+        }
+    }
+
+    @Test
+    func sporadicEdgeContactBelowSupportDoesNotReject() {
+        let estimatorOutcome = MeasurementEstimationOutcome.failure(
+            .insufficientFrames(actual: 2, minimum: 3)
+        )
+
+        let outcome = PersistentEdgeContaminationPolicy().outcome(
+            retainedEdgeFrameCount: 2,
+            requiredSupportingFrameCount: 3,
+            otherwise: estimatorOutcome
+        )
+
+        #expect(outcome == estimatorOutcome)
+    }
+
+    @Test
     func measurementOutcomePreservesTargetRejectionReason() {
         let points = boxSurfacePoints(
             length: 0.8,
