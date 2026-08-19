@@ -53,6 +53,21 @@ struct ScannerViewRequestTracker: Equatable, Sendable {
     }
 }
 
+enum ScannerMeasurementFailureCopy {
+    static func message(for failure: MeasurementEstimationFailure) -> String {
+        switch failure {
+        case .targetRejected(.floorSurface):
+            "The center reticle appears to be on the floor. Center it on the object and try again."
+        case .targetRejected(.insufficientSurfaceEvidence), .insufficientFrames:
+            "Scan was too weak. Back up slightly and retake with the item centered."
+        case .geometry(.groundPlaneContamination), .geometry(.sceneContamination):
+            "Too much floor or background entered the scan. Keep the whole object centered with space around its edges."
+        case .geometry:
+            "Scan was too weak. Back up slightly and retake with the item centered."
+        }
+    }
+}
+
 struct MeasurementARView: UIViewRepresentable {
     @Bindable var scannerState: ScannerSheetView.ScannerStateModel
 
@@ -410,19 +425,8 @@ struct MeasurementARView: UIViewRepresentable {
                     result: .failure(failure)
                 )
                 resumePreviewAfterFailedCapture(requestID: capture.requestID)
-                let message: String
-                switch failure {
-                case .targetRejected(.floorSurface):
-                    message = "The center reticle appears to be on the floor. Center it on the object and try again."
-                case .targetRejected(.insufficientSurfaceEvidence), .insufficientFrames:
-                    message = "Scan was too weak. Back up slightly and retake with the item centered."
-                case .geometry(.groundPlaneContamination):
-                    message = "Too much floor or background entered the scan. Keep the whole object centered with space around its edges."
-                case .geometry:
-                    message = "Scan was too weak. Back up slightly and retake with the item centered."
-                }
                 publishFailure(
-                    message,
+                    ScannerMeasurementFailureCopy.message(for: failure),
                     requestID: capture.requestID
                 )
                 return

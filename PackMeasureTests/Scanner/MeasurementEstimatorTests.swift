@@ -455,6 +455,33 @@ struct MeasurementEstimatorTests {
     }
 
     @Test
+    func measurementFailureCopyCoversFloorAndWeakRetryPaths() {
+        let weakMessage = "Scan was too weak. Back up slightly and retake with the item centered."
+
+        #expect(
+            ScannerMeasurementFailureCopy.message(
+                for: .targetRejected(.floorSurface)
+            )
+                == "The center reticle appears to be on the floor. Center it on the object and try again."
+        )
+        #expect(
+            ScannerMeasurementFailureCopy.message(
+                for: .targetRejected(.insufficientSurfaceEvidence)
+            ) == weakMessage
+        )
+        #expect(
+            ScannerMeasurementFailureCopy.message(
+                for: .insufficientFrames(actual: 2, minimum: 3)
+            ) == weakMessage
+        )
+        #expect(
+            ScannerMeasurementFailureCopy.message(
+                for: .geometry(.degeneratePointCloud)
+            ) == weakMessage
+        )
+    }
+
+    @Test
     func invalidFloorTargetCannotReturnHighConfidenceMeasurement() throws {
         let misleadingFloorRegion = boxSurfacePoints(
             length: 2.1,
