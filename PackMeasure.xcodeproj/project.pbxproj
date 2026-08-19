@@ -7,10 +7,29 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		09B7FEF948AAD6D288F89342 /* MeasurementEstimatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BEC26224D7E1CD00B41CDF5 /* MeasurementEstimatorTests.swift */; };
+		30BBD6FD335F3F0136F0B5BE /* GravityAlignedBoundingBoxEstimatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01DA76636D28E2A195DBE9FC /* GravityAlignedBoundingBoxEstimatorTests.swift */; };
+		36DBA15AB0F050325DAEABCF /* DepthRegionSegmenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFE446F73A1491E55F2738CE /* DepthRegionSegmenter.swift */; };
+		3D0B36D28510CAD37D056EE5 /* PackMeasureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A95C05B5C8AAFBFBE93F5F88 /* PackMeasureTests.swift */; };
+		505B39CB31D0CC5449424178 /* ScannerSheetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84DFB60E2C6A4BA85E8C1AA0 /* ScannerSheetView.swift */; };
+		5108F38EA742072EDA5538BB /* MeasurementMath.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A6E5BC93C71F94AB333A1BF /* MeasurementMath.swift */; };
+		53E91AADA18D60E722530171 /* PackingPlanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACE91F472F72AC07FEC8432F /* PackingPlanner.swift */; };
+		5E9AA3639748D36667D1C43C /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CF21F67461D439CFC0A0C93 /* AppModel.swift */; };
+		63ED8F2D2AA20E138544E34C /* AppModelInventoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1B053787D5054BAAEE243C1 /* AppModelInventoryTests.swift */; };
 		6F4851E6263801CC3EE55EB6 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B55DECA1C7432025218A0B8B /* Assets.xcassets */; };
+		72B2BD9B3F2229A3E60FD7C9 /* MeasurementEstimator.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1FDBE8DEE3F3C0C88A2B2D8 /* MeasurementEstimator.swift */; };
+		8AD56996B4FAC128B09E64BA /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77EE721A9A7420432B19066B /* HomeView.swift */; };
 		9ACAC0C2DE532E56CF9C8912 /* PackMeasureApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D518452488C8F3B0C8FACA8 /* PackMeasureApp.swift */; };
+		B39AADAB17187469145C4D4A /* GeometryModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E7680F43D417158C818E786 /* GeometryModels.swift */; };
+		B4AD52C415CCBB88280E366C /* GravityAlignedBoundingBoxEstimator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 217FC74C59206B041DFB1042 /* GravityAlignedBoundingBoxEstimator.swift */; };
 		C65D41867508C7250DFFCF99 /* RootPlaceholderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9E081672C02985D42710156 /* RootPlaceholderView.swift */; };
+		C8136BC099CE8509D7A85305 /* MeasuredItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = CED5108414CFCAEB40DF57B3 /* MeasuredItem.swift */; };
 		CC0218C6FD04167826F2EDC3 /* DepthRegionSegmenterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C14B613C8CDA24C77CB2EDC9 /* DepthRegionSegmenterTests.swift */; };
+		DFC589F73318DFDF2A834553 /* PackingVehicles.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0037980CC25246BD96274DD7 /* PackingVehicles.swift */; };
+		E481A09E4252F3209E588661 /* PackingPlannerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E719F590D3FE9941D195518 /* PackingPlannerTests.swift */; };
+		F78E0F38BDC44E3CBE11ABC5 /* PackingModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E12DBF221D2E3F67479FE70 /* PackingModels.swift */; };
+		FECF4963AE2114674A0CC66B /* MeasurementARView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A913CFFAAADC0687F83660C2 /* MeasurementARView.swift */; };
+		FEF5BA8AADA1DCA7C9A86C38 /* InventoryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50D2EE7F2FC2C52291CB68A3 /* InventoryStore.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -24,21 +43,60 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		0037980CC25246BD96274DD7 /* PackingVehicles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PackingVehicles.swift; sourceTree = "<group>"; };
+		01DA76636D28E2A195DBE9FC /* GravityAlignedBoundingBoxEstimatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GravityAlignedBoundingBoxEstimatorTests.swift; sourceTree = "<group>"; };
+		0BEC26224D7E1CD00B41CDF5 /* MeasurementEstimatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeasurementEstimatorTests.swift; sourceTree = "<group>"; };
+		0CF21F67461D439CFC0A0C93 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
+		217FC74C59206B041DFB1042 /* GravityAlignedBoundingBoxEstimator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GravityAlignedBoundingBoxEstimator.swift; sourceTree = "<group>"; };
+		3E719F590D3FE9941D195518 /* PackingPlannerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PackingPlannerTests.swift; sourceTree = "<group>"; };
 		4D518452488C8F3B0C8FACA8 /* PackMeasureApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PackMeasureApp.swift; sourceTree = "<group>"; };
+		50D2EE7F2FC2C52291CB68A3 /* InventoryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InventoryStore.swift; sourceTree = "<group>"; };
 		52BB0CB149BC91BF0DCF45E5 /* PackMeasure.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = PackMeasure.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		5A6E5BC93C71F94AB333A1BF /* MeasurementMath.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeasurementMath.swift; sourceTree = "<group>"; };
+		5E7680F43D417158C818E786 /* GeometryModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GeometryModels.swift; sourceTree = "<group>"; };
 		5ED8ABA37AF0157830862257 /* PackMeasureTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = PackMeasureTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		6E12DBF221D2E3F67479FE70 /* PackingModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PackingModels.swift; sourceTree = "<group>"; };
 		720B306F033EEFA5D3D7BADE /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		77EE721A9A7420432B19066B /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
+		84DFB60E2C6A4BA85E8C1AA0 /* ScannerSheetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScannerSheetView.swift; sourceTree = "<group>"; };
+		A913CFFAAADC0687F83660C2 /* MeasurementARView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeasurementARView.swift; sourceTree = "<group>"; };
+		A95C05B5C8AAFBFBE93F5F88 /* PackMeasureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PackMeasureTests.swift; sourceTree = "<group>"; };
+		ACE91F472F72AC07FEC8432F /* PackingPlanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PackingPlanner.swift; sourceTree = "<group>"; };
+		AFE446F73A1491E55F2738CE /* DepthRegionSegmenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DepthRegionSegmenter.swift; sourceTree = "<group>"; };
 		B55DECA1C7432025218A0B8B /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		B9E081672C02985D42710156 /* RootPlaceholderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootPlaceholderView.swift; sourceTree = "<group>"; };
 		C14B613C8CDA24C77CB2EDC9 /* DepthRegionSegmenterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DepthRegionSegmenterTests.swift; sourceTree = "<group>"; };
+		CED5108414CFCAEB40DF57B3 /* MeasuredItem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeasuredItem.swift; sourceTree = "<group>"; };
+		D1FDBE8DEE3F3C0C88A2B2D8 /* MeasurementEstimator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeasurementEstimator.swift; sourceTree = "<group>"; };
+		F1B053787D5054BAAEE243C1 /* AppModelInventoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModelInventoryTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
+		0A60B85F9FCA05C8CFDB0E48 /* Scan */ = {
+			isa = PBXGroup;
+			children = (
+				AFE446F73A1491E55F2738CE /* DepthRegionSegmenter.swift */,
+			);
+			path = Scan;
+			sourceTree = "<group>";
+		};
 		18C0BEC3C24FEDD1348E55B2 /* Core */ = {
 			isa = PBXGroup;
 			children = (
+				FC9EFD2DDADB849E2E799D52 /* Geometry */,
+				A5654DC13CC521A5140A57D2 /* Packing */,
 			);
 			path = Core;
+			sourceTree = "<group>";
+		};
+		1CA9A427545D50C3BDC80A39 /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				50D2EE7F2FC2C52291CB68A3 /* InventoryStore.swift */,
+				D1FDBE8DEE3F3C0C88A2B2D8 /* MeasurementEstimator.swift */,
+				5A6E5BC93C71F94AB333A1BF /* MeasurementMath.swift */,
+			);
+			path = Services;
 			sourceTree = "<group>";
 		};
 		357F00626456922FCFC8A164 /* Scan */ = {
@@ -49,14 +107,28 @@
 			path = Scan;
 			sourceTree = "<group>";
 		};
+		4089BD5673DEE233B6B9ADC4 /* UIInventory */ = {
+			isa = PBXGroup;
+			children = (
+				F1B053787D5054BAAEE243C1 /* AppModelInventoryTests.swift */,
+			);
+			path = UIInventory;
+			sourceTree = "<group>";
+		};
 		4C0F5AB9E5ADAB3912678C6F /* PackMeasure */ = {
 			isa = PBXGroup;
 			children = (
+				0CF21F67461D439CFC0A0C93 /* AppModel.swift */,
 				B55DECA1C7432025218A0B8B /* Assets.xcassets */,
 				720B306F033EEFA5D3D7BADE /* Info.plist */,
 				4D518452488C8F3B0C8FACA8 /* PackMeasureApp.swift */,
 				B9E081672C02985D42710156 /* RootPlaceholderView.swift */,
 				18C0BEC3C24FEDD1348E55B2 /* Core */,
+				53C23AC357E385BFD9880408 /* Models */,
+				0A60B85F9FCA05C8CFDB0E48 /* Scan */,
+				A1A2FB0C19A8C9441080CAD9 /* Scanner */,
+				1CA9A427545D50C3BDC80A39 /* Services */,
+				92321A6F7CF1557396C99898 /* UI */,
 			);
 			path = PackMeasure;
 			sourceTree = "<group>";
@@ -68,6 +140,22 @@
 				5ED8ABA37AF0157830862257 /* PackMeasureTests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		53C23AC357E385BFD9880408 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				CED5108414CFCAEB40DF57B3 /* MeasuredItem.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		5E257FE4DB6F6AA6C43111A4 /* Scanner */ = {
+			isa = PBXGroup;
+			children = (
+				0BEC26224D7E1CD00B41CDF5 /* MeasurementEstimatorTests.swift */,
+			);
+			path = Scanner;
 			sourceTree = "<group>";
 		};
 		6E6C31B73D24A42EC83E3A21 = {
@@ -82,9 +170,66 @@
 		8A99611CA21A769C0B3410A5 /* PackMeasureTests */ = {
 			isa = PBXGroup;
 			children = (
+				A95C05B5C8AAFBFBE93F5F88 /* PackMeasureTests.swift */,
+				EF55120B79DC16D1E08DDA9F /* Geometry */,
+				ED5EA5D42E70F1ED10BB220C /* Packing */,
 				357F00626456922FCFC8A164 /* Scan */,
+				5E257FE4DB6F6AA6C43111A4 /* Scanner */,
+				4089BD5673DEE233B6B9ADC4 /* UIInventory */,
 			);
 			path = PackMeasureTests;
+			sourceTree = "<group>";
+		};
+		92321A6F7CF1557396C99898 /* UI */ = {
+			isa = PBXGroup;
+			children = (
+				77EE721A9A7420432B19066B /* HomeView.swift */,
+				84DFB60E2C6A4BA85E8C1AA0 /* ScannerSheetView.swift */,
+			);
+			path = UI;
+			sourceTree = "<group>";
+		};
+		A1A2FB0C19A8C9441080CAD9 /* Scanner */ = {
+			isa = PBXGroup;
+			children = (
+				A913CFFAAADC0687F83660C2 /* MeasurementARView.swift */,
+			);
+			path = Scanner;
+			sourceTree = "<group>";
+		};
+		A5654DC13CC521A5140A57D2 /* Packing */ = {
+			isa = PBXGroup;
+			children = (
+				6E12DBF221D2E3F67479FE70 /* PackingModels.swift */,
+				ACE91F472F72AC07FEC8432F /* PackingPlanner.swift */,
+				0037980CC25246BD96274DD7 /* PackingVehicles.swift */,
+			);
+			path = Packing;
+			sourceTree = "<group>";
+		};
+		ED5EA5D42E70F1ED10BB220C /* Packing */ = {
+			isa = PBXGroup;
+			children = (
+				3E719F590D3FE9941D195518 /* PackingPlannerTests.swift */,
+			);
+			path = Packing;
+			sourceTree = "<group>";
+		};
+		EF55120B79DC16D1E08DDA9F /* Geometry */ = {
+			isa = PBXGroup;
+			children = (
+				01DA76636D28E2A195DBE9FC /* GravityAlignedBoundingBoxEstimatorTests.swift */,
+			);
+			path = Geometry;
+			sourceTree = "<group>";
+		};
+		FC9EFD2DDADB849E2E799D52 /* Geometry */ = {
+			isa = PBXGroup;
+			children = (
+				5E7680F43D417158C818E786 /* GeometryModels.swift */,
+				217FC74C59206B041DFB1042 /* GravityAlignedBoundingBoxEstimator.swift */,
+			);
+			path = Geometry;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -179,8 +324,22 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				5E9AA3639748D36667D1C43C /* AppModel.swift in Sources */,
+				36DBA15AB0F050325DAEABCF /* DepthRegionSegmenter.swift in Sources */,
+				B39AADAB17187469145C4D4A /* GeometryModels.swift in Sources */,
+				B4AD52C415CCBB88280E366C /* GravityAlignedBoundingBoxEstimator.swift in Sources */,
+				8AD56996B4FAC128B09E64BA /* HomeView.swift in Sources */,
+				FEF5BA8AADA1DCA7C9A86C38 /* InventoryStore.swift in Sources */,
+				C8136BC099CE8509D7A85305 /* MeasuredItem.swift in Sources */,
+				FECF4963AE2114674A0CC66B /* MeasurementARView.swift in Sources */,
+				72B2BD9B3F2229A3E60FD7C9 /* MeasurementEstimator.swift in Sources */,
+				5108F38EA742072EDA5538BB /* MeasurementMath.swift in Sources */,
 				9ACAC0C2DE532E56CF9C8912 /* PackMeasureApp.swift in Sources */,
+				F78E0F38BDC44E3CBE11ABC5 /* PackingModels.swift in Sources */,
+				53E91AADA18D60E722530171 /* PackingPlanner.swift in Sources */,
+				DFC589F73318DFDF2A834553 /* PackingVehicles.swift in Sources */,
 				C65D41867508C7250DFFCF99 /* RootPlaceholderView.swift in Sources */,
+				505B39CB31D0CC5449424178 /* ScannerSheetView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -188,7 +347,12 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				63ED8F2D2AA20E138544E34C /* AppModelInventoryTests.swift in Sources */,
 				CC0218C6FD04167826F2EDC3 /* DepthRegionSegmenterTests.swift in Sources */,
+				30BBD6FD335F3F0136F0B5BE /* GravityAlignedBoundingBoxEstimatorTests.swift in Sources */,
+				09B7FEF948AAD6D288F89342 /* MeasurementEstimatorTests.swift in Sources */,
+				3D0B36D28510CAD37D056EE5 /* PackMeasureTests.swift in Sources */,
+				E481A09E4252F3209E588661 /* PackingPlannerTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -214,7 +378,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.chashuggins.PackMeasure;
+				PRODUCT_BUNDLE_IDENTIFIER = com.chasstudio.PackMeasure;
 				PRODUCT_NAME = PackMeasure;
 				SDKROOT = iphoneos;
 				SUPPORTS_MACCATALYST = NO;
@@ -233,7 +397,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.chashuggins.PackMeasure;
+				PRODUCT_BUNDLE_IDENTIFIER = com.chasstudio.PackMeasure;
 				PRODUCT_NAME = PackMeasure;
 				SDKROOT = iphoneos;
 				SUPPORTS_MACCATALYST = NO;
@@ -310,7 +474,7 @@
 					"@executable_path/Frameworks",
 					"@loader_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.chashuggins.PackMeasureTests;
+				PRODUCT_BUNDLE_IDENTIFIER = com.chasstudio.PackMeasureTests;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = 1;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/PackMeasure.app/PackMeasure";
@@ -327,7 +491,7 @@
 					"@executable_path/Frameworks",
 					"@loader_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.chashuggins.PackMeasureTests;
+				PRODUCT_BUNDLE_IDENTIFIER = com.chasstudio.PackMeasureTests;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = 1;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/PackMeasure.app/PackMeasure";

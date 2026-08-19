@@ -1,7 +1,7 @@
 name: PackMeasure
 
 options:
-  bundleIdPrefix: com.chashuggins
+  bundleIdPrefix: com.chasstudio
   createIntermediateGroups: true
   deploymentTarget:
     iOS: "18.0"
@@ -20,48 +20,44 @@ targets:
     platform: iOS
     sources:
       - path: PackMeasure
-      - path: Core
-        optional: true
-      - path: Scan
-        optional: true
-      - path: UI
-        optional: true
     info:
       path: PackMeasure/Info.plist
       properties:
         CFBundleDisplayName: PackMeasure
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        ITSAppUsesNonExemptEncryption: false
         LSRequiresIPhoneOS: true
         NSCameraUsageDescription: PackMeasure uses the camera and LiDAR depth sensor to measure boxes and objects.
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
+        UIApplicationSupportsIndirectInputEvents: true
         UILaunchScreen: {}
         UIRequiredDeviceCapabilities:
           - arm64
           - arkit
+        UIRequiresFullScreen: true
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.chashuggins.PackMeasure
+        PRODUCT_BUNDLE_IDENTIFIER: com.chasstudio.PackMeasure
         PRODUCT_NAME: PackMeasure
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
-        TARGETED_DEVICE_FAMILY: "1"
         SUPPORTS_MACCATALYST: NO
+        TARGETED_DEVICE_FAMILY: "1"
 
   PackMeasureTests:
     type: bundle.unit-test
     platform: iOS
     sources:
       - path: PackMeasureTests
-        optional: true
     dependencies:
       - target: PackMeasure
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.chashuggins.PackMeasureTests
+        PRODUCT_BUNDLE_IDENTIFIER: com.chasstudio.PackMeasureTests
         GENERATE_INFOPLIST_FILE: YES
         TARGETED_DEVICE_FAMILY: "1"
 
