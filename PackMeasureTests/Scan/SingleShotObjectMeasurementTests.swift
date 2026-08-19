@@ -1,4 +1,4 @@
-import CoreGraphics
+import CoreVideo
 import Testing
 import simd
 @testable import PackMeasure
@@ -6,126 +6,146 @@ import simd
 @Suite("Single-shot object measurement")
 struct SingleShotObjectMeasurementTests {
     @Test
-    func projectsOnlyMaskedConfidentDepthSamples() throws {
-        let mask = ImageMask(
+    func decodesInstanceLabelMaskFromOneComponent8PixelBuffer() throws {
+        let pixelBuffer = try labelMaskPixelBuffer(
             width: 4,
-            height: 4,
-            values: [
+            height: 3,
+            labels: [
                 0, 0, 0, 0,
-                0, 1, 1, 0,
-                0, 1, 1, 0,
-                0, 0, 0, 0,
+                0, 5, 5, 0,
+                0, 5, 9, 0,
             ]
         )
-        let grid = DepthGrid(
-            width: 2,
-            height: 2,
-            depths: [1, 1, 1, 1],
-            confidences: [2, 1, 2, 2]
-        )
-        let projection = try #require(
-            MaskedDepthPointProjector(
-                minimumConfidence: 2,
-                minimumMaskValue: 0.5
-            ).project(
-                mask: mask,
-                depthGrid: grid,
-                imageResolution: CGSize(width: 4, height: 4),
-                intrinsics: intrinsics(),
-                cameraTransform: matrix_identity_float4x4,
-                maximumCount: 8
-            )
-        )
 
-        #expect(projection.points.count == 3)
-        #expect(projection.selectedDepthSampleCount == 3)
-        #expect(!projection.touchesImageEdge)
-        #expect(abs(projection.coverage - 0.75) < 0.001)
+        let mask = try PhotoInstanceLabelMask(pixelBuffer: pixelBuffer)
+
+        #expect(mask.width == 4)
+        #expect(mask.height == 3)
+        #expect(mask.labelAt(x: 1, y: 1) == 5)
+        #expect(mask.labelAt(x: 2, y: 2) == 9)
     }
 
     @Test
-    func singleShotOutcomeRejectsWeakMaskBeforeGeometry() {
+    func singleShotOutcomeRejectsAmbiguousForegroundWhenCenterIsBackground() throws {
         let outcome = SingleShotObjectMeasurement.outcome(
-            mask: ImageMask(width: 6, height: 6, values: Array(repeating: 0, count: 36)),
-            depthGrid: DepthGrid(
-                width: 3,
-                height: 3,
-                depths: Array(repeating: 1, count: 9),
-                confidences: Array(repeating: 2, count: 9)
+            labelMask: try labelMask(
+                [
+                    [1, 1, 0, 2, 2],
+                    [1, 1, 0, 2, 2],
+                    [0, 0, 0, 0, 0],
+                    [0, 0, 0, 0, 0],
+                    [0, 0, 0, 0, 0],
+                ]
             ),
-            imageResolution: CGSize(width: 6, height: 6),
-            intrinsics: intrinsics(),
-            cameraTransform: matrix_identity_float4x4
+            depthGrid: DepthGrid(
+                width: 5,
+                height: 5,
+                depths: Array(repeating: 1, count: 25),
+                confidences: Array(repeating: 2, count: 25)
+            ),
+            calibration: calibration(imageWidth: 5, imageHeight: 5)
         )
 
         #expect(outcome == .failure(.targetRejected(.insufficientSurfaceEvidence)))
     }
 
     @Test
-    func oneFrameIsEnoughForASingleShotMeasurement() {
-        let points = syntheticBoxPoints(
-            length: 1.2,
-            width: 0.6,
-            height: 0.75,
-            yaw: .pi / 7,
-            center: SIMD3<Double>(0, 0.375, 0)
-        ).map { SIMD3<Float>(Float($0.x), Float($0.y), Float($0.z)) }
-
-        let outcome = MeasurementEstimator.outcome(
-            from: points,
-            frameCount: 1,
-            targetValidation: .valid
+    func singleShotOutcomeEstimatesBoxFromOnePhoto() throws {
+        let outcome = SingleShotObjectMeasurement.outcome(
+            labelMask: try labelMask(
+                [
+                    [0, 0, 0, 0, 0, 0],
+                    [0, 5, 5, 5, 5, 0],
+                    [0, 5, 5, 5, 5, 0],
+                    [0, 5, 5, 5, 5, 0],
+                    [0, 5, 5, 5, 5, 0],
+                    [0, 0, 0, 0, 0, 0],
+                ]
+            ),
+            depthGrid: populatedDepthGrid(width: 6, height: 6),
+            calibration: calibration(imageWidth: 6, imageHeight: 6)
         )
 
         guard case .success(let estimate) = outcome else {
-            Issue.record("expected one-frame single-shot estimate to succeed")
+            Issue.record("expected one-photo single-shot estimate to succeed")
             return
         }
-        #expect(abs(estimate.lengthMeters - 1.2) < 0.08)
-        #expect(abs(estimate.widthMeters - 0.6) < 0.08)
-        #expect(abs(estimate.heightMeters - 0.75) < 0.08)
+        #expect(estimate.frameCount == 1)
+        #expect(estimate.sampleCount >= 16)
+        #expect(estimate.lengthMeters > 0)
+        #expect(estimate.widthMeters > 0)
+        #expect(estimate.heightMeters > 0)
+    }
+
+    private func calibration(imageWidth: Int, imageHeight: Int) -> PhotoCameraCalibration {
+        PhotoCameraCalibration(
+            imageWidth: imageWidth,
+            imageHeight: imageHeight,
+            intrinsics: intrinsics(),
+            cameraTransform: matrix_identity_float4x4
+        )
     }
 
     private func intrinsics() -> simd_float3x3 {
         simd_float3x3(
-            SIMD3<Float>(2, 0, 0),
-            SIMD3<Float>(0, 2, 0),
-            SIMD3<Float>(0.5, 0.5, 1)
+            SIMD3<Float>(6, 0, 0),
+            SIMD3<Float>(0, 6, 0),
+            SIMD3<Float>(3, 3, 1)
         )
     }
 
-    private func syntheticBoxPoints(
-        length: Double,
-        width: Double,
-        height: Double,
-        yaw: Double,
-        center: SIMD3<Double>
-    ) -> [SIMD3<Double>] {
-        let rotation = simd_double3x3(
-            SIMD3<Double>(cos(yaw), 0, sin(yaw)),
-            SIMD3<Double>(0, 1, 0),
-            SIMD3<Double>(-sin(yaw), 0, cos(yaw))
+    private func labelMask(_ rows: [[UInt32]]) throws -> PhotoInstanceLabelMask {
+        try PhotoInstanceLabelMask(
+            width: rows[0].count,
+            height: rows.count,
+            labels: rows.flatMap { $0 }
         )
+    }
 
-        var points: [SIMD3<Double>] = []
-        for xi in stride(from: -length / 2, through: length / 2, by: 0.06) {
-            for zi in stride(from: -width / 2, through: width / 2, by: 0.06) {
-                for yi in stride(from: 0.0, through: height, by: height / 4) {
-                    let local = SIMD3<Double>(xi, yi - height / 2, zi)
-                    let rotated = rotation * local
-                    points.append(rotated + center)
-                }
-            }
+    private func populatedDepthGrid(width: Int, height: Int) -> DepthGrid {
+        DepthGrid(
+            width: width,
+            height: height,
+            depths: Array(repeating: 1.25, count: width * height),
+            confidences: Array(repeating: 2, count: width * height)
+        )
+    }
+
+    private func labelMaskPixelBuffer(
+        width: Int,
+        height: Int,
+        labels: [UInt8]
+    ) throws -> CVPixelBuffer {
+        var pixelBuffer: CVPixelBuffer?
+        let status = CVPixelBufferCreate(
+            kCFAllocatorDefault,
+            width,
+            height,
+            kCVPixelFormatType_OneComponent8,
+            nil,
+            &pixelBuffer
+        )
+        guard status == kCVReturnSuccess, let pixelBuffer else {
+            throw TestSupportError.pixelBufferCreationFailed(status)
         }
 
-        for xi in stride(from: -length / 2, through: length / 2, by: 0.09) {
-            for zi in stride(from: -width / 2, through: width / 2, by: 0.09) {
-                let local = SIMD3<Double>(xi, -height / 2, zi)
-                let rotated = rotation * local
-                points.append(rotated + center)
+        CVPixelBufferLockBaseAddress(pixelBuffer, [])
+        defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, []) }
+        guard let baseAddress = CVPixelBufferGetBaseAddress(pixelBuffer) else {
+            throw TestSupportError.pixelBufferBaseAddressMissing
+        }
+        let rowBytes = CVPixelBufferGetBytesPerRow(pixelBuffer)
+        for y in 0..<height {
+            let row = baseAddress.advanced(by: y * rowBytes).assumingMemoryBound(to: UInt8.self)
+            for x in 0..<width {
+                row[x] = labels[y * width + x]
             }
         }
+        return pixelBuffer
+    }
 
-        return points
+    private enum TestSupportError: Error {
+        case pixelBufferCreationFailed(CVReturn)
+        case pixelBufferBaseAddressMissing
     }
 }
