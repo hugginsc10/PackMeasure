@@ -439,6 +439,24 @@ enum MeasurementEstimationOutcome: Equatable, Sendable {
     case failure(MeasurementEstimationFailure)
 }
 
+/// Rejects a retained component that repeatedly reaches the image boundary.
+/// A fully framed object should have visible separation from every edge; once
+/// edge contact has the same temporal support required for geometry, the scan
+/// is ambiguous and should retry rather than estimate the attached scene.
+struct PersistentEdgeContaminationPolicy: Sendable {
+    func outcome(
+        retainedEdgeFrameCount: Int,
+        requiredSupportingFrameCount: Int,
+        otherwise measurementOutcome: @autoclosure () -> MeasurementEstimationOutcome
+    ) -> MeasurementEstimationOutcome {
+        guard requiredSupportingFrameCount > 0,
+              retainedEdgeFrameCount >= requiredSupportingFrameCount else {
+            return measurementOutcome()
+        }
+        return .failure(.geometry(.sceneContamination))
+    }
+}
+
 /// Adapts the shared geometry result into the scanner-facing measurement model.
 /// All bounding-box math lives in `GravityAlignedBoundingBoxEstimator`.
 enum MeasurementEstimator {

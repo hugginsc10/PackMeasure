@@ -186,6 +186,7 @@ struct MeasurementARView: UIViewRepresentable {
         private let peripheralFloorEstimator = PeripheralFloorEstimator()
         private let objectRegionFilter = ReticleSeededObjectRegionFilter()
         private let temporalSupportFilter = TemporalWorldPointSupportFilter()
+        private let persistentEdgePolicy = PersistentEdgeContaminationPolicy()
 
         // Accessed only on processingQueue.
         private var capture: CaptureAccumulator?
@@ -406,10 +407,14 @@ struct MeasurementARView: UIViewRepresentable {
             let temporalSupport = temporalSupportFilter.filter(
                 frames: capture.worldPointFrames
             )
-            let outcome = MeasurementEstimator.outcome(
-                from: temporalSupport.points,
-                frameCount: capture.frameCount,
-                targetValidation: targetValidation
+            let outcome = persistentEdgePolicy.outcome(
+                retainedEdgeFrameCount: capture.retainedEdgeFrameCount,
+                requiredSupportingFrameCount: temporalSupport.requiredSupportingFrameCount,
+                otherwise: MeasurementEstimator.outcome(
+                    from: temporalSupport.points,
+                    frameCount: capture.frameCount,
+                    targetValidation: targetValidation
+                )
             )
 
             guard case .success(let estimate) = outcome else {
