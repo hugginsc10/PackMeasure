@@ -90,7 +90,7 @@ final class GravityAlignedBoundingBoxEstimatorTests: XCTestCase {
         XCTAssertEqual(inches.height, 20, accuracy: 0.1)
     }
 
-    func testTrimsAngleDependentVerticalSilhouetteHaloFromKnownBox() throws {
+    func testRejectsPersistentAngleDependentVerticalSilhouetteHalo() {
         let boxLength: Float = 0.6096 // 24 inches
         let boxWidth: Float = 0.508 // 20 inches
         let boxHeight: Float = 0.508 // 20 inches
@@ -121,14 +121,12 @@ final class GravityAlignedBoundingBoxEstimatorTests: XCTestCase {
                 faceSubdivisions: 9
             )
 
-            let estimate = try estimator.estimate(points: box + halo)
-            let inches = estimate.dimensions.converted(to: .inches)
-
-            XCTAssertGreaterThanOrEqual(inches.length, 23.9)
-            XCTAssertLessThanOrEqual(inches.length, 25.0)
-            XCTAssertGreaterThanOrEqual(inches.width, 19.9)
-            XCTAssertLessThanOrEqual(inches.width, 21.0)
-            XCTAssertEqual(inches.height, 20, accuracy: 0.1)
+            XCTAssertThrowsError(try estimator.estimate(points: box + halo)) { error in
+                XCTAssertEqual(
+                    error as? BoundingBoxEstimationError,
+                    .groundPlaneContamination
+                )
+            }
         }
     }
 
