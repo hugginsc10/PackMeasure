@@ -89,4 +89,5 @@ enum BoundingBoxEstimationError: Error, Equatable, Sendable {
     case insufficientUniquePoints(actual: Int, minimum: Int)
     case degeneratePointCloud
     case groundPlaneContamination
+    case sceneContamination
 }
