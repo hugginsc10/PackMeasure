@@ -4,6 +4,26 @@ import simd
 
 struct MeasurementEstimatorTests {
     @Test
+    func finalizedMeasurementFreezesPreviewUntilNextScan() {
+        var lifecycle = ScannerPreviewLifecycle()
+
+        #expect(lifecycle.measurementFinalized() == .pause)
+        #expect(lifecycle.isFrozen)
+        #expect(lifecycle.measurementFinalized() == .none)
+
+        #expect(lifecycle.scanRequested() == .resume)
+        #expect(!lifecycle.isFrozen)
+    }
+
+    @Test
+    func scanRequestDoesNotRestartSessionWhilePreviewIsAlreadyLive() {
+        var lifecycle = ScannerPreviewLifecycle()
+
+        #expect(lifecycle.scanRequested() == .none)
+        #expect(!lifecycle.isFrozen)
+    }
+
+    @Test
     func acceptsCenterSeedOnVerticalObjectFace() {
         let sample = CenteredTargetSurfaceSample(
             center: SIMD3<Float>(0, 0.50, -1),
