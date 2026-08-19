@@ -134,6 +134,18 @@ struct ScannerCapturePolicyTests {
     }
 
     @Test
+    func startActionOnlyEnablesAfterScannerIsReady() {
+        #expect(
+            !ScannerActionPolicy.canStartMeasurement(phase: .checkingSupport)
+        )
+        #expect(
+            !ScannerActionPolicy.canStartMeasurement(phase: .scanning(progress: 0))
+        )
+        #expect(ScannerActionPolicy.canStartMeasurement(phase: .ready))
+        #expect(ScannerActionCopy.checkingSupport == "Checking LiDAR support…")
+    }
+
+    @Test
     func usableCaptureCannotSaveUntilUserConfirmsTargetStayedOnObject() {
         let unconfirmed = ScannerCapturePolicy.reviewState(
             phase: .measured,
