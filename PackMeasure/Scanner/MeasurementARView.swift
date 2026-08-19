@@ -68,7 +68,7 @@ struct MeasurementARView: UIViewRepresentable {
             var sampleAttemptCount = 0
             var unavailableFrameCount = 0
             var rejectedFrameCount = 0
-            var targetRejection: CenteredTargetRejection?
+            var floorRejectedFrameCount = 0
             var lastRejection: CenteredTargetRejection?
             var lastCalibration: FrameCalibrationDiagnostics?
         }
@@ -108,6 +108,7 @@ struct MeasurementARView: UIViewRepresentable {
             minimumConfidence: UInt8(ARConfidenceLevel.medium.rawValue)
         )
         private let targetValidator = CenteredTargetValidator()
+        private let targetCapturePolicy = CenteredTargetCapturePolicy()
         private let peripheralFloorEstimator = PeripheralFloorEstimator()
 
         // Accessed only on processingQueue.
@@ -223,9 +224,7 @@ struct MeasurementARView: UIViewRepresentable {
                     activeCapture.lastRejection = reason
                     activeCapture.lastCalibration = diagnostics
                     if reason == .floorSurface {
-                        // One context-backed floor observation invalidates the
-                        // capture; floor points must never become a measurement.
-                        activeCapture.targetRejection = .floorSurface
+                        activeCapture.floorRejectedFrameCount += 1
                     }
                 case .unavailable(let diagnostics):
                     activeCapture.unavailableFrameCount += 1
@@ -273,9 +272,10 @@ struct MeasurementARView: UIViewRepresentable {
         }
 
         private func finalizeCapture(_ capture: CaptureAccumulator) {
-            let targetValidation = capture.targetRejection.map {
-                CenteredTargetValidation.rejected($0)
-            } ?? .valid
+            let targetValidation = targetCapturePolicy.finalValidation(
+                acceptedObjectFrameCount: capture.frameCount,
+                floorRejectedFrameCount: capture.floorRejectedFrameCount
+            )
             let outcome = MeasurementEstimator.outcome(
                 from: capture.worldPoints,
                 frameCount: capture.frameCount,
@@ -782,12 +782,20 @@ struct MeasurementARView: UIViewRepresentable {
             let elevation = diagnosticString(diagnostics?.elevationAboveFloorMeters)
             let floorY = diagnosticString(diagnostics?.floorEstimate?.y)
             let floorSource = diagnostics?.floorEstimate?.source.rawValue ?? "none"
-            let targetReason = capture.targetRejection
-                ?? capture.lastRejection
-            let targetReasonDescription = targetReason.map(String.init(describing:)) ?? "none"
+            let finalTargetReason: CenteredTargetRejection? = if case .failure(
+                .targetRejected(let reason)
+            ) = result {
+                reason
+            } else {
+                nil
+            }
+            let finalTargetReasonDescription = finalTargetReason
+                .map(String.init(describing:)) ?? "none"
+            let lastRejectionDescription = capture.lastRejection
+                .map(String.init(describing:)) ?? "none"
 
             Self.calibrationLogger.notice(
-                "scan_calibration request_id=\(capture.requestID, privacy: .public) result=\(resultDescription, privacy: .public) attempts=\(capture.sampleAttemptCount, privacy: .public) accepted_frames=\(capture.frameCount, privacy: .public) rejected_frames=\(capture.rejectedFrameCount, privacy: .public) unavailable_frames=\(capture.unavailableFrameCount, privacy: .public) points=\(capture.worldPoints.count, privacy: .public) region_pixels=\(regionPixels, privacy: .public) coverage=\(coverage, privacy: .public) seed_abs_up_normal=\(seedUpNormal, privacy: .public) elevation_m=\(elevation, privacy: .public) background_floor_y_m=\(floorY, privacy: .public) floor_source=\(floorSource, privacy: .public) target_reason=\(targetReasonDescription, privacy: .public) estimation_failure=\(failureDescription, privacy: .public) geometry_error=\(geometryErrorDescription, privacy: .public)"
+                "scan_calibration request_id=\(capture.requestID, privacy: .public) result=\(resultDescription, privacy: .public) attempts=\(capture.sampleAttemptCount, privacy: .public) accepted_frames=\(capture.frameCount, privacy: .public) rejected_frames=\(capture.rejectedFrameCount, privacy: .public) floor_rejected_frames=\(capture.floorRejectedFrameCount, privacy: .public) unavailable_frames=\(capture.unavailableFrameCount, privacy: .public) points=\(capture.worldPoints.count, privacy: .public) region_pixels=\(regionPixels, privacy: .public) coverage=\(coverage, privacy: .public) seed_abs_up_normal=\(seedUpNormal, privacy: .public) elevation_m=\(elevation, privacy: .public) background_floor_y_m=\(floorY, privacy: .public) floor_source=\(floorSource, privacy: .public) target_reason=\(finalTargetReasonDescription, privacy: .public) last_frame_rejection=\(lastRejectionDescription, privacy: .public) estimation_failure=\(failureDescription, privacy: .public) geometry_error=\(geometryErrorDescription, privacy: .public)"
             )
         }
 

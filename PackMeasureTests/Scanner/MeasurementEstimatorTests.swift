@@ -99,6 +99,30 @@ struct MeasurementEstimatorTests {
     }
 
     @Test
+    func singleNoisyFloorAssessmentDoesNotVetoAcceptedObjectFrames() {
+        let policy = CenteredTargetCapturePolicy()
+
+        let validation = policy.finalValidation(
+            acceptedObjectFrameCount: 5,
+            floorRejectedFrameCount: 1
+        )
+
+        #expect(validation == .valid)
+    }
+
+    @Test
+    func consistentFloorMajorityRejectsCapture() {
+        let policy = CenteredTargetCapturePolicy()
+
+        let validation = policy.finalValidation(
+            acceptedObjectFrameCount: 1,
+            floorRejectedFrameCount: 5
+        )
+
+        #expect(validation == .rejected(.floorSurface))
+    }
+
+    @Test
     func peripheralDepthFindsLowestDenseFloorBandAmidClutter() throws {
         var points: [SIMD3<Float>] = []
         for index in 0..<90 {
@@ -130,6 +154,17 @@ struct MeasurementEstimatorTests {
         let outcome = MeasurementEstimator.outcome(
             from: points,
             frameCount: 10,
+            targetValidation: .rejected(.floorSurface)
+        )
+
+        #expect(outcome == .failure(.targetRejected(.floorSurface)))
+    }
+
+    @Test
+    func consistentFloorCapturePreservesReasonWithoutGeometryFrames() {
+        let outcome = MeasurementEstimator.outcome(
+            from: [],
+            frameCount: 0,
             targetValidation: .rejected(.floorSurface)
         )
 

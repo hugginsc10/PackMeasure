@@ -177,6 +177,24 @@ struct CenteredTargetValidator: Sendable {
     }
 }
 
+/// Converts noisy per-frame target assessments into one capture-level decision.
+/// A lone floor vote cannot veto otherwise usable object frames, while a
+/// repeated floor majority still blocks floor-derived measurements.
+struct CenteredTargetCapturePolicy: Sendable {
+    var minimumFloorRejectedFrameCount = 2
+
+    func finalValidation(
+        acceptedObjectFrameCount: Int,
+        floorRejectedFrameCount: Int
+    ) -> CenteredTargetValidation {
+        guard floorRejectedFrameCount >= minimumFloorRejectedFrameCount,
+              floorRejectedFrameCount > acceptedObjectFrameCount else {
+            return .valid
+        }
+        return .rejected(.floorSurface)
+    }
+}
+
 enum MeasurementEstimationFailure: Equatable, Sendable {
     case insufficientFrames(actual: Int, minimum: Int)
     case targetRejected(CenteredTargetRejection)
@@ -211,11 +229,11 @@ enum MeasurementEstimator {
         frameCount: Int,
         targetValidation: CenteredTargetValidation = .valid
     ) -> MeasurementEstimationOutcome {
-        guard frameCount >= 3 else {
-            return .failure(.insufficientFrames(actual: frameCount, minimum: 3))
-        }
         if case .rejected(let reason) = targetValidation {
             return .failure(.targetRejected(reason))
+        }
+        guard frameCount >= 3 else {
+            return .failure(.insufficientFrames(actual: frameCount, minimum: 3))
         }
 
         let geometry: GravityAlignedBoundingBoxEstimate
