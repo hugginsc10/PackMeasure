@@ -57,7 +57,9 @@ struct MeasurementARView: UIViewRepresentable {
     @Bindable var scannerState: ScannerSheetView.ScannerStateModel
 
     func makeCoordinator() -> Coordinator {
-        Coordinator()
+        let coordinator = Coordinator()
+        coordinator.scannerState = scannerState
+        return coordinator
     }
 
     func makeUIView(context: Context) -> ARView {
