@@ -322,7 +322,7 @@ struct MeasurementEstimatorTests {
     }
 
     @Test
-    func requiresMultipleContributingDepthFrames() {
+    func acceptsOneContributingDepthFrameForPhotoCapture() throws {
         let points = boxSurfacePoints(
             length: 0.8,
             width: 0.5,
@@ -330,7 +330,11 @@ struct MeasurementEstimatorTests {
             yaw: 0
         )
 
-        #expect(MeasurementEstimator.estimate(from: points, frameCount: 2) == nil)
+        let measurement = try #require(
+            MeasurementEstimator.estimate(from: points, frameCount: 1)
+        )
+
+        #expect(measurement.frameCount == 1)
     }
 
     private func boxSurfacePoints(
