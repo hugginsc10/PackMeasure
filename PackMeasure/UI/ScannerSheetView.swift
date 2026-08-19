@@ -51,13 +51,13 @@ struct ScannerSheetView: View {
 
                 if let estimate = scannerState.estimate {
                     Form {
-                        Section("Measured Size") {
+                        Section(ScannerResultCopy.sizeSectionTitle) {
                             Text(
                                 "\(MeasurementMath.inchString(from: estimate.lengthMeters)) × " +
                                 "\(MeasurementMath.inchString(from: estimate.widthMeters)) × " +
                                 "\(MeasurementMath.inchString(from: estimate.heightMeters))"
                             )
-                            Text("\(estimate.confidence.title) confidence • \(estimate.sampleCount) points")
+                            Text(ScannerResultCopy.qualitySummary(for: estimate))
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                         }
@@ -375,4 +375,12 @@ enum ScannerGuidanceCopy {
 
     static let missingEstimateRetry =
         "No object measurement was produced. Keep the object inside the frame, put the center dot on a clear object face, and scan again."
+}
+
+enum ScannerResultCopy {
+    static let sizeSectionTitle = "Estimated size"
+
+    static func qualitySummary(for estimate: MeasurementEstimate) -> String {
+        "\(estimate.confidence.title) point-cloud quality • \(estimate.sampleCount) points"
+    }
 }
