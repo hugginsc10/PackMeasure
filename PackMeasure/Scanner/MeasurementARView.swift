@@ -3,6 +3,7 @@ import Foundation
 import OSLog
 import RealityKit
 import SwiftUI
+import Vision
 import simd
 
 enum ScannerPreviewCommand: Equatable, Sendable {
@@ -119,6 +120,20 @@ struct MeasurementARView: UIViewRepresentable {
             subsystem: "org.example.PackMeasure",
             category: "calibration"
         )
+
+        private static func failureMessage(for failure: MeasurementEstimationFailure) -> String {
+            switch failure {
+            case .targetRejected(.floorSurface):
+                "The photo appears to target the floor. Keep one whole object centered and retake it."
+            case .targetRejected(.insufficientSurfaceEvidence), .insufficientFrames:
+                "The photo did not contain enough object depth. Keep one whole object in frame and retake it."
+            case .geometry(.groundPlaneContamination):
+                "Too much floor or background entered the photo. Keep the whole object centered with space around its edges."
+            case .geometry:
+                "The object could not be measured reliably from this photo. Try a clearer three-quarter angle."
+            }
+        }
+
         private static let captureDuration: TimeInterval = 1.0
         private static let sampleInterval: TimeInterval = 1.0 / 12.0
         private static let maximumPointsPerFrame = 3_500
@@ -135,6 +150,10 @@ struct MeasurementARView: UIViewRepresentable {
         )
         private let segmenter = DepthRegionSegmenter(
             minimumConfidence: UInt8(ARConfidenceLevel.medium.rawValue)
+        )
+        private let maskedProjector = MaskedDepthPointProjector(
+            minimumConfidence: UInt8(ARConfidenceLevel.medium.rawValue),
+            minimumMaskValue: 0.5
         )
         private let targetValidator = CenteredTargetValidator()
         private let targetCapturePolicy = CenteredTargetCapturePolicy()
@@ -258,49 +277,45 @@ struct MeasurementARView: UIViewRepresentable {
             // ARKit calls this method on processingQueue; never move ARFrame or
             // its pixel buffers across another concurrency boundary.
             guard var activeCapture = capture else { return }
+            capture = nil
+            activeCapture.sampleAttemptCount += 1
+            publishProgress(0.5, requestID: activeCapture.requestID)
 
-            let now = CACurrentMediaTime()
-            let progress = min(
-                1,
-                (now - activeCapture.startedAt)
-                    / (activeCapture.deadline - activeCapture.startedAt)
-            )
-            publishProgress(progress, requestID: activeCapture.requestID)
-
-            if now >= activeCapture.nextSampleAt,
-               activeCapture.worldPoints.count < Self.maximumAccumulatedPoints {
-                activeCapture.nextSampleAt = now + Self.sampleInterval
-                activeCapture.sampleAttemptCount += 1
-                let capacity = min(
-                    Self.maximumPointsPerFrame,
-                    Self.maximumAccumulatedPoints - activeCapture.worldPoints.count
-                )
-                switch sampleDepthFrame(from: frame, maximumCount: capacity) {
-                case .accepted(let newPoints, let diagnostics):
-                    activeCapture.worldPoints.append(contentsOf: newPoints)
-                    activeCapture.frameCount += 1
-                    activeCapture.lastCalibration = diagnostics
-                case .rejected(let reason, let diagnostics):
-                    activeCapture.rejectedFrameCount += 1
-                    activeCapture.lastRejection = reason
-                    activeCapture.lastCalibration = diagnostics
-                    if reason == .floorSurface {
-                        activeCapture.floorRejectedFrameCount += 1
-                    }
-                case .unavailable(let diagnostics):
-                    activeCapture.unavailableFrameCount += 1
-                    activeCapture.lastCalibration = diagnostics
-                }
-            }
-
-            if now >= activeCapture.deadline {
-                // Stop on the exact frame boundary before geometry work so the
-                // preview shows the framing that produced the measurement.
+            switch sampleSingleShotFrame(from: frame) {
+            case .accepted(let points, let diagnostics):
+                activeCapture.worldPoints = points
+                activeCapture.frameCount = 1
+                activeCapture.lastCalibration = diagnostics
                 session.pause()
-                capture = nil
                 finalizeCapture(activeCapture)
-            } else {
-                capture = activeCapture
+            case .rejected(let reason, let diagnostics):
+                activeCapture.rejectedFrameCount = 1
+                activeCapture.lastRejection = reason
+                activeCapture.lastCalibration = diagnostics
+                if reason == .floorSurface {
+                    activeCapture.floorRejectedFrameCount = 1
+                }
+                session.pause()
+                let failure = MeasurementEstimationFailure.targetRejected(reason)
+                logCalibrationSummary(activeCapture, result: .failure(failure))
+                resumePreviewAfterFailedCapture(requestID: activeCapture.requestID)
+                publishFailure(
+                    Self.failureMessage(for: failure),
+                    requestID: activeCapture.requestID
+                )
+            case .unavailable(let diagnostics):
+                activeCapture.unavailableFrameCount = 1
+                activeCapture.lastCalibration = diagnostics
+                session.pause()
+                let failure = MeasurementEstimationFailure.targetRejected(
+                    .insufficientSurfaceEvidence
+                )
+                logCalibrationSummary(activeCapture, result: .failure(failure))
+                resumePreviewAfterFailedCapture(requestID: activeCapture.requestID)
+                publishFailure(
+                    Self.failureMessage(for: failure),
+                    requestID: activeCapture.requestID
+                )
             }
         }
 
@@ -352,19 +367,8 @@ struct MeasurementARView: UIViewRepresentable {
                 }
                 logCalibrationSummary(capture, result: .failure(failure))
                 resumePreviewAfterFailedCapture(requestID: capture.requestID)
-                let message: String
-                switch failure {
-                case .targetRejected(.floorSurface):
-                    message = "The center reticle appears to be on the floor. Center it on the object and try again."
-                case .targetRejected(.insufficientSurfaceEvidence), .insufficientFrames:
-                    message = "Scan was too weak. Back up slightly and retake with the item centered."
-                case .geometry(.groundPlaneContamination):
-                    message = "Too much floor or background entered the scan. Keep the whole object centered with space around its edges."
-                case .geometry:
-                    message = "Scan was too weak. Back up slightly and retake with the item centered."
-                }
                 publishFailure(
-                    message,
+                    Self.failureMessage(for: failure),
                     requestID: capture.requestID
                 )
                 return
@@ -558,6 +562,90 @@ struct MeasurementARView: UIViewRepresentable {
             return points.isEmpty
                 ? .unavailable(diagnostics)
                 : .accepted(points, diagnostics)
+        }
+
+        private func sampleSingleShotFrame(from frame: ARFrame) -> DepthFrameSample {
+            guard let depthData = frame.smoothedSceneDepth ?? frame.sceneDepth,
+                  let grid = depthGrid(from: depthData),
+                  let intrinsics = scaledIntrinsics(for: frame.camera, depthGrid: grid),
+                  let mask = centerObjectMask(
+                      from: frame.capturedImage,
+                      cameraIntrinsics: frame.camera.intrinsics
+                  ),
+                  let projection = maskedProjector.project(
+                      mask: mask,
+                      depthGrid: grid,
+                      imageResolution: frame.camera.imageResolution,
+                      intrinsics: intrinsics,
+                      cameraTransform: frame.camera.transform,
+                      maximumCount: Self.maximumAccumulatedPoints
+                  ) else {
+                return .unavailable(nil)
+            }
+
+            let diagnostics = FrameCalibrationDiagnostics(
+                rawRegionPixelCount: projection.selectedDepthSampleCount,
+                retainedRegionPixelCount: projection.selectedDepthSampleCount,
+                regionCoverage: projection.coverage,
+                absoluteUpNormal: nil,
+                elevationAboveFloorMeters: nil,
+                floorEstimate: nil
+            )
+
+            if case .rejected(let reason) = SingleShotObjectMeasurement.validation(for: projection) {
+                return .rejected(reason, diagnostics)
+            }
+
+            return .accepted(projection.points, diagnostics)
+        }
+
+        private func scaledIntrinsics(
+            for camera: ARCamera,
+            depthGrid: DepthGrid
+        ) -> simd_float3x3? {
+            let imageResolution = camera.imageResolution
+            let scaleX = imageResolution.width / CGFloat(depthGrid.width)
+            let scaleY = imageResolution.height / CGFloat(depthGrid.height)
+            guard scaleX > 0, scaleY > 0 else { return nil }
+
+            var intrinsics = camera.intrinsics
+            intrinsics[0][0] /= Float(scaleX)
+            intrinsics[1][1] /= Float(scaleY)
+            intrinsics[2][0] /= Float(scaleX)
+            intrinsics[2][1] /= Float(scaleY)
+            guard intrinsics[0][0] > 0, intrinsics[1][1] > 0 else { return nil }
+            return intrinsics
+        }
+
+        private func centerObjectMask(
+            from pixelBuffer: CVPixelBuffer,
+            cameraIntrinsics: simd_float3x3
+        ) -> ImageMask? {
+            let request = VNGenerateForegroundInstanceMaskRequest()
+            let requestHandler = VNImageRequestHandler(
+                cvPixelBuffer: pixelBuffer,
+                options: [:]
+            )
+
+            do {
+                try requestHandler.perform([request])
+                guard let observation = request.results?.first,
+                      let instanceObservation = InstanceMaskObservation(observation) else {
+                    return nil
+                }
+                let centerInstances = instanceObservation.instanceAtPoint(
+                    NormalizedPoint(x: 0.5, y: 0.5)
+                )
+                guard !centerInstances.isEmpty else { return nil }
+                let imageRequestHandler = ImageRequestHandler(pixelBuffer)
+                let scaledMask = try instanceObservation.generateScaledMask(
+                    for: centerInstances,
+                    scaledToImageFrom: imageRequestHandler
+                )
+                return try ImageMask(pixelBuffer: scaledMask)
+            } catch {
+                return nil
+            }
         }
 
         private func sceneFloorEstimate(

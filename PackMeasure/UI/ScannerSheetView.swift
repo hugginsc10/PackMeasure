@@ -35,7 +35,6 @@ struct ScannerSheetView: View {
     @State private var isStackable = false
     @State private var maxStackLayers = 2
     @State private var mayRotate = false
-    @State private var targetConfirmed = false
 
     var body: some View {
         NavigationStack {
@@ -85,27 +84,6 @@ struct ScannerSheetView: View {
                                     .foregroundStyle(.orange)
                             }
                         } else {
-                            Section {
-                                Toggle(
-                                    ScannerGuidanceCopy.targetConfirmation,
-                                    isOn: $targetConfirmed
-                                )
-                                if reviewState == .confirmTarget {
-                                    Label(
-                                        ScannerGuidanceCopy.targetConfirmationDetail,
-                                        systemImage: "scope"
-                                    )
-                                    .font(.footnote)
-                                    .foregroundStyle(.orange)
-                                } else if reviewState == .accepted {
-                                    Label("Target confirmed", systemImage: "checkmark.circle.fill")
-                                        .font(.footnote)
-                                        .foregroundStyle(.green)
-                                }
-                            } header: {
-                                Text("Target check")
-                            }
-
                             Section("Save Item") {
                                 TextField("Item name", text: $draftName)
                                 Stepper("Quantity: \(quantity)", value: $quantity, in: 1...99)
@@ -177,11 +155,7 @@ struct ScannerSheetView: View {
             ProgressView(ScannerActionCopy.preparingPreview)
                 .padding(.horizontal)
         case .measured where !reviewState.canSave:
-            if case .confirmTarget = reviewState {
-                measurementActionBar
-            } else {
-                retryActionBar
-            }
+            retryActionBar
         default:
             measurementActionBar
         }
@@ -216,7 +190,7 @@ struct ScannerSheetView: View {
                 .accessibilityHint(
                     reviewState.canSave
                         ? "Saves this measurement to the packing inventory"
-                        : "Confirm that the center dot stayed on a clear object face first"
+                        : "Retake the photo before saving this item"
                 )
             }
         }
@@ -266,23 +240,19 @@ struct ScannerSheetView: View {
     private var reviewState: ScannerCaptureReviewState {
         ScannerCapturePolicy.reviewState(
             phase: scannerState.phase,
-            estimate: scannerState.estimate,
-            targetConfirmed: targetConfirmed
+            estimate: scannerState.estimate
         )
     }
 
     private func prepareForAiming() {
-        targetConfirmed = false
         scannerState.prepareForAiming()
     }
 
     private func startMeasurement() {
-        targetConfirmed = false
         scannerState.startMeasurement()
     }
 
     private func requestCaptureAfterFailure() {
-        targetConfirmed = false
         scannerState.estimate = nil
         scannerState.captureRequestID += 1
     }
@@ -301,9 +271,7 @@ struct ScannerSheetView: View {
             }
             return switch reviewState {
             case .accepted:
-                "Target confirmed"
-            case .confirmTarget:
-                "Check the target before saving"
+                "Measurement ready"
             case .retryRequired:
                 "Try another scan"
             default:
@@ -376,7 +344,6 @@ private struct ObjectTargetGuide: View {
 enum ScannerCaptureReviewState: Equatable, Sendable {
     case waiting
     case capturing
-    case confirmTarget
     case accepted
     case retryRequired(String)
     case unavailable(String)
@@ -389,8 +356,7 @@ enum ScannerCaptureReviewState: Equatable, Sendable {
 enum ScannerCapturePolicy {
     static func reviewState(
         phase: ScannerPhase,
-        estimate: MeasurementEstimate?,
-        targetConfirmed: Bool
+        estimate: MeasurementEstimate?
     ) -> ScannerCaptureReviewState {
         switch phase {
         case .checkingSupport, .ready:
@@ -408,29 +374,23 @@ enum ScannerCapturePolicy {
             guard estimate.confidence != .low else {
                 return .retryRequired(ScannerGuidanceCopy.lowConfidenceRetry)
             }
-            return targetConfirmed ? .accepted : .confirmTarget
+            return .accepted
         }
     }
 }
 
 enum ScannerGuidanceCopy {
     static let previewTarget =
-        "Put center dot on a clear object face — keep floor and background outside the object"
+        "Keep one whole item inside the frame with a little space around it"
 
     static let setup =
-        "Stand at a 3/4 angle so the front, side, and top are visible. Put the whole object inside the yellow frame, place the center dot on a clear object face, and keep visible floor or background around the object's edges."
-
-    static let targetConfirmation =
-        "Center dot stayed on a clear object face"
-
-    static let targetConfirmationDetail =
-        "Confirm only if the yellow center dot was on the object—not the floor, wall, or background."
+        "Point the camera at one object so the whole item is visible with a little floor or background around its edges. Tap Take measurement to capture one frame and estimate its overall size."
 
     static let lowConfidenceRetry =
-        "This scan could not isolate a reliable object measurement. Keep the object inside the frame, put the center dot on a clear object face, and scan again."
+        "This photo produced a weak depth sample. Retake it with one whole object in frame and clearer separation from the room."
 
     static let missingEstimateRetry =
-        "No object measurement was produced. Keep the object inside the frame, put the center dot on a clear object face, and scan again."
+        "No usable object measurement was produced from this photo. Retake it with one whole object in frame."
 }
 
 enum ScannerResultCopy {
@@ -444,8 +404,8 @@ enum ScannerResultCopy {
 enum ScannerActionCopy {
     static let checkingSupport = "Checking LiDAR support…"
     static let measureAgain = "Measure again"
-    static let preparingPreview = "Starting live preview…"
-    static let startMeasurement = "Start measurement"
+    static let preparingPreview = "Returning to camera…"
+    static let startMeasurement = "Take measurement"
 }
 
 enum ScannerActionPolicy {

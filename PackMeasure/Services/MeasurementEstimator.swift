@@ -341,8 +341,8 @@ enum MeasurementEstimator {
         if case .rejected(let reason) = targetValidation {
             return .failure(.targetRejected(reason))
         }
-        guard frameCount >= 3 else {
-            return .failure(.insufficientFrames(actual: frameCount, minimum: 3))
+        guard frameCount >= 1 else {
+            return .failure(.insufficientFrames(actual: frameCount, minimum: 1))
         }
 
         let geometry: GravityAlignedBoundingBoxEstimate
