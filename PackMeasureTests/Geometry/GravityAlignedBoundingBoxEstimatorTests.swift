@@ -124,7 +124,7 @@ final class GravityAlignedBoundingBoxEstimatorTests: XCTestCase {
             XCTAssertThrowsError(try estimator.estimate(points: box + halo)) { error in
                 XCTAssertEqual(
                     error as? BoundingBoxEstimationError,
-                    .groundPlaneContamination
+                    .sceneContamination
                 )
             }
         }
