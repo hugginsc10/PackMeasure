@@ -4,6 +4,61 @@ import simd
 
 struct MeasurementEstimatorTests {
     @Test
+    func acceptsCenterSeedOnVerticalObjectFace() {
+        let sample = CenteredTargetSurfaceSample(
+            center: SIMD3<Float>(0, 0.50, -1),
+            left: SIMD3<Float>(-0.05, 0.50, -1),
+            right: SIMD3<Float>(0.05, 0.50, -1),
+            up: SIMD3<Float>(0, 0.55, -1),
+            down: SIMD3<Float>(0, 0.45, -1)
+        )
+
+        #expect(CenteredTargetValidator().validate(sample) == .valid)
+    }
+
+    @Test
+    func rejectsCenterSeedOnFloorSurface() {
+        let sample = CenteredTargetSurfaceSample(
+            center: SIMD3<Float>(0, 0, -1),
+            left: SIMD3<Float>(-0.05, 0, -1),
+            right: SIMD3<Float>(0.05, 0, -1),
+            up: SIMD3<Float>(0, 0, -1.05),
+            down: SIMD3<Float>(0, 0, -0.95)
+        )
+
+        #expect(
+            CenteredTargetValidator().validate(sample)
+                == .rejected(.horizontalSurface)
+        )
+    }
+
+    @Test
+    func invalidFloorTargetCannotReturnHighConfidenceMeasurement() throws {
+        let misleadingFloorRegion = boxSurfacePoints(
+            length: 2.1,
+            width: 1.6,
+            height: 0.12,
+            yaw: .pi / 14
+        )
+        let unvalidated = try #require(
+            MeasurementEstimator.estimate(
+                from: misleadingFloorRegion,
+                frameCount: 11
+            )
+        )
+        #expect(unvalidated.lengthMeters > 2)
+        #expect(unvalidated.confidence == .high)
+
+        let rejected = MeasurementEstimator.estimate(
+            from: misleadingFloorRegion,
+            frameCount: 11,
+            targetValidation: .rejected(.horizontalSurface)
+        )
+
+        #expect(rejected == nil)
+    }
+
+    @Test
     func mapsSharedGeometryEstimateWithoutRecomputingDimensions() throws {
         let points = boxSurfacePoints(
             length: 1.18,
