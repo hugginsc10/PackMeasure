@@ -306,13 +306,13 @@ final class PhotoObjectMeasurementTests: XCTestCase {
 
     private func lShapeMask(width: Int, height: Int) throws -> PhotoInstanceLabelMask {
         var labels = Array(repeating: UInt32(0), count: width * height)
-        for y in 3...8 {
-            for x in 3...4 {
+        for y in 3...9 {
+            for x in 3...5 {
                 labels[y * width + x] = 5
             }
         }
-        for y in 7...8 {
-            for x in 3...8 {
+        for y in 7...9 {
+            for x in 3...9 {
                 labels[y * width + x] = 5
             }
         }
