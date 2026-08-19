@@ -279,15 +279,51 @@ struct GravityAlignedBoundingBoxEstimator: Sendable {
 
         let baseArea = baseLength * baseWidth
         let bodyArea = bodyLength * bodyWidth
-        return baseLength > bodyLength * 1.20
+        let baseExpandsBeyondBody = baseLength > bodyLength * 1.20
             || baseWidth > bodyWidth * 1.20
             || baseArea > bodyArea * 1.30
+        if baseExpandsBeyondBody {
+            return true
+        }
+
+        // A floor joined to two room walls can make every vertical slice look
+        // equally large, bypassing the footprint comparison above. Unlike a
+        // closed box, that raised L-shaped corner has dense support at only one
+        // end of both horizontal axes. Require a floor-sized base so a partial
+        // but otherwise valid object view is not rejected for one hidden face.
+        let baseMatchesBody = baseLength >= bodyLength * 0.80
+            && baseWidth >= bodyWidth * 0.80
+        guard baseMatchesBody else {
+            return false
+        }
+
+        let firstBoundaryBalance = opposingBoundaryBalance(bodyFirst)
+        let secondBoundaryBalance = opposingBoundaryBalance(bodySecond)
+        return firstBoundaryBalance < 0.15 && secondBoundaryBalance < 0.15
     }
 
     private func centralSpan(_ values: [Double]) -> Double {
         let lower = quantile(values, at: configuration.trimmingFraction)
         let upper = quantile(values, at: 1 - configuration.trimmingFraction)
         return max(0, upper - lower)
+    }
+
+    private func opposingBoundaryBalance(_ values: [Double]) -> Double {
+        let lower = quantile(values, at: configuration.trimmingFraction)
+        let upper = quantile(values, at: 1 - configuration.trimmingFraction)
+        let span = max(0, upper - lower)
+        guard span >= configuration.minimumDimensionMeters else {
+            return 1
+        }
+
+        let boundaryBand = max(configuration.voxelSizeMeters * 2, span * 0.05)
+        let lowerSupport = values.count { $0 <= lower + boundaryBand }
+        let upperSupport = values.count { $0 >= upper - boundaryBand }
+        let strongerSupport = max(lowerSupport, upperSupport)
+        guard strongerSupport >= max(8, configuration.minimumPointCount) else {
+            return 1
+        }
+        return Double(min(lowerSupport, upperSupport)) / Double(strongerSupport)
     }
 
     private func recoverGroundContaminatedObject(
