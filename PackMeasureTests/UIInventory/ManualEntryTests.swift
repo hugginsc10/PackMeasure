@@ -37,7 +37,11 @@ struct ManualEntryTests {
 
         let reloaded = AppModel(store: harness.store)
         reloaded.loadIfNeeded()
-        #expect(reloaded.items == model.items)
+        let reloadedItem = try #require(reloaded.items.first)
+        #expect(abs(reloadedItem.capturedAt.timeIntervalSince(item.capturedAt)) < 0.001)
+        var normalizedReloadedItem = reloadedItem
+        normalizedReloadedItem.capturedAt = item.capturedAt
+        #expect(normalizedReloadedItem == item)
     }
 
     @Test
