@@ -5,8 +5,24 @@ struct ScannerSheetView: View {
     @Observable
     final class ScannerStateModel {
         var captureRequestID = 0
+        var previewRequestID = 0
         var phase: ScannerPhase = .checkingSupport
         var estimate: MeasurementEstimate?
+        private(set) var isPreparingForAiming = false
+
+        func prepareForAiming() {
+            guard phase == .measured, estimate != nil else { return }
+            estimate = nil
+            isPreparingForAiming = true
+            previewRequestID += 1
+        }
+
+        func startMeasurement() {
+            guard phase == .ready else { return }
+            estimate = nil
+            isPreparingForAiming = false
+            captureRequestID += 1
+        }
     }
 
     @Environment(AppModel.self) private var appModel
@@ -105,6 +121,12 @@ struct ScannerSheetView: View {
                         }
                     }
                     .frame(maxHeight: 360)
+                } else if scannerState.isPreparingForAiming {
+                    Text(ScannerGuidanceCopy.setup)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal)
+                        .multilineTextAlignment(.center)
                 } else if case let .retryRequired(message) = reviewState {
                     Label(message, systemImage: "exclamationmark.triangle.fill")
                         .font(.footnote)
@@ -147,6 +169,9 @@ struct ScannerSheetView: View {
             .buttonStyle(.borderedProminent)
         case .failed:
             retryActionBar
+        case .measured where scannerState.isPreparingForAiming:
+            ProgressView(ScannerActionCopy.preparingPreview)
+                .padding(.horizontal)
         case .measured where !reviewState.canSave:
             if case .confirmTarget = reviewState {
                 measurementActionBar
@@ -201,7 +226,11 @@ struct ScannerSheetView: View {
             .buttonStyle(.bordered)
 
             Button {
-                requestCapture()
+                if scannerState.estimate == nil {
+                    requestCaptureAfterFailure()
+                } else {
+                    prepareForAiming()
+                }
             } label: {
                 Label("Scan again", systemImage: "arrow.clockwise")
             }
@@ -211,10 +240,16 @@ struct ScannerSheetView: View {
 
     private var measureButton: some View {
         Button {
-            requestCapture()
+            if scannerState.estimate == nil {
+                startMeasurement()
+            } else {
+                prepareForAiming()
+            }
         } label: {
             Label(
-                scannerState.estimate == nil ? "Measure object" : "Measure again",
+                scannerState.estimate == nil
+                    ? ScannerActionCopy.startMeasurement
+                    : ScannerActionCopy.measureAgain,
                 systemImage: "camera.aperture"
             )
         }
@@ -228,7 +263,17 @@ struct ScannerSheetView: View {
         )
     }
 
-    private func requestCapture() {
+    private func prepareForAiming() {
+        targetConfirmed = false
+        scannerState.prepareForAiming()
+    }
+
+    private func startMeasurement() {
+        targetConfirmed = false
+        scannerState.startMeasurement()
+    }
+
+    private func requestCaptureAfterFailure() {
         targetConfirmed = false
         scannerState.estimate = nil
         scannerState.captureRequestID += 1
@@ -237,13 +282,16 @@ struct ScannerSheetView: View {
     private var statusText: String {
         switch scannerState.phase {
         case .checkingSupport:
-            "Checking LiDAR support..."
+            return "Checking LiDAR support..."
         case .ready:
-            "Ready to scan"
+            return "Ready to scan"
         case .scanning:
-            "Scanning..."
+            return "Scanning..."
         case .measured:
-            switch reviewState {
+            if scannerState.isPreparingForAiming {
+                return ScannerActionCopy.preparingPreview
+            }
+            return switch reviewState {
             case .accepted:
                 "Target confirmed"
             case .confirmTarget:
@@ -254,9 +302,9 @@ struct ScannerSheetView: View {
                 "Review measurement"
             }
         case .unsupported:
-            "LiDAR unavailable"
+            return "LiDAR unavailable"
         case .failed:
-            "Try another scan"
+            return "Try another scan"
         }
     }
 }
@@ -383,4 +431,10 @@ enum ScannerResultCopy {
     static func qualitySummary(for estimate: MeasurementEstimate) -> String {
         "\(estimate.confidence.title) point-cloud quality • \(estimate.sampleCount) points"
     }
+}
+
+enum ScannerActionCopy {
+    static let measureAgain = "Measure again"
+    static let preparingPreview = "Starting live preview…"
+    static let startMeasurement = "Start measurement"
 }
