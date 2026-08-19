@@ -37,18 +37,116 @@ struct MeasurementEstimatorTests {
     }
 
     @Test
-    func rejectsCenterSeedOnFloorSurface() {
+    func acceptsElevatedHorizontalBoxTopAboveObservedFloor() {
         let sample = CenteredTargetSurfaceSample(
-            center: SIMD3<Float>(0, 0, -1),
-            left: SIMD3<Float>(-0.05, 0, -1),
-            right: SIMD3<Float>(0.05, 0, -1),
-            up: SIMD3<Float>(0, 0, -1.05),
-            down: SIMD3<Float>(0, 0, -0.95)
+            center: SIMD3<Float>(0, 0.51, -1),
+            left: SIMD3<Float>(-0.05, 0.51, -1),
+            right: SIMD3<Float>(0.05, 0.51, -1),
+            up: SIMD3<Float>(0, 0.51, -1.05),
+            down: SIMD3<Float>(0, 0.51, -0.95)
+        )
+        let context = CenteredTargetContext(
+            floorEstimate: SceneFloorEstimate(y: 0, source: .peripheralDepth),
+            regionCoverage: 0.24,
+            regionTouchesImageEdge: false
         )
 
+        let assessment = CenteredTargetValidator().assess(sample, context: context)
+
+        #expect(assessment.validation == .valid)
+        #expect((assessment.elevationAboveFloorMeters ?? 0) > 0.5)
+        #expect(assessment.absoluteUpNormal > 0.95)
+    }
+
+    @Test
+    func acceptsCompactHorizontalTopWhenFloorIsNotObservable() {
+        let sample = CenteredTargetSurfaceSample(
+            center: SIMD3<Float>(0, 0.45, -0.8),
+            left: SIMD3<Float>(-0.04, 0.45, -0.8),
+            right: SIMD3<Float>(0.04, 0.45, -0.8),
+            up: SIMD3<Float>(0, 0.45, -0.84),
+            down: SIMD3<Float>(0, 0.45, -0.76)
+        )
+        let context = CenteredTargetContext(
+            floorEstimate: nil,
+            regionCoverage: 0.18,
+            regionTouchesImageEdge: false
+        )
+
+        #expect(CenteredTargetValidator().validate(sample, context: context) == .valid)
+    }
+
+    @Test
+    func rejectsBroadHorizontalSeedAtObservedFloorHeight() {
+        let sample = CenteredTargetSurfaceSample(
+            center: SIMD3<Float>(0, 0.01, -1),
+            left: SIMD3<Float>(-0.05, 0.01, -1),
+            right: SIMD3<Float>(0.05, 0.01, -1),
+            up: SIMD3<Float>(0, 0.01, -1.05),
+            down: SIMD3<Float>(0, 0.01, -0.95)
+        )
+        let context = CenteredTargetContext(
+            floorEstimate: SceneFloorEstimate(y: 0, source: .peripheralDepth),
+            regionCoverage: 0.68,
+            regionTouchesImageEdge: true
+        )
+
+        let assessment = CenteredTargetValidator().assess(sample, context: context)
+
+        #expect(assessment.validation == .rejected(.floorSurface))
+        #expect(abs(assessment.elevationAboveFloorMeters ?? 1) < 0.02)
+        #expect(assessment.absoluteUpNormal > 0.95)
+    }
+
+    @Test
+    func peripheralDepthFindsLowestDenseFloorBandAmidClutter() throws {
+        var points: [SIMD3<Float>] = []
+        for index in 0..<90 {
+            let noise = Float((index % 5) - 2) * 0.002
+            points.append(SIMD3<Float>(Float(index) * 0.01, noise, -1))
+        }
+        for index in 0..<45 {
+            points.append(SIMD3<Float>(0.4, 0.08 + Float(index) * 0.02, -1.4))
+        }
+        for index in 0..<35 {
+            points.append(SIMD3<Float>(Float(index) * 0.01, 0.52, -0.9))
+        }
+
+        let estimate = try #require(PeripheralFloorEstimator().estimate(from: points))
+
+        #expect(abs(estimate.y) < 0.02)
+        #expect(estimate.source == .peripheralDepth)
+    }
+
+    @Test
+    func measurementOutcomePreservesTargetRejectionReason() {
+        let points = boxSurfacePoints(
+            length: 0.8,
+            width: 0.5,
+            height: 0.6,
+            yaw: 0
+        )
+
+        let outcome = MeasurementEstimator.outcome(
+            from: points,
+            frameCount: 10,
+            targetValidation: .rejected(.floorSurface)
+        )
+
+        #expect(outcome == .failure(.targetRejected(.floorSurface)))
+    }
+
+    @Test
+    func measurementOutcomePreservesGeometryFailureReason() {
+        let points = Array(repeating: SIMD3<Float>(0, 0, -1), count: 24)
+
+        let outcome = MeasurementEstimator.outcome(from: points, frameCount: 3)
+
         #expect(
-            CenteredTargetValidator().validate(sample)
-                == .rejected(.horizontalSurface)
+            outcome
+                == .failure(
+                    .geometry(.insufficientUniquePoints(actual: 1, minimum: 8))
+                )
         )
     }
 
@@ -72,7 +170,7 @@ struct MeasurementEstimatorTests {
         let rejected = MeasurementEstimator.estimate(
             from: misleadingFloorRegion,
             frameCount: 11,
-            targetValidation: .rejected(.horizontalSurface)
+            targetValidation: .rejected(.floorSurface)
         )
 
         #expect(rejected == nil)
