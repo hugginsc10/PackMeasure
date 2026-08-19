@@ -2,6 +2,7 @@ import SwiftUI
 
 struct HomeView: View {
     @Environment(AppModel.self) private var appModel
+    @State private var manualEntryPresented = false
 
     var body: some View {
         NavigationStack {
@@ -14,10 +15,14 @@ struct HomeView: View {
             }
             .navigationTitle("PackMeasure")
             .safeAreaInset(edge: .bottom) {
-                scanButton
+                entryActions
             }
             .sheet(isPresented: scannerPresented) {
                 ScannerSheetView()
+                    .environment(appModel)
+            }
+            .sheet(isPresented: $manualEntryPresented) {
+                ManualEntryView()
                     .environment(appModel)
             }
             .alert(
@@ -113,9 +118,9 @@ struct HomeView: View {
         Section("Recommended vehicle") {
             if appModel.items.isEmpty {
                 ContentUnavailableView(
-                    "Scan your first item",
-                    systemImage: "camera.viewfinder",
-                    description: Text("Dimensions and quantity will build your truck or van estimate.")
+                    "Add your first item",
+                    systemImage: "shippingbox",
+                    description: Text("Scan it or enter its dimensions to build your truck or van estimate.")
                 )
             } else if let vehicle = recommendation.vehicle {
                 VehicleRecommendationView(
@@ -148,7 +153,7 @@ struct HomeView: View {
     private var inventorySection: some View {
         Section("Saved items") {
             if appModel.items.isEmpty {
-                Text("Nothing saved yet. Measure each box, piece of furniture, or loose object you plan to move.")
+                Text("Nothing saved yet. Scan or enter each box, piece of furniture, or loose object you plan to move.")
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(appModel.items) { item in
@@ -176,21 +181,34 @@ struct HomeView: View {
         }
     }
 
-    private var scanButton: some View {
-        Button {
-            appModel.showingScanner = true
-        } label: {
-            Label("Scan an item", systemImage: "camera.viewfinder")
-                .font(.headline)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 4)
+    private var entryActions: some View {
+        VStack(spacing: 8) {
+            Button {
+                appModel.showingScanner = true
+            } label: {
+                Label("Scan an item", systemImage: "camera.viewfinder")
+                    .font(.headline)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 4)
+            }
+            .buttonStyle(.borderedProminent)
+            .accessibilityHint("Opens the LiDAR camera to measure a box or object")
+
+            Button {
+                manualEntryPresented = true
+            } label: {
+                Label("Enter dimensions", systemImage: "ruler")
+                    .font(.headline)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 2)
+            }
+            .buttonStyle(.bordered)
+            .accessibilityHint("Opens a form to type an item's dimensions in inches")
         }
-        .buttonStyle(.borderedProminent)
         .controlSize(.large)
         .padding(.horizontal)
         .padding(.vertical, 8)
         .background(.bar)
-        .accessibilityHint("Opens the LiDAR camera to measure a box or object")
     }
 
     private var allowancePercent: Int {
