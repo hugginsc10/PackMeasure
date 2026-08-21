@@ -13,11 +13,13 @@
 		30BBD6FD335F3F0136F0B5BE /* GravityAlignedBoundingBoxEstimatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01DA76636D28E2A195DBE9FC /* GravityAlignedBoundingBoxEstimatorTests.swift */; };
 		36DBA15AB0F050325DAEABCF /* DepthRegionSegmenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFE446F73A1491E55F2738CE /* DepthRegionSegmenter.swift */; };
 		3D0B36D28510CAD37D056EE5 /* PackMeasureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A95C05B5C8AAFBFBE93F5F88 /* PackMeasureTests.swift */; };
+		42AD551A4A6F786DDA2A25F6 /* PhotoObjectMeasurementTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53B7914EAEB1EDE13DA87022 /* PhotoObjectMeasurementTests.swift */; };
 		505B39CB31D0CC5449424178 /* ScannerSheetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84DFB60E2C6A4BA85E8C1AA0 /* ScannerSheetView.swift */; };
 		5108F38EA742072EDA5538BB /* MeasurementMath.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A6E5BC93C71F94AB333A1BF /* MeasurementMath.swift */; };
 		53E91AADA18D60E722530171 /* PackingPlanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACE91F472F72AC07FEC8432F /* PackingPlanner.swift */; };
 		5E0B34A313A28EA94D945649 /* ScannerCapturePolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87791FBEF3FF3863B53EF421 /* ScannerCapturePolicyTests.swift */; };
 		5E9AA3639748D36667D1C43C /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CF21F67461D439CFC0A0C93 /* AppModel.swift */; };
+		5F68845EACD6F3268807135E /* PhotoObjectMeasurement.swift in Sources */ = {isa = PBXBuildFile; fileRef = 790431810A5597537D5F330C /* PhotoObjectMeasurement.swift */; };
 		63ED8F2D2AA20E138544E34C /* AppModelInventoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1B053787D5054BAAEE243C1 /* AppModelInventoryTests.swift */; };
 		649D27BD2AC2B2A76BE517DC /* GuidedBoxWorkflow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C32970059157769F21557D7 /* GuidedBoxWorkflow.swift */; };
 		6F4851E6263801CC3EE55EB6 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B55DECA1C7432025218A0B8B /* Assets.xcassets */; };
@@ -26,7 +28,9 @@
 		91AD755F1BCD2E4F9302040A /* GuidedBoxMeasurement.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6C55F1052A5849E765D593B /* GuidedBoxMeasurement.swift */; };
 		9ACAC0C2DE532E56CF9C8912 /* PackMeasureApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D518452488C8F3B0C8FACA8 /* PackMeasureApp.swift */; };
 		9BEDDCCAB0B572616A1BE54E /* ManualEntryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96CE46D4CD43343EBB49FF22 /* ManualEntryTests.swift */; };
+		9C825739E009739E0C6D92F7 /* SingleShotObjectMeasurementTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35CC0B9C38D98D8F0A49EDD3 /* SingleShotObjectMeasurementTests.swift */; };
 		9D2E80DD19A13FA9C3143DC2 /* GuidedBoxWorkflowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1AA05B83704FCB14040623FB /* GuidedBoxWorkflowTests.swift */; };
+		AFA54B21D376DF7B453E6AA6 /* SingleShotObjectMeasurement.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA64797949F43B846C4EDD69 /* SingleShotObjectMeasurement.swift */; };
 		B39AADAB17187469145C4D4A /* GeometryModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E7680F43D417158C818E786 /* GeometryModels.swift */; };
 		B4AD52C415CCBB88280E366C /* GravityAlignedBoundingBoxEstimator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 217FC74C59206B041DFB1042 /* GravityAlignedBoundingBoxEstimator.swift */; };
 		C65D41867508C7250DFFCF99 /* RootPlaceholderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9E081672C02985D42710156 /* RootPlaceholderView.swift */; };
@@ -56,11 +60,13 @@
 		0CF21F67461D439CFC0A0C93 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
 		1AA05B83704FCB14040623FB /* GuidedBoxWorkflowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuidedBoxWorkflowTests.swift; sourceTree = "<group>"; };
 		217FC74C59206B041DFB1042 /* GravityAlignedBoundingBoxEstimator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GravityAlignedBoundingBoxEstimator.swift; sourceTree = "<group>"; };
+		35CC0B9C38D98D8F0A49EDD3 /* SingleShotObjectMeasurementTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SingleShotObjectMeasurementTests.swift; sourceTree = "<group>"; };
 		3D4A5310F76E7632DEA4C529 /* ManualEntryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ManualEntryView.swift; sourceTree = "<group>"; };
 		3E719F590D3FE9941D195518 /* PackingPlannerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PackingPlannerTests.swift; sourceTree = "<group>"; };
 		4D518452488C8F3B0C8FACA8 /* PackMeasureApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PackMeasureApp.swift; sourceTree = "<group>"; };
 		50D2EE7F2FC2C52291CB68A3 /* InventoryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InventoryStore.swift; sourceTree = "<group>"; };
 		52BB0CB149BC91BF0DCF45E5 /* PackMeasure.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = PackMeasure.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		53B7914EAEB1EDE13DA87022 /* PhotoObjectMeasurementTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoObjectMeasurementTests.swift; sourceTree = "<group>"; };
 		5A6E5BC93C71F94AB333A1BF /* MeasurementMath.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeasurementMath.swift; sourceTree = "<group>"; };
 		5E7680F43D417158C818E786 /* GeometryModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GeometryModels.swift; sourceTree = "<group>"; };
 		5ED8ABA37AF0157830862257 /* PackMeasureTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = PackMeasureTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -68,6 +74,7 @@
 		6E12DBF221D2E3F67479FE70 /* PackingModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PackingModels.swift; sourceTree = "<group>"; };
 		720B306F033EEFA5D3D7BADE /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		77EE721A9A7420432B19066B /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
+		790431810A5597537D5F330C /* PhotoObjectMeasurement.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoObjectMeasurement.swift; sourceTree = "<group>"; };
 		84DFB60E2C6A4BA85E8C1AA0 /* ScannerSheetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScannerSheetView.swift; sourceTree = "<group>"; };
 		87791FBEF3FF3863B53EF421 /* ScannerCapturePolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScannerCapturePolicyTests.swift; sourceTree = "<group>"; };
 		96CE46D4CD43343EBB49FF22 /* ManualEntryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ManualEntryTests.swift; sourceTree = "<group>"; };
@@ -82,6 +89,7 @@
 		CED5108414CFCAEB40DF57B3 /* MeasuredItem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeasuredItem.swift; sourceTree = "<group>"; };
 		D1FDBE8DEE3F3C0C88A2B2D8 /* MeasurementEstimator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeasurementEstimator.swift; sourceTree = "<group>"; };
 		D6C55F1052A5849E765D593B /* GuidedBoxMeasurement.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuidedBoxMeasurement.swift; sourceTree = "<group>"; };
+		DA64797949F43B846C4EDD69 /* SingleShotObjectMeasurement.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SingleShotObjectMeasurement.swift; sourceTree = "<group>"; };
 		F1B053787D5054BAAEE243C1 /* AppModelInventoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModelInventoryTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -92,6 +100,8 @@
 				AFE446F73A1491E55F2738CE /* DepthRegionSegmenter.swift */,
 				D6C55F1052A5849E765D593B /* GuidedBoxMeasurement.swift */,
 				6C32970059157769F21557D7 /* GuidedBoxWorkflow.swift */,
+				790431810A5597537D5F330C /* PhotoObjectMeasurement.swift */,
+				DA64797949F43B846C4EDD69 /* SingleShotObjectMeasurement.swift */,
 			);
 			path = Scan;
 			sourceTree = "<group>";
@@ -121,6 +131,8 @@
 				C14B613C8CDA24C77CB2EDC9 /* DepthRegionSegmenterTests.swift */,
 				AE9A446CAB13BE0B780048E1 /* GuidedBoxMeasurementTests.swift */,
 				1AA05B83704FCB14040623FB /* GuidedBoxWorkflowTests.swift */,
+				53B7914EAEB1EDE13DA87022 /* PhotoObjectMeasurementTests.swift */,
+				35CC0B9C38D98D8F0A49EDD3 /* SingleShotObjectMeasurementTests.swift */,
 			);
 			path = Scan;
 			sourceTree = "<group>";
@@ -362,8 +374,10 @@
 				F78E0F38BDC44E3CBE11ABC5 /* PackingModels.swift in Sources */,
 				53E91AADA18D60E722530171 /* PackingPlanner.swift in Sources */,
 				DFC589F73318DFDF2A834553 /* PackingVehicles.swift in Sources */,
+				5F68845EACD6F3268807135E /* PhotoObjectMeasurement.swift in Sources */,
 				C65D41867508C7250DFFCF99 /* RootPlaceholderView.swift in Sources */,
 				505B39CB31D0CC5449424178 /* ScannerSheetView.swift in Sources */,
+				AFA54B21D376DF7B453E6AA6 /* SingleShotObjectMeasurement.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -380,7 +394,9 @@
 				09B7FEF948AAD6D288F89342 /* MeasurementEstimatorTests.swift in Sources */,
 				3D0B36D28510CAD37D056EE5 /* PackMeasureTests.swift in Sources */,
 				E481A09E4252F3209E588661 /* PackingPlannerTests.swift in Sources */,
+				42AD551A4A6F786DDA2A25F6 /* PhotoObjectMeasurementTests.swift in Sources */,
 				5E0B34A313A28EA94D945649 /* ScannerCapturePolicyTests.swift in Sources */,
+				9C825739E009739E0C6D92F7 /* SingleShotObjectMeasurementTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -468,7 +484,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 7;
+				CURRENT_PROJECT_VERSION = 8;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -481,7 +497,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
-				MARKETING_VERSION = 0.1.6;
+				MARKETING_VERSION = 0.2.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -561,7 +577,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 7;
+				CURRENT_PROJECT_VERSION = 8;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
@@ -580,7 +596,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
-				MARKETING_VERSION = 0.1.6;
+				MARKETING_VERSION = 0.2.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;

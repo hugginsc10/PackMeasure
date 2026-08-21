@@ -18,16 +18,25 @@ loading decisions.
 
 1. Put one item in view with visible separation from the background.
 2. Stand at a three-quarter angle so the front, side, and top are visible.
-3. Keep the center reticle on the item and tap **Start measurement**.
-4. Hold still for the one-second depth capture.
-5. Review the estimated length, width, height, and point-cloud quality.
-6. Set quantity, stacking, and whether the item may safely turn on its side,
+3. Keep the whole item inside the guide and tap **Take photo**.
+4. Keep the item still, move at least 25 degrees around it, and capture the
+   requested second angle. PackMeasure verifies the camera movement from the
+   same AR session instead of counting another photo from the same spot.
+5. If the raw dimensions disagree, capture one final distinct angle. The app
+   accepts a result only when one whole pair agrees across long side, short
+   side, and gravity-aligned height.
+6. Review the approximate multi-angle dimensions. For a two-photo agreement,
+   the larger supported value on each axis is retained; a materially larger
+   discordant third result blocks saving instead of being discarded.
+7. Set quantity, stacking, and whether the item may safely turn on its side,
    then save it.
 
-Retake low-confidence scans. Clear, matte boxes with visible edges produce the
-best first-pass measurements. Glass, mirrors, shiny metal, thin objects, heavy
-occlusion, and items touching a similarly deep background can be harder for
-LiDAR to isolate.
+PackMeasure compares raw meter values, not the rounded inches shown in the UI.
+Agreement improves repeatability but does not prove ground-truth accuracy;
+verify tight clearances separately. Clear, matte boxes with visible edges
+produce the best first-pass measurements. Glass, mirrors, shiny metal, thin
+objects, heavy occlusion, and items touching a similarly deep background can
+be harder for LiDAR to isolate.
 
 ## Understand the plan
 

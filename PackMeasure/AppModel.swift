@@ -42,6 +42,8 @@ final class AppModel {
                 heightMeters: estimate.heightMeters,
                 quantity: max(1, quantity),
                 confidence: estimate.confidence,
+                comparisonAngleCount: estimate.comparisonAngleCount,
+                comparisonAgreementCount: estimate.comparisonAgreementCount,
                 stackability: stackability,
                 orientationPolicy: orientationPolicy
             )

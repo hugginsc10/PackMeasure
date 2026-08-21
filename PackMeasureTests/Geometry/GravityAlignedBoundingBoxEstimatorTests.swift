@@ -187,6 +187,29 @@ final class GravityAlignedBoundingBoxEstimatorTests: XCTestCase {
         XCTAssertEqual(inches.height, 20, accuracy: 0.5)
     }
 
+    func testMeasuresRoundedCarryOnAsItsOuterPackingEnvelope() throws {
+        // Representative compact carry-on exterior dimensions, including wheels.
+        let outerLength: Float = 0.36576 // 14.4 inches
+        let outerWidth: Float = 0.22860 // 9 inches
+        let outerHeight: Float = 0.55118 // 21.7 inches
+        let points = roundedCarryOnSurfacePoints(
+            length: outerLength,
+            width: outerWidth,
+            height: outerHeight,
+            cornerRadius: 0.0381, // 1.5-inch shell radius
+            wheelHeight: 0.0381,
+            yaw: 0.37,
+            center: SIMD3<Float>(0.12, outerHeight / 2, -0.24)
+        )
+
+        let estimate = try estimator.estimate(points: points)
+        let inches = estimate.dimensions.converted(to: .inches)
+
+        XCTAssertEqual(inches.length, 14.4, accuracy: 0.5)
+        XCTAssertEqual(inches.width, 9.0, accuracy: 0.5)
+        XCTAssertEqual(inches.height, 21.7, accuracy: 0.5)
+    }
+
     func testKeepsDensePartialBoxDimensionsConservative() throws {
         let points = partialBoxPoints(
             length: 0.6096,
@@ -596,6 +619,87 @@ final class GravityAlignedBoundingBoxEstimatorTests: XCTestCase {
                 ))
             }
         }
+        return points
+    }
+
+    private func roundedCarryOnSurfacePoints(
+        length: Float,
+        width: Float,
+        height: Float,
+        cornerRadius: Float,
+        wheelHeight: Float,
+        yaw: Float,
+        center: SIMD3<Float>
+    ) -> [SIMD3<Float>] {
+        let shellBottom = -height / 2 + wheelHeight
+        let shellTop = height / 2
+        let straightHalfLength = length / 2 - cornerRadius
+        let straightHalfWidth = width / 2 - cornerRadius
+        let cornerCenters: [(Float, Float, Float)] = [
+            (straightHalfLength, straightHalfWidth, 0),
+            (-straightHalfLength, straightHalfWidth, .pi / 2),
+            (-straightHalfLength, -straightHalfWidth, .pi),
+            (straightHalfLength, -straightHalfWidth, 3 * .pi / 2),
+        ]
+        let boundary = cornerCenters.flatMap { centerX, centerZ, startAngle in
+            (0...12).map { index in
+                let angle = startAngle + Float(index) * (.pi / 2) / 12
+                return (
+                    centerX + cornerRadius * cos(angle),
+                    centerZ + cornerRadius * sin(angle)
+                )
+            }
+        }
+
+        var points: [SIMD3<Float>] = []
+        for heightIndex in 0...18 {
+            let ratio = Float(heightIndex) / 18
+            let localY = shellBottom + (shellTop - shellBottom) * ratio
+            points.append(contentsOf: boundary.map { localX, localZ in
+                worldPoint(localX, localZ, localY, yaw, center)
+            })
+        }
+
+        // A visible top surface supplies the complete rounded footprint from a
+        // normal elevated 3/4 photo instead of assuming hidden rear geometry.
+        for lengthIndex in 0...20 {
+            let localX = -length / 2 + length * Float(lengthIndex) / 20
+            for widthIndex in 0...14 {
+                let localZ = -width / 2 + width * Float(widthIndex) / 14
+                let overflowX = max(0, abs(localX) - straightHalfLength)
+                let overflowZ = max(0, abs(localZ) - straightHalfWidth)
+                if overflowX * overflowX + overflowZ * overflowZ
+                    <= cornerRadius * cornerRadius {
+                    points.append(worldPoint(localX, localZ, shellTop, yaw, center))
+                }
+            }
+        }
+
+        // Four sparse wheel clusters establish the real lower envelope. They
+        // stay inside the shell footprint but extend its total height.
+        let wheelCenters: [(Float, Float)] = [
+            (straightHalfLength, straightHalfWidth),
+            (-straightHalfLength, straightHalfWidth),
+            (-straightHalfLength, -straightHalfWidth),
+            (straightHalfLength, -straightHalfWidth),
+        ]
+        for (wheelX, wheelZ) in wheelCenters {
+            for heightIndex in 0...4 {
+                let localY = -height / 2 + wheelHeight * Float(heightIndex) / 4
+                for angleIndex in 0..<8 {
+                    let angle = 2 * Float.pi * Float(angleIndex) / 8
+                    let radius = min(0.012, cornerRadius / 3)
+                    points.append(worldPoint(
+                        wheelX + radius * cos(angle),
+                        wheelZ + radius * sin(angle),
+                        localY,
+                        yaw,
+                        center
+                    ))
+                }
+            }
+        }
+
         return points
     }
 

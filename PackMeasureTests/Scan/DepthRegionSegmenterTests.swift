@@ -27,6 +27,45 @@ final class DepthRegionSegmenterTests: XCTestCase {
         XCTAssertEqual(region.pixelCount, 77)
     }
 
+    func testSegmentsRoundedSlopedSuitcaseAndExcludesFartherFloorAndBackground() throws {
+        let width = 21
+        let height = 17
+        var grid = DepthGrid.fixture(width: width, height: height, depth: 3.4)
+        grid.fill(x: 0...(width - 1), y: 14...16, depth: 2.45, confidence: 2)
+
+        let silhouette: [Int: ClosedRange<Int>] = [
+            3: 8...12,
+            4: 6...14,
+            5: 5...15,
+            6: 4...16,
+            7: 4...16,
+            8: 4...16,
+            9: 4...16,
+            10: 4...16,
+            11: 4...16,
+            12: 5...15,
+            13: 6...14,
+        ]
+        var expectedIndices = Set<Int>()
+        for (y, xRange) in silhouette {
+            for x in xRange {
+                let slopedDepth = 1.12
+                    + Float(abs(x - width / 2)) * 0.035
+                    + Float(abs(y - height / 2)) * 0.008
+                grid.set(x: x, y: y, depth: slopedDepth, confidence: 2)
+                expectedIndices.insert(y * width + x)
+            }
+        }
+
+        let region = try XCTUnwrap(DepthRegionSegmenter().segment(grid))
+
+        XCTAssertEqual(Set(region.indices), expectedIndices)
+        XCTAssertEqual(region.bounds, PixelBounds(minX: 4, minY: 3, maxX: 16, maxY: 13))
+        XCTAssertTrue(region.contains(x: 10, y: 8, gridWidth: width))
+        XCTAssertFalse(region.contains(x: 3, y: 8, gridWidth: width))
+        XCTAssertFalse(region.contains(x: 10, y: 14, gridWidth: width))
+    }
+
     func testExcludesLowConfidencePixelsEvenWhenDepthMatches() throws {
         var grid = DepthGrid.fixture(width: 13, height: 13, depth: 4.0)
         grid.fill(x: 3...9, y: 3...9, depth: 1.0, confidence: 2)
