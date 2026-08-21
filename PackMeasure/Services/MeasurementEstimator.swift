@@ -315,18 +315,384 @@ enum MeasurementEstimationOutcome: Equatable, Sendable {
     case failure(MeasurementEstimationFailure)
 }
 
+struct MeasurementCaptureEvidence: Equatable, Sendable {
+    let estimate: MeasurementEstimate
+    let pointCloudConfidence: ScanConfidence
+    let geometryCenter: SIMD3<Float>
+}
+
+enum MeasurementCaptureEvidenceOutcome: Equatable, Sendable {
+    case success(MeasurementCaptureEvidence)
+    case failure(MeasurementEstimationFailure)
+}
+
+enum MeasurementCompletenessEvidence: Equatable, Sendable {
+    case singleView
+    case independentViewpoints
+}
+
+/// Keeps point-cloud density separate from viewpoint completeness. One or more
+/// frames from the same pose can produce a dense, internally consistent cloud
+/// while still hiding a physical endpoint (for example, suitcase wheels).
+struct MeasurementCompletenessPolicy: Equatable, Sendable {
+    func reportedConfidence(
+        pointCloudConfidence: ScanConfidence,
+        evidence: MeasurementCompletenessEvidence
+    ) -> ScanConfidence {
+        guard evidence != .independentViewpoints,
+              pointCloudConfidence == .high else {
+            return pointCloudConfidence
+        }
+        return .medium
+    }
+}
+
+struct MeasurementCameraViewpoint: Equatable, Sendable {
+    let position: SIMD3<Float>
+}
+
+struct MeasurementAngleCapture: Equatable, Sendable {
+    let evidence: MeasurementCaptureEvidence
+    let viewpoint: MeasurementCameraViewpoint
+}
+
+enum MeasurementViewpointValidation: Equatable, Sendable {
+    case distinct
+    case tooSimilar
+    case targetMoved
+}
+
+/// Proves that two captures came from meaningfully different positions around
+/// the same stationary target. Tilting in place, stepping straight toward the
+/// item, or moving only vertically does not count as a second viewpoint.
+struct MeasurementViewpointPolicy: Equatable, Sendable {
+    var minimumHorizontalBaselineMeters: Float = 0.15
+    var minimumOrbitAngleRadians: Float = .pi * 25 / 180
+    var minimumTargetCenterToleranceMeters: Float = 0.03
+    // A view can miss one physical endpoint and shift the fitted bounding-box
+    // center by half of that missing extent. Six centimeters admits the
+    // observed 18-to-22-inch suitcase height pair (5.08 cm center shift)
+    // without returning to the previous 10 cm movement allowance.
+    var maximumTargetCenterToleranceMeters: Float = 0.06
+    var relativeTargetCenterTolerance: Float = 0.10
+
+    func validate(
+        _ candidate: MeasurementAngleCapture,
+        against reference: MeasurementAngleCapture
+    ) -> MeasurementViewpointValidation {
+        let candidateCenter = candidate.evidence.geometryCenter
+        let referenceCenter = reference.evidence.geometryCenter
+        guard candidateCenter.allFinite,
+              referenceCenter.allFinite,
+              candidate.viewpoint.position.allFinite,
+              reference.viewpoint.position.allFinite else {
+            return .targetMoved
+        }
+
+        let longestDimension = Float(
+            max(
+                candidate.evidence.estimate.longestDimensionMeters,
+                reference.evidence.estimate.longestDimensionMeters
+            )
+        )
+        let centerTolerance = min(
+            maximumTargetCenterToleranceMeters,
+            max(
+                minimumTargetCenterToleranceMeters,
+                relativeTargetCenterTolerance * longestDimension
+            )
+        )
+        guard simd_distance(candidateCenter, referenceCenter) <= centerTolerance else {
+            return .targetMoved
+        }
+
+        let candidatePosition = candidate.viewpoint.position.horizontalXZ
+        let referencePosition = reference.viewpoint.position.horizontalXZ
+        guard simd_distance(candidatePosition, referencePosition)
+            >= minimumHorizontalBaselineMeters else {
+            return .tooSimilar
+        }
+
+        let sharedCenter = ((candidateCenter + referenceCenter) * 0.5).horizontalXZ
+        let candidateBearing = candidatePosition - sharedCenter
+        let referenceBearing = referencePosition - sharedCenter
+        let candidateDistance = simd_length(candidateBearing)
+        let referenceDistance = simd_length(referenceBearing)
+        guard candidateDistance > 0.0001, referenceDistance > 0.0001 else {
+            return .tooSimilar
+        }
+
+        let cosine = simd_dot(
+            candidateBearing / candidateDistance,
+            referenceBearing / referenceDistance
+        )
+        let orbitAngle = acos(max(-1, min(1, cosine)))
+        return orbitAngle >= minimumOrbitAngleRadians ? .distinct : .tooSimilar
+    }
+}
+
+enum MeasurementAdditionalAngleReason: Equatable, Sendable {
+    case firstAngleCaptured
+    case viewpointTooSimilar
+    case dimensionsDisagree
+}
+
+enum MeasurementConsensusFailure: Equatable, Sendable {
+    case targetMoved
+    case dimensionsInconsistent
+    case invalidMeasurement
+}
+
+enum MultiAngleMeasurementProgress: Equatable, Sendable {
+    case awaitingFirstAngle
+    case needsAnotherAngle(reason: MeasurementAdditionalAngleReason, acceptedCount: Int)
+    case accepted(MeasurementEstimate)
+    case inconsistent(MeasurementConsensusFailure)
+
+    var diagnosticDescription: String {
+        switch self {
+        case .awaitingFirstAngle:
+            "awaiting_first_angle"
+        case .needsAnotherAngle(.firstAngleCaptured, let count):
+            "needs_second_angle,accepted_count=\(count)"
+        case .needsAnotherAngle(.viewpointTooSimilar, let count):
+            "viewpoint_too_similar,accepted_count=\(count)"
+        case .needsAnotherAngle(.dimensionsDisagree, let count):
+            "dimensions_disagree,accepted_count=\(count)"
+        case .accepted(let estimate):
+            "accepted,agreement_count=\(estimate.comparisonAgreementCount ?? 0),angle_count=\(estimate.comparisonAngleCount ?? 0)"
+        case .inconsistent(.targetMoved):
+            "inconsistent,target_moved"
+        case .inconsistent(.dimensionsInconsistent):
+            "inconsistent,dimensions"
+        case .inconsistent(.invalidMeasurement):
+            "inconsistent,invalid_measurement"
+        }
+    }
+}
+
+struct MultiAngleMeasurementConsensusPolicy: Equatable, Sendable {
+    var maximumAxisDifferenceMeters = 0.0381
+    var maximumRelativeAxisDifference = 0.15
+    var maximumVolumeRatio = 1.20
+
+    func measurementsAgree(
+        _ first: MeasurementCaptureEvidence,
+        _ second: MeasurementCaptureEvidence
+    ) -> Bool {
+        let firstDimensions = first.estimate.normalizedDimensions
+        let secondDimensions = second.estimate.normalizedDimensions
+        let axesAgree = zip(firstDimensions, secondDimensions)
+            .allSatisfy(axisValuesAgree)
+        guard axesAgree else { return false }
+
+        let firstVolume = firstDimensions.reduce(1, *)
+        let secondVolume = secondDimensions.reduce(1, *)
+        let smallerVolume = min(firstVolume, secondVolume)
+        guard smallerVolume > 0 else { return false }
+        return max(firstVolume, secondVolume) / smallerVolume <= maximumVolumeRatio
+    }
+
+    func consensusEstimate(
+        from captures: [MeasurementAngleCapture],
+        totalAngleCount: Int? = nil
+    ) -> MeasurementEstimate? {
+        guard captures.count == 2 || captures.count == 3,
+              captures.allSatisfy({ $0.evidence.estimate.hasValidDimensions }) else {
+            return nil
+        }
+
+        let dimensionRows = captures.map(\.evidence.estimate.normalizedDimensions)
+        let consensusDimensions = (0..<3).map { axis in
+            dimensionRows.map { $0[axis] }.max() ?? 0
+        }
+        let pointCloudConfidence = captures
+            .map(\.evidence.pointCloudConfidence)
+            .min(by: { $0.rank < $1.rank }) ?? .low
+        let reportedConfidence = MeasurementCompletenessPolicy().reportedConfidence(
+            pointCloudConfidence: pointCloudConfidence,
+            evidence: .independentViewpoints
+        )
+        let sampleCount = captures.reduce(into: 0) { total, capture in
+            let (sum, overflow) = total.addingReportingOverflow(
+                capture.evidence.estimate.sampleCount
+            )
+            total = overflow ? .max : sum
+        }
+
+        return MeasurementEstimate(
+            lengthMeters: consensusDimensions[0],
+            widthMeters: consensusDimensions[1],
+            heightMeters: consensusDimensions[2],
+            confidence: reportedConfidence,
+            sampleCount: sampleCount,
+            frameCount: captures.count,
+            comparisonAngleCount: totalAngleCount ?? captures.count,
+            comparisonAgreementCount: captures.count
+        )
+    }
+
+    func isMateriallyLarger(
+        _ candidate: MeasurementCaptureEvidence,
+        than consensus: MeasurementEstimate
+    ) -> Bool {
+        let candidateDimensions = candidate.estimate.normalizedDimensions
+        let consensusDimensions = consensus.normalizedDimensions
+        if zip(candidateDimensions, consensusDimensions).contains(where: {
+            candidateAxis, consensusAxis in
+            candidateAxis > consensusAxis
+                && !axisValuesAgree(candidateAxis, consensusAxis)
+        }) {
+            return true
+        }
+
+        let candidateVolume = candidateDimensions.reduce(1, *)
+        let consensusVolume = consensusDimensions.reduce(1, *)
+        return candidateVolume > consensusVolume * maximumVolumeRatio
+    }
+
+    private func axisValuesAgree(_ first: Double, _ second: Double) -> Bool {
+        let maximum = max(first, second)
+        guard maximum > 0 else { return false }
+        let difference = abs(first - second)
+        return difference <= maximumAxisDifferenceMeters
+            && difference / maximum <= maximumRelativeAxisDifference
+    }
+}
+
+/// A small value-only state machine owned by the scanner sheet. It never keeps
+/// ARFrame, pixel buffers, sessions, or point clouds alive between photos.
+struct MultiAngleMeasurementWorkflow: Equatable, Sendable {
+    private(set) var captures: [MeasurementAngleCapture] = []
+    private(set) var progress = MultiAngleMeasurementProgress.awaitingFirstAngle
+    var viewpointPolicy = MeasurementViewpointPolicy()
+    var consensusPolicy = MultiAngleMeasurementConsensusPolicy()
+
+    @discardableResult
+    mutating func record(_ capture: MeasurementAngleCapture) -> MultiAngleMeasurementProgress {
+        guard capture.evidence.estimate.hasValidDimensions else {
+            progress = .inconsistent(.invalidMeasurement)
+            return progress
+        }
+        guard case .accepted = progress else {
+            if case .inconsistent = progress { return progress }
+            return recordUnresolved(capture)
+        }
+        return progress
+    }
+
+    mutating func reset() {
+        captures = []
+        progress = .awaitingFirstAngle
+    }
+
+    private mutating func recordUnresolved(
+        _ capture: MeasurementAngleCapture
+    ) -> MultiAngleMeasurementProgress {
+        for reference in captures {
+            switch viewpointPolicy.validate(capture, against: reference) {
+            case .distinct:
+                continue
+            case .tooSimilar:
+                progress = .needsAnotherAngle(
+                    reason: .viewpointTooSimilar,
+                    acceptedCount: captures.count
+                )
+                return progress
+            case .targetMoved:
+                progress = .inconsistent(.targetMoved)
+                return progress
+            }
+        }
+
+        captures.append(capture)
+        switch captures.count {
+        case 1:
+            progress = .needsAnotherAngle(reason: .firstAngleCaptured, acceptedCount: 1)
+        case 2:
+            if consensusPolicy.measurementsAgree(captures[0].evidence, captures[1].evidence),
+               let estimate = consensusPolicy.consensusEstimate(from: captures) {
+                progress = .accepted(estimate)
+            } else {
+                progress = .needsAnotherAngle(reason: .dimensionsDisagree, acceptedCount: 2)
+            }
+        case 3:
+            let agreeingPairs: [(indices: [Int], captures: [MeasurementAngleCapture])] = [
+                (indices: [0, 1], captures: [captures[0], captures[1]]),
+                (indices: [0, 2], captures: [captures[0], captures[2]]),
+                (indices: [1, 2], captures: [captures[1], captures[2]]),
+            ].filter { pair in
+                consensusPolicy.measurementsAgree(
+                    pair.captures[0].evidence,
+                    pair.captures[1].evidence
+                )
+            }
+
+            guard !agreeingPairs.isEmpty else {
+                progress = .inconsistent(.dimensionsInconsistent)
+                return progress
+            }
+
+            if agreeingPairs.count == 3,
+               let estimate = consensusPolicy.consensusEstimate(
+                   from: captures,
+                   totalAngleCount: 3
+               ) {
+                progress = .accepted(estimate)
+                return progress
+            }
+
+            let selectedPair = agreeingPairs.max { first, second in
+                upperEnvelopeVolume(first.captures) < upperEnvelopeVolume(second.captures)
+            }!
+            guard let estimate = consensusPolicy.consensusEstimate(
+                from: selectedPair.captures,
+                totalAngleCount: 3
+            ) else {
+                progress = .inconsistent(.invalidMeasurement)
+                return progress
+            }
+            let selectedIndices = Set(selectedPair.indices)
+            let hasLargerDiscordantCapture = captures.indices.contains { index in
+                !selectedIndices.contains(index)
+                    && consensusPolicy.isMateriallyLarger(
+                        captures[index].evidence,
+                        than: estimate
+                    )
+            }
+            if hasLargerDiscordantCapture {
+                progress = .inconsistent(.dimensionsInconsistent)
+            } else {
+                progress = .accepted(estimate)
+            }
+        default:
+            progress = .inconsistent(.dimensionsInconsistent)
+        }
+        return progress
+    }
+
+    private func upperEnvelopeVolume(_ captures: [MeasurementAngleCapture]) -> Double {
+        guard let estimate = consensusPolicy.consensusEstimate(from: captures) else {
+            return 0
+        }
+        return estimate.lengthMeters * estimate.widthMeters * estimate.heightMeters
+    }
+}
+
 /// Adapts the shared geometry result into the scanner-facing measurement model.
 /// All bounding-box math lives in `GravityAlignedBoundingBoxEstimator`.
 enum MeasurementEstimator {
     static func estimate(
         from worldPoints: [SIMD3<Float>],
         frameCount: Int,
-        targetValidation: CenteredTargetValidation = .valid
+        targetValidation: CenteredTargetValidation = .valid,
+        completenessEvidence: MeasurementCompletenessEvidence = .singleView
     ) -> MeasurementEstimate? {
         guard case .success(let estimate) = outcome(
             from: worldPoints,
             frameCount: frameCount,
-            targetValidation: targetValidation
+            targetValidation: targetValidation,
+            completenessEvidence: completenessEvidence
         ) else {
             return nil
         }
@@ -336,8 +702,28 @@ enum MeasurementEstimator {
     static func outcome(
         from worldPoints: [SIMD3<Float>],
         frameCount: Int,
-        targetValidation: CenteredTargetValidation = .valid
+        targetValidation: CenteredTargetValidation = .valid,
+        completenessEvidence: MeasurementCompletenessEvidence = .singleView
     ) -> MeasurementEstimationOutcome {
+        switch captureEvidenceOutcome(
+            from: worldPoints,
+            frameCount: frameCount,
+            targetValidation: targetValidation,
+            completenessEvidence: completenessEvidence
+        ) {
+        case .success(let evidence):
+            return .success(evidence.estimate)
+        case .failure(let failure):
+            return .failure(failure)
+        }
+    }
+
+    static func captureEvidenceOutcome(
+        from worldPoints: [SIMD3<Float>],
+        frameCount: Int,
+        targetValidation: CenteredTargetValidation = .valid,
+        completenessEvidence: MeasurementCompletenessEvidence = .singleView
+    ) -> MeasurementCaptureEvidenceOutcome {
         if case .rejected(let reason) = targetValidation {
             return .failure(.targetRejected(reason))
         }
@@ -354,14 +740,24 @@ enum MeasurementEstimator {
             return .failure(.geometry(.degeneratePointCloud))
         }
 
+        let pointCloudConfidence = scanConfidence(from: geometry.confidence.level)
+        let reportedConfidence = MeasurementCompletenessPolicy().reportedConfidence(
+            pointCloudConfidence: pointCloudConfidence,
+            evidence: completenessEvidence
+        )
+
         return .success(
-            MeasurementEstimate(
-                lengthMeters: geometry.dimensions.lengthMeters,
-                widthMeters: geometry.dimensions.widthMeters,
-                heightMeters: geometry.dimensions.heightMeters,
-                confidence: scanConfidence(from: geometry.confidence.level),
-                sampleCount: geometry.diagnostics.inlierPointCount,
-                frameCount: frameCount
+            MeasurementCaptureEvidence(
+                estimate: MeasurementEstimate(
+                    lengthMeters: geometry.dimensions.lengthMeters,
+                    widthMeters: geometry.dimensions.widthMeters,
+                    heightMeters: geometry.dimensions.heightMeters,
+                    confidence: reportedConfidence,
+                    sampleCount: geometry.diagnostics.inlierPointCount,
+                    frameCount: frameCount
+                ),
+                pointCloudConfidence: pointCloudConfidence,
+                geometryCenter: geometry.center
             )
         )
     }
@@ -371,14 +767,16 @@ enum MeasurementEstimator {
     static func estimate(
         from worldPoints: [SIMD3<Double>],
         frameCount: Int,
-        targetValidation: CenteredTargetValidation = .valid
+        targetValidation: CenteredTargetValidation = .valid,
+        completenessEvidence: MeasurementCompletenessEvidence = .singleView
     ) -> MeasurementEstimate? {
         estimate(
             from: worldPoints.map {
                 SIMD3<Float>(Float($0.x), Float($0.y), Float($0.z))
             },
             frameCount: frameCount,
-            targetValidation: targetValidation
+            targetValidation: targetValidation,
+            completenessEvidence: completenessEvidence
         )
     }
 
@@ -389,6 +787,40 @@ enum MeasurementEstimator {
         case .low: .low
         case .medium: .medium
         case .high: .high
+        }
+    }
+}
+
+private extension MeasurementEstimate {
+    var normalizedDimensions: [Double] {
+        [sortedBaseEdges[0], sortedBaseEdges[1], heightMeters]
+    }
+
+    var longestDimensionMeters: Double {
+        max(lengthMeters, widthMeters, heightMeters)
+    }
+
+    var hasValidDimensions: Bool {
+        normalizedDimensions.allSatisfy { $0.isFinite && $0 > 0 }
+    }
+}
+
+private extension SIMD3 where Scalar == Float {
+    var allFinite: Bool {
+        x.isFinite && y.isFinite && z.isFinite
+    }
+
+    var horizontalXZ: SIMD2<Float> {
+        SIMD2<Float>(x, z)
+    }
+}
+
+private extension ScanConfidence {
+    var rank: Int {
+        switch self {
+        case .low: 0
+        case .medium: 1
+        case .high: 2
         }
     }
 }

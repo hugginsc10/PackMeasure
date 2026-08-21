@@ -8,6 +8,8 @@ struct MeasuredItem: Identifiable, Codable, Hashable, Sendable {
     var heightMeters: Double
     var quantity: Int
     var confidence: ScanConfidence
+    var comparisonAngleCount: Int?
+    var comparisonAgreementCount: Int?
     var capturedAt: Date
     var stackability: ItemStackability
     var orientationPolicy: ItemOrientationPolicy
@@ -20,6 +22,8 @@ struct MeasuredItem: Identifiable, Codable, Hashable, Sendable {
         heightMeters: Double,
         quantity: Int = 1,
         confidence: ScanConfidence,
+        comparisonAngleCount: Int? = nil,
+        comparisonAgreementCount: Int? = nil,
         capturedAt: Date = .now,
         stackability: ItemStackability = .notStackable,
         orientationPolicy: ItemOrientationPolicy = .keepUpright
@@ -31,6 +35,8 @@ struct MeasuredItem: Identifiable, Codable, Hashable, Sendable {
         self.heightMeters = heightMeters
         self.quantity = max(1, quantity)
         self.confidence = confidence
+        self.comparisonAngleCount = comparisonAngleCount
+        self.comparisonAgreementCount = comparisonAgreementCount
         self.capturedAt = capturedAt
         self.stackability = stackability
         self.orientationPolicy = orientationPolicy
@@ -71,6 +77,8 @@ struct MeasuredItem: Identifiable, Codable, Hashable, Sendable {
         case heightMeters
         case quantity
         case confidence
+        case comparisonAngleCount
+        case comparisonAgreementCount
         case capturedAt
         case stackability
         case orientationPolicy
@@ -85,6 +93,14 @@ struct MeasuredItem: Identifiable, Codable, Hashable, Sendable {
         heightMeters = try container.decode(Double.self, forKey: .heightMeters)
         quantity = max(1, try container.decodeIfPresent(Int.self, forKey: .quantity) ?? 1)
         confidence = try container.decodeIfPresent(ScanConfidence.self, forKey: .confidence) ?? .low
+        comparisonAngleCount = try container.decodeIfPresent(
+            Int.self,
+            forKey: .comparisonAngleCount
+        )
+        comparisonAgreementCount = try container.decodeIfPresent(
+            Int.self,
+            forKey: .comparisonAgreementCount
+        )
         capturedAt = try container.decodeIfPresent(Date.self, forKey: .capturedAt) ?? .now
         stackability = try container.decodeIfPresent(ItemStackability.self, forKey: .stackability) ?? .notStackable
         orientationPolicy = try container.decodeIfPresent(
@@ -102,6 +118,11 @@ struct MeasuredItem: Identifiable, Codable, Hashable, Sendable {
         try container.encode(heightMeters, forKey: .heightMeters)
         try container.encode(quantity, forKey: .quantity)
         try container.encode(confidence, forKey: .confidence)
+        try container.encodeIfPresent(comparisonAngleCount, forKey: .comparisonAngleCount)
+        try container.encodeIfPresent(
+            comparisonAgreementCount,
+            forKey: .comparisonAgreementCount
+        )
         try container.encode(capturedAt, forKey: .capturedAt)
         try container.encode(stackability, forKey: .stackability)
         try container.encode(orientationPolicy, forKey: .orientationPolicy)
@@ -115,6 +136,8 @@ struct MeasurementEstimate: Equatable, Sendable {
     var confidence: ScanConfidence
     var sampleCount: Int
     var frameCount: Int
+    var comparisonAngleCount: Int? = nil
+    var comparisonAgreementCount: Int? = nil
 
     var sortedBaseEdges: [Double] {
         [lengthMeters, widthMeters].sorted(by: >)

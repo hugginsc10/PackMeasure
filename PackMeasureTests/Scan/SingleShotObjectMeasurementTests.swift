@@ -70,6 +70,165 @@ struct SingleShotObjectMeasurementTests {
     }
 
     @Test
+    func diagnosticPreservesExactDepthCoverageFailure() {
+        let error = PhotoObjectMeasurementError.insufficientDepthCoverage(
+            actual: 0.42,
+            minimum: 0.60
+        )
+        let failure = SingleShotCaptureFailure.photo(error)
+
+        #expect(
+            failure
+                == .photo(.insufficientDepthCoverage(actual: 0.42, minimum: 0.60))
+        )
+        #expect(failure.retryCategory == .depth)
+        #expect(failure.diagnosticCode == "D02")
+        #expect(
+            failure.diagnosticDescription
+                == "insufficient_depth_coverage,actual=0.420000,minimum=0.600000"
+        )
+    }
+
+    @Test
+    func everyPhotoMeasurementErrorHasAStableDiagnosticCategoryAndCode() {
+        let cases: [(PhotoObjectMeasurementError, ScannerPhotoRetryCategory, String)] = [
+            (.noForegroundInstance, .isolation, "F01"),
+            (.ambiguousForegroundInstances(labels: [1, 2]), .isolation, "F02"),
+            (.maskAreaTooSmall(actual: 0.01, minimum: 0.03), .isolation, "F03"),
+            (.maskAreaTooLarge(actual: 0.9, maximum: 0.85), .framing, "F04"),
+            (.maskTouchesImageEdge, .framing, "F05"),
+            (.insufficientDepthSamples(actual: 31, minimum: 48), .depth, "D01"),
+            (.insufficientDepthCoverage(actual: 0.42, minimum: 0.6), .depth, "D02"),
+            (.insufficientHorizontalDepthSupport(actual: 0.51, minimum: 0.65), .depth, "D03"),
+            (.insufficientVerticalDepthSupport(actual: 0.49, minimum: 0.65), .depth, "D04"),
+            (.invalidLabelMaskDimensions, .processing, "P01"),
+            (.invalidDepthMaskDimensions, .processing, "P02"),
+            (.invalidPolicy, .processing, "P03"),
+            (.unsupportedLabelMaskPixelFormat(0), .processing, "P04"),
+            (.invalidLabelMaskPixelValue, .processing, "P05"),
+            (.maskCalibrationAspectRatioMismatch, .processing, "P06"),
+            (.depthGridResolutionMismatch, .processing, "P07"),
+            (.invalidCameraCalibration, .processing, "P08"),
+            (.invalidWorldPoint, .processing, "P09"),
+        ]
+
+        for (error, category, code) in cases {
+            #expect(error.retryCategory == category)
+            #expect(error.diagnosticCode == code)
+            #expect(!error.diagnosticDescription.isEmpty)
+        }
+    }
+
+    @Test
+    func adapterFailuresRetainTheirExactStageAndSystemError() {
+        let requestFailure = SingleShotCaptureFailure.foreground(
+            .requestFailed(domain: "VisionErrorDomain", code: 17)
+        )
+        let noObservation = SingleShotCaptureFailure.foreground(.noObservation)
+
+        #expect(requestFailure.retryCategory == .processing)
+        #expect(requestFailure.diagnosticCode == "V01")
+        #expect(
+            requestFailure.diagnosticDescription
+                == "vision_request_failed,domain=VisionErrorDomain,code=17"
+        )
+        #expect(noObservation.retryCategory == .isolation)
+        #expect(noObservation.diagnosticCode == "V02")
+        #expect(noObservation.disposition == .targetRejected)
+        #expect(requestFailure.disposition == .unavailable)
+    }
+
+    @Test
+    func foregroundMaskDecodeDiagnosticsDistinguishSourceStage() {
+        let lowResolution = SingleShotCaptureFailure.foreground(
+            .photo(stage: .lowResolutionDecode, error: .invalidLabelMaskDimensions)
+        )
+        let scaled = SingleShotCaptureFailure.foreground(
+            .photo(stage: .scaledMaskDecode, error: .invalidLabelMaskDimensions)
+        )
+
+        #expect(lowResolution != scaled)
+        #expect(lowResolution.diagnosticDescription.contains("stage=low_resolution_decode"))
+        #expect(scaled.diagnosticDescription.contains("stage=scaled_mask_decode"))
+        #expect(lowResolution.disposition == .unavailable)
+        #expect(scaled.disposition == .unavailable)
+    }
+
+    @Test
+    func onlyExactNoForegroundFailuresAllowReticleDepthFallback() {
+        let eligible: [SingleShotCaptureFailure] = [
+            .foreground(
+                .photo(stage: .instanceSelection, error: .noForegroundInstance)
+            ),
+            .photo(.noForegroundInstance),
+        ]
+        let ineligible: [SingleShotCaptureFailure] = [
+            .sceneDepthUnavailable,
+            .depthGridUnreadable,
+            .unexpectedProcessingFailure(domain: "PackMeasure", code: 1),
+            .foreground(.requestFailed(domain: "Vision", code: 2)),
+            .foreground(.noObservation),
+            .foreground(.observationBridgeFailed),
+            .foreground(.scaledMaskFailed(domain: "Vision", code: 3)),
+            .foreground(
+                .maskProcessingFailed(
+                    stage: "instance_selection",
+                    domain: "PackMeasure",
+                    code: 4
+                )
+            ),
+            .foreground(
+                .photo(stage: .lowResolutionDecode, error: .noForegroundInstance)
+            ),
+            .foreground(
+                .photo(stage: .scaledMaskDecode, error: .noForegroundInstance)
+            ),
+            .foreground(
+                .photo(
+                    stage: .instanceSelection,
+                    error: .ambiguousForegroundInstances(labels: [1, 2])
+                )
+            ),
+            .photo(.ambiguousForegroundInstances(labels: [1, 2])),
+            .photo(.maskAreaTooSmall(actual: 0.01, minimum: 0.03)),
+            .photo(.maskAreaTooLarge(actual: 0.90, maximum: 0.85)),
+            .photo(.maskTouchesImageEdge),
+            .photo(.insufficientDepthSamples(actual: 24, minimum: 48)),
+            .photo(.insufficientDepthCoverage(actual: 0.40, minimum: 0.60)),
+            .photo(.insufficientHorizontalDepthSupport(actual: 0.50, minimum: 0.65)),
+            .photo(.insufficientVerticalDepthSupport(actual: 0.50, minimum: 0.65)),
+            .photo(.invalidLabelMaskDimensions),
+        ]
+
+        #expect(eligible.allSatisfy { $0.shouldAttemptReticleDepthFallback })
+        #expect(ineligible.allSatisfy { !$0.shouldAttemptReticleDepthFallback })
+    }
+
+    @Test
+    func capturePathAndFallbackResultHaveStableDiagnosticValues() {
+        #expect(SingleShotCapturePath.visionMask.rawValue == "vision_mask")
+        #expect(
+            SingleShotCapturePath.reticleDepthFallback.rawValue
+                == "reticle_depth_fallback"
+        )
+
+        let cases: [(SingleShotFallbackResult, String)] = [
+            (.notAttempted, "not_attempted"),
+            (.accepted, "accepted"),
+            (.targetRejected(.floorSurface), "target_rejected,reason=floor_surface"),
+            (
+                .targetRejected(.insufficientSurfaceEvidence),
+                "target_rejected,reason=insufficient_surface_evidence"
+            ),
+            (.unavailable, "unavailable"),
+        ]
+
+        for (result, description) in cases {
+            #expect(result.diagnosticDescription == description)
+        }
+    }
+
+    @Test
     func singleShotOutcomeEstimatesBoxFromOnePhoto() throws {
         let outcome = SingleShotObjectMeasurement.outcome(
             labelMask: try labelMask(

@@ -104,6 +104,68 @@ struct AppModelInventoryTests {
         #expect(item.stackability == .notStackable)
         #expect(item.orientationPolicy == .keepUpright)
         #expect(item.quantity == 2)
+        #expect(item.comparisonAngleCount == nil)
+        #expect(item.comparisonAgreementCount == nil)
+    }
+
+    @Test
+    func multiAngleProvenanceSurvivesSavingAndReload() throws {
+        let harness = try InventoryHarness()
+        let model = AppModel(store: harness.store)
+        model.addItem(
+            name: "Suitcase",
+            estimate: MeasurementEstimate(
+                lengthMeters: meters(fromInches: 22),
+                widthMeters: meters(fromInches: 15),
+                heightMeters: meters(fromInches: 10),
+                confidence: .high,
+                sampleCount: 1_600,
+                frameCount: 2,
+                comparisonAngleCount: 3,
+                comparisonAgreementCount: 2
+            ),
+            quantity: 1
+        )
+
+        #expect(model.items.first?.comparisonAngleCount == 3)
+        #expect(model.items.first?.comparisonAgreementCount == 2)
+
+        let reloaded = AppModel(store: harness.store)
+        reloaded.loadIfNeeded()
+        let item = try #require(reloaded.items.first)
+
+        #expect(item.comparisonAngleCount == 3)
+        #expect(item.comparisonAgreementCount == 2)
+        #expect(
+            SavedMeasurementCopy.qualitySummary(for: item)
+                == "2 of 3 angles agree — approximate; verify tight clearances"
+        )
+    }
+
+    @Test
+    func savedMeasurementCopyDisclosesAgreementAndPreservesLegacyFallback() {
+        let agreed = MeasuredItem(
+            name: "Agreed scan",
+            lengthMeters: 0.6,
+            widthMeters: 0.4,
+            heightMeters: 0.5,
+            confidence: .high,
+            comparisonAngleCount: 2,
+            comparisonAgreementCount: 2
+        )
+        let legacy = MeasuredItem(
+            name: "Legacy scan",
+            lengthMeters: 0.6,
+            widthMeters: 0.4,
+            heightMeters: 0.5,
+            confidence: .medium
+        )
+
+        #expect(
+            SavedMeasurementCopy.qualitySummary(for: agreed)
+                == "2-angle agreement — approximate; verify tight clearances"
+        )
+        #expect(SavedMeasurementCopy.qualitySummary(for: legacy) == "Medium confidence")
     }
 
     @Test

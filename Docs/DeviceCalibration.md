@@ -1,7 +1,7 @@
 # Real-device calibration
 
 Use a tape measure and three rectangular objects with clearly different sizes.
-Run each scan from a three-quarter angle with the center reticle on the object.
+Keep each object stationary while capturing the requested independent angles.
 
 | Object | Actual L × W × H | Scan 1 | Scan 2 | Best absolute error | Confidence |
 |---|---|---|---|---|---|
@@ -19,8 +19,11 @@ percent error = absolute error / actual × 100
 ## Physical-device acceptance check
 
 - Camera permission appears once and the live preview opens.
-- Each known box returns all three dimensions after a one-second capture.
-- Two scans of the same setup are reasonably repeatable.
+- Each known box returns all three dimensions after the multi-angle workflow.
+- A same-position second photo is rejected as too similar.
+- Two agreeing angles resolve; a discordant pair requests a third angle.
+- A materially larger discordant third result blocks saving instead of being
+  silently discarded.
 - A poor angle or weak point cloud is labeled low-confidence or asks for a
   retake instead of silently saving a false measurement.
 - Saving, force-quitting, and reopening preserves the inventory.

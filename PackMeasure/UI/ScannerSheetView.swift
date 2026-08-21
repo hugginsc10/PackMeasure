@@ -9,13 +9,58 @@ struct ScannerSheetView: View {
         var phase: ScannerPhase = .checkingSupport
         var estimate: MeasurementEstimate?
         private(set) var isPreparingForAiming = false
+        private(set) var measurementSeriesID = 0
+        private(set) var measurementWorkflow = MultiAngleMeasurementWorkflow()
+
+        var measurementProgress: MultiAngleMeasurementProgress {
+            measurementWorkflow.progress
+        }
+
+        var capturedEstimates: [MeasurementEstimate] {
+            measurementWorkflow.captures.map(\.evidence.estimate)
+        }
+
+        @discardableResult
+        func receiveMeasurement(
+            _ capture: MeasurementAngleCapture
+        ) -> MultiAngleMeasurementProgress {
+            isPreparingForAiming = false
+            guard capture.evidence.estimate.confidence != .low else {
+                estimate = capture.evidence.estimate
+                phase = .measured
+                return measurementWorkflow.progress
+            }
+
+            let progress = measurementWorkflow.record(capture)
+            switch progress {
+            case .accepted(let consensus):
+                estimate = consensus
+            case .awaitingFirstAngle, .needsAnotherAngle, .inconsistent:
+                estimate = nil
+            }
+            phase = .measured
+            return progress
+        }
+
+        func resetMeasurementSeries() {
+            measurementWorkflow.reset()
+            measurementSeriesID += 1
+            estimate = nil
+            isPreparingForAiming = false
+        }
 
         func prepareForAiming() {
             switch phase {
-            case .measured where estimate != nil, .failed:
+            case .measured, .failed:
                 break
             default:
                 return
+            }
+            switch measurementWorkflow.progress {
+            case .accepted, .inconsistent:
+                resetMeasurementSeries()
+            case .awaitingFirstAngle, .needsAnotherAngle:
+                break
             }
             estimate = nil
             isPreparingForAiming = true
@@ -64,7 +109,7 @@ struct ScannerSheetView: View {
                 }
                 .overlay(alignment: .bottom) {
                     if showsCameraGuide, !scannerState.phase.isCapturing {
-                        Text(ScannerGuidanceCopy.previewTarget)
+                        Text(previewGuidanceText)
                             .font(.caption.weight(.medium))
                             .foregroundStyle(.white)
                             .padding(.horizontal, 12)
@@ -109,6 +154,35 @@ struct ScannerSheetView: View {
                         }
                     }
                     .frame(maxHeight: 360)
+                } else if !scannerState.capturedEstimates.isEmpty {
+                    Form {
+                        Section(ScannerResultCopy.capturedAnglesSectionTitle) {
+                            ForEach(
+                                Array(scannerState.capturedEstimates.enumerated()),
+                                id: \.offset
+                            ) { index, capturedEstimate in
+                                HStack {
+                                    Text("Angle \(index + 1)")
+                                    Spacer()
+                                    Text(dimensionString(capturedEstimate))
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+
+                        if let message = reviewState.additionalAngleMessage {
+                            Section("Next step") {
+                                Label(message, systemImage: "camera.rotate")
+                                    .foregroundStyle(.blue)
+                            }
+                        } else if case let .retryRequired(message) = reviewState {
+                            Section("Restart scan") {
+                                Label(message, systemImage: "exclamationmark.triangle.fill")
+                                    .foregroundStyle(.orange)
+                            }
+                        }
+                    }
+                    .frame(maxHeight: 260)
                 } else if case let .retryRequired(message) = reviewState {
                     Label(message, systemImage: "exclamationmark.triangle.fill")
                         .font(.footnote)
@@ -154,6 +228,8 @@ struct ScannerSheetView: View {
         case .measured where scannerState.isPreparingForAiming:
             ProgressView(ScannerActionCopy.preparingPreview)
                 .padding(.horizontal)
+        case .measured where reviewState.additionalAngleMessage != nil:
+            comparisonActionBar
         case .measured where !reviewState.canSave:
             retryActionBar
         default:
@@ -206,7 +282,23 @@ struct ScannerSheetView: View {
             Button {
                 prepareForAiming()
             } label: {
-                Label(ScannerActionCopy.retryPhoto, systemImage: "arrow.clockwise")
+                Label(retryActionTitle, systemImage: "arrow.clockwise")
+            }
+            .buttonStyle(.borderedProminent)
+        }
+    }
+
+    private var comparisonActionBar: some View {
+        HStack {
+            Button("Close") {
+                dismiss()
+            }
+            .buttonStyle(.bordered)
+
+            Button {
+                prepareForAiming()
+            } label: {
+                Label(ScannerActionCopy.compareAnotherAngle, systemImage: "camera.rotate")
             }
             .buttonStyle(.borderedProminent)
         }
@@ -238,7 +330,8 @@ struct ScannerSheetView: View {
     private var reviewState: ScannerCaptureReviewState {
         ScannerCapturePolicy.reviewState(
             phase: scannerState.phase,
-            estimate: scannerState.estimate
+            estimate: scannerState.estimate,
+            measurementProgress: scannerState.measurementProgress
         )
     }
 
@@ -255,7 +348,9 @@ struct ScannerSheetView: View {
         case .checkingSupport:
             return ScannerActionCopy.checkingSupport
         case .ready:
-            return "Ready"
+            return scannerState.capturedEstimates.isEmpty
+                ? "Ready"
+                : "Ready for angle \(scannerState.capturedEstimates.count + 1)"
         case .scanning:
             return ScannerActionCopy.processingPhoto
         case .measured:
@@ -265,6 +360,8 @@ struct ScannerSheetView: View {
             return switch reviewState {
             case .accepted:
                 "Dimensions ready"
+            case .needsAnotherAngle:
+                "Compare another angle"
             case .retryRequired:
                 "Try another photo"
             default:
@@ -284,6 +381,25 @@ struct ScannerSheetView: View {
         if case .unsupported = scannerState.phase { return false }
         return true
     }
+
+    private var previewGuidanceText: String {
+        scannerState.capturedEstimates.isEmpty
+            ? ScannerGuidanceCopy.previewTarget
+            : ScannerGuidanceCopy.additionalAnglePreview
+    }
+
+    private var retryActionTitle: String {
+        if case .inconsistent = scannerState.measurementProgress {
+            return ScannerActionCopy.restartScan
+        }
+        return ScannerActionCopy.retryPhoto
+    }
+
+    private func dimensionString(_ estimate: MeasurementEstimate) -> String {
+        "\(MeasurementMath.inchString(from: estimate.lengthMeters)) × "
+            + "\(MeasurementMath.inchString(from: estimate.widthMeters)) × "
+            + "\(MeasurementMath.inchString(from: estimate.heightMeters))"
+    }
 }
 
 private struct CameraObjectFrame: View {
@@ -302,18 +418,25 @@ enum ScannerCaptureReviewState: Equatable, Sendable {
     case waiting
     case capturing
     case accepted
+    case needsAnotherAngle(String)
     case retryRequired(String)
     case unavailable(String)
 
     var canSave: Bool {
         self == .accepted
     }
+
+    var additionalAngleMessage: String? {
+        guard case .needsAnotherAngle(let message) = self else { return nil }
+        return message
+    }
 }
 
 enum ScannerCapturePolicy {
     static func reviewState(
         phase: ScannerPhase,
-        estimate: MeasurementEstimate?
+        estimate: MeasurementEstimate?,
+        measurementProgress: MultiAngleMeasurementProgress = .awaitingFirstAngle
     ) -> ScannerCaptureReviewState {
         switch phase {
         case .checkingSupport, .ready:
@@ -325,6 +448,21 @@ enum ScannerCapturePolicy {
         case let .failed(message):
             return .retryRequired(message)
         case .measured:
+            if let estimate, estimate.confidence == .low {
+                return .retryRequired(ScannerGuidanceCopy.lowConfidenceRetry)
+            }
+            switch measurementProgress {
+            case .needsAnotherAngle(let reason, _):
+                return .needsAnotherAngle(
+                    ScannerGuidanceCopy.additionalAngleMessage(for: reason)
+                )
+            case .inconsistent(let failure):
+                return .retryRequired(
+                    ScannerGuidanceCopy.consensusFailureMessage(for: failure)
+                )
+            case .awaitingFirstAngle, .accepted:
+                break
+            }
             guard let estimate else {
                 return .retryRequired(ScannerGuidanceCopy.missingEstimateRetry)
             }
@@ -343,18 +481,163 @@ enum ScannerGuidanceCopy {
     static let setup =
         "Keep the whole object visible, then take a photo."
 
+    static let additionalAnglePreview =
+        "Keep the item still; move left or right for another angle"
+
     static let lowConfidenceRetry =
         "We couldn't get clear dimensions from this photo. Keep one object fully visible and try again."
 
     static let missingEstimateRetry =
         "We couldn't measure this photo. Keep one object fully visible and try again."
+
+    static func additionalAngleMessage(
+        for reason: MeasurementAdditionalAngleReason
+    ) -> String {
+        switch reason {
+        case .firstAngleCaptured:
+            "First angle captured. Keep the item still, move around it, and take a second photo."
+        case .viewpointTooSimilar:
+            "That view was too similar. Move farther left or right without moving the item."
+        case .dimensionsDisagree:
+            "The first two angles differed. Take one final photo from another side."
+        }
+    }
+
+    static func consensusFailureMessage(
+        for failure: MeasurementConsensusFailure
+    ) -> String {
+        switch failure {
+        case .targetMoved:
+            "The item appears to have moved between photos. Put it back and restart the scan."
+        case .dimensionsInconsistent:
+            "The three angles did not agree enough for a reliable estimate. Restart with the item still."
+        case .invalidMeasurement:
+            "One photo produced invalid dimensions. Restart the scan."
+        }
+    }
+}
+
+enum ScannerPhotoFailureCopy {
+    static func message(
+        for failure: SingleShotCaptureFailure,
+        fallbackResult: SingleShotFallbackResult = .notAttempted
+    ) -> String {
+        if let fallbackMessage = fallbackMessage(for: fallbackResult) {
+            return "\(fallbackMessage) Diagnostic \(failure.diagnosticCode)."
+        }
+        let message = specificMessage(for: failure) ?? categoryMessage(for: failure.retryCategory)
+        return "\(message) Diagnostic \(failure.diagnosticCode)."
+    }
+
+    private static func fallbackMessage(
+        for result: SingleShotFallbackResult
+    ) -> String? {
+        switch result {
+        case .notAttempted, .accepted:
+            nil
+        case .targetRejected(.floorSurface):
+            "Foreground detection missed this shape, and the center-depth fallback found the floor. Keep the center of the frame on the object and retake the photo."
+        case .targetRejected(.insufficientSurfaceEvidence):
+            "Foreground detection missed this shape, and the center-depth fallback couldn't isolate enough of it. Keep the object centered and try a slightly lower three-quarter angle."
+        case .unavailable:
+            "Foreground detection missed this shape, and the center-depth fallback wasn't ready. Hold steady with the object centered and retake the photo."
+        }
+    }
+
+    private static func specificMessage(for failure: SingleShotCaptureFailure) -> String? {
+        switch failure {
+        case .sceneDepthUnavailable:
+            "The LiDAR depth frame wasn't ready. Hold steady for a moment and retake the photo."
+        case .depthGridUnreadable:
+            "PackMeasure couldn't read the LiDAR depth frame. Retake the photo; if this repeats, close and reopen the scanner."
+        case .foreground(.noObservation),
+             .foreground(.photo(_, .noForegroundInstance)):
+            "Foreground detection didn't recognize this object. Try a lower three-quarter angle or place it against a plain wall."
+        case .foreground(.photo(_, let error)), .photo(let error):
+            photoErrorMessage(for: error)
+        case .foreground, .unexpectedProcessingFailure:
+            nil
+        }
+    }
+
+    private static func photoErrorMessage(
+        for error: PhotoObjectMeasurementError
+    ) -> String? {
+        switch error {
+        case .ambiguousForegroundInstances:
+            "PackMeasure found more than one foreground object. Center only the item you want to measure and retake the photo."
+        case let .maskAreaTooSmall(actual, minimum):
+            "The isolated object covered only \(percent(actual, rounded: .down))% of the photo; this build needs at least \(percent(minimum, rounded: .up))%. Move closer or use a more contrasting background."
+        case let .maskAreaTooLarge(actual, maximum):
+            "The isolated object covered \(percent(actual, rounded: .up))% of the photo; this build allows at most \(percent(maximum, rounded: .down))%. Step back so the whole object has visible space around it."
+        case .maskTouchesImageEdge:
+            "The isolated object reached the edge of the photo. Keep it fully visible with space around every side and retake it."
+        case let .insufficientDepthSamples(actual, minimum):
+            "LiDAR found \(actual) usable depth points on the object; this build needs \(minimum). Hold steady at a three-quarter angle and retake it."
+        case let .insufficientDepthCoverage(actual, minimum):
+            "LiDAR covered \(percent(actual, rounded: .down))% of the isolated object; this build needs \(percent(minimum, rounded: .up))%. Hold steady at a three-quarter angle and retake it."
+        case let .insufficientHorizontalDepthSupport(actual, minimum):
+            "LiDAR covered \(percent(actual, rounded: .down))% of the isolated object's horizontal span in the photo; this build needs \(percent(minimum, rounded: .up))%. Hold steady at a three-quarter angle and retake it."
+        case let .insufficientVerticalDepthSupport(actual, minimum):
+            "LiDAR covered \(percent(actual, rounded: .down))% of the isolated object's vertical span in the photo; this build needs \(percent(minimum, rounded: .up))%. Hold steady at a three-quarter angle and retake it."
+        case .noForegroundInstance:
+            "Foreground detection didn't recognize this object. Try a lower three-quarter angle or place it against a plain wall."
+        case .invalidLabelMaskDimensions,
+             .invalidDepthMaskDimensions,
+             .invalidPolicy,
+             .unsupportedLabelMaskPixelFormat,
+             .invalidLabelMaskPixelValue,
+             .maskCalibrationAspectRatioMismatch,
+             .depthGridResolutionMismatch,
+             .invalidCameraCalibration,
+             .invalidWorldPoint:
+            nil
+        }
+    }
+
+    private static func categoryMessage(
+        for category: ScannerPhotoRetryCategory
+    ) -> String {
+        switch category {
+        case .framing:
+            "The object reached the edge of the photo. Keep it fully visible with space around it and retake it."
+        case .isolation:
+            "PackMeasure couldn't isolate one clear object from the background. Center one object against a contrasting background and retake it."
+        case .depth:
+            "PackMeasure couldn't get enough depth across the object. Hold steady at a three-quarter angle and retake it."
+        case .processing:
+            "The camera couldn't process this photo. Retake it; if this repeats, close and reopen the scanner."
+        }
+    }
+
+    private static func percent(
+        _ value: Float,
+        rounded rule: FloatingPointRoundingRule
+    ) -> String {
+        let tenths = Int((value * 1_000).rounded(rule))
+        guard !tenths.isMultiple(of: 10) else {
+            return String(tenths / 10)
+        }
+        return "\(tenths / 10).\(abs(tenths % 10))"
+    }
 }
 
 enum ScannerResultCopy {
     static let sizeSectionTitle = "Estimated dimensions"
+    static let capturedAnglesSectionTitle = "Captured angles"
 
     static func qualitySummary(for estimate: MeasurementEstimate) -> String {
-        "\(estimate.confidence.title) scan quality"
+        if let angleCount = estimate.comparisonAngleCount,
+           let agreementCount = estimate.comparisonAgreementCount {
+            let agreement = agreementCount == angleCount
+                ? "\(angleCount)-angle agreement"
+                : "\(agreementCount) of \(angleCount) angles agree"
+            return "\(agreement) — approximate; verify tight clearances"
+        }
+        if estimate.frameCount == 1, estimate.confidence != .low {
+            return "Approximate single-photo estimate — compare another angle for tight fits"
+        }
+        return "\(estimate.confidence.title) scan quality"
     }
 }
 
@@ -362,6 +645,8 @@ enum ScannerActionCopy {
     static let checkingSupport = "Starting camera…"
     static let measureAgain = "Retake photo"
     static let retryPhoto = "Retake photo"
+    static let compareAnotherAngle = "Compare another angle"
+    static let restartScan = "Restart scan"
     static let preparingPreview = "Opening camera…"
     static let processingPhoto = "Measuring…"
     static let startMeasurement = "Take photo"

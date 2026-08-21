@@ -340,7 +340,7 @@ private struct ItemRow: View {
             .font(.caption)
             .foregroundStyle(.secondary)
 
-            Text("\(item.confidence.title) confidence")
+            Text(SavedMeasurementCopy.qualitySummary(for: item))
                 .font(.caption2)
                 .foregroundStyle(item.confidence == .low ? .orange : .secondary)
         }
@@ -358,6 +358,23 @@ private struct ItemRow: View {
 
     private var orientationDescription: String {
         item.orientationPolicy == .keepUpright ? "Upright" : "Can rotate"
+    }
+}
+
+enum SavedMeasurementCopy {
+    static func qualitySummary(for item: MeasuredItem) -> String {
+        guard let angleCount = item.comparisonAngleCount,
+              let agreementCount = item.comparisonAgreementCount,
+              angleCount >= 2,
+              agreementCount >= 2,
+              agreementCount <= angleCount else {
+            return "\(item.confidence.title) confidence"
+        }
+
+        let agreement = agreementCount == angleCount
+            ? "\(angleCount)-angle agreement"
+            : "\(agreementCount) of \(angleCount) angles agree"
+        return "\(agreement) — approximate; verify tight clearances"
     }
 }
 
