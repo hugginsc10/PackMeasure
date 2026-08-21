@@ -348,7 +348,32 @@ struct MeasurementCompletenessPolicy: Equatable, Sendable {
 }
 
 struct MeasurementCameraViewpoint: Equatable, Sendable {
+    static let minimumHorizontalForwardMagnitude: Float = 0.10
+
     let position: SIMD3<Float>
+    /// Raw camera forward direction projected onto the gravity-horizontal XZ
+    /// plane. It is normalized only when compared so invalid/vertical views
+    /// remain observable and fail closed.
+    let horizontalForward: SIMD2<Float>
+
+    init(position: SIMD3<Float>, horizontalForward: SIMD2<Float>) {
+        self.position = position
+        self.horizontalForward = horizontalForward
+    }
+
+    init(cameraTransform: simd_float4x4) {
+        let translation = cameraTransform.columns.3
+        let cameraZAxis = cameraTransform.columns.2
+        position = SIMD3<Float>(translation.x, translation.y, translation.z)
+        // ARKit cameras look down local -Z.
+        horizontalForward = SIMD2<Float>(-cameraZAxis.x, -cameraZAxis.z)
+    }
+
+    var hasValidEvidence: Bool {
+        position.allFinite
+            && horizontalForward.allFinite
+            && simd_length(horizontalForward) > Self.minimumHorizontalForwardMagnitude
+    }
 }
 
 struct MeasurementAngleCapture: Equatable, Sendable {
@@ -359,53 +384,20 @@ struct MeasurementAngleCapture: Equatable, Sendable {
 enum MeasurementViewpointValidation: Equatable, Sendable {
     case distinct
     case tooSimilar
-    case targetMoved
 }
 
-/// Proves that two captures came from meaningfully different positions around
-/// the same stationary target. Tilting in place, stepping straight toward the
-/// item, or moving only vertically does not count as a second viewpoint.
+/// Proves that two captures came from meaningfully different camera positions
+/// and viewing directions. Tilting in place, stepping straight toward the
+/// item, translating the item and camera together without changing the view,
+/// or moving only vertically does not count as a second viewpoint.
 struct MeasurementViewpointPolicy: Equatable, Sendable {
     var minimumHorizontalBaselineMeters: Float = 0.15
-    var minimumOrbitAngleRadians: Float = .pi * 25 / 180
-    var minimumTargetCenterToleranceMeters: Float = 0.03
-    // A view can miss one physical endpoint and shift the fitted bounding-box
-    // center by half of that missing extent. Six centimeters admits the
-    // observed 18-to-22-inch suitcase height pair (5.08 cm center shift)
-    // without returning to the previous 10 cm movement allowance.
-    var maximumTargetCenterToleranceMeters: Float = 0.06
-    var relativeTargetCenterTolerance: Float = 0.10
+    var minimumHorizontalViewDirectionChangeRadians: Float = .pi * 20 / 180
 
     func validate(
         _ candidate: MeasurementAngleCapture,
         against reference: MeasurementAngleCapture
     ) -> MeasurementViewpointValidation {
-        let candidateCenter = candidate.evidence.geometryCenter
-        let referenceCenter = reference.evidence.geometryCenter
-        guard candidateCenter.allFinite,
-              referenceCenter.allFinite,
-              candidate.viewpoint.position.allFinite,
-              reference.viewpoint.position.allFinite else {
-            return .targetMoved
-        }
-
-        let longestDimension = Float(
-            max(
-                candidate.evidence.estimate.longestDimensionMeters,
-                reference.evidence.estimate.longestDimensionMeters
-            )
-        )
-        let centerTolerance = min(
-            maximumTargetCenterToleranceMeters,
-            max(
-                minimumTargetCenterToleranceMeters,
-                relativeTargetCenterTolerance * longestDimension
-            )
-        )
-        guard simd_distance(candidateCenter, referenceCenter) <= centerTolerance else {
-            return .targetMoved
-        }
-
         let candidatePosition = candidate.viewpoint.position.horizontalXZ
         let referencePosition = reference.viewpoint.position.horizontalXZ
         guard simd_distance(candidatePosition, referencePosition)
@@ -413,21 +405,23 @@ struct MeasurementViewpointPolicy: Equatable, Sendable {
             return .tooSimilar
         }
 
-        let sharedCenter = ((candidateCenter + referenceCenter) * 0.5).horizontalXZ
-        let candidateBearing = candidatePosition - sharedCenter
-        let referenceBearing = referencePosition - sharedCenter
-        let candidateDistance = simd_length(candidateBearing)
-        let referenceDistance = simd_length(referenceBearing)
-        guard candidateDistance > 0.0001, referenceDistance > 0.0001 else {
+        let candidateForward = candidate.viewpoint.horizontalForward
+        let referenceForward = reference.viewpoint.horizontalForward
+        let candidateForwardLength = simd_length(candidateForward)
+        let referenceForwardLength = simd_length(referenceForward)
+        guard candidateForwardLength > MeasurementCameraViewpoint.minimumHorizontalForwardMagnitude,
+              referenceForwardLength > MeasurementCameraViewpoint.minimumHorizontalForwardMagnitude else {
             return .tooSimilar
         }
 
         let cosine = simd_dot(
-            candidateBearing / candidateDistance,
-            referenceBearing / referenceDistance
+            candidateForward / candidateForwardLength,
+            referenceForward / referenceForwardLength
         )
-        let orbitAngle = acos(max(-1, min(1, cosine)))
-        return orbitAngle >= minimumOrbitAngleRadians ? .distinct : .tooSimilar
+        let viewingDirectionChange = acos(max(-1, min(1, cosine)))
+        return viewingDirectionChange >= minimumHorizontalViewDirectionChangeRadians
+            ? .distinct
+            : .tooSimilar
     }
 }
 
@@ -438,7 +432,6 @@ enum MeasurementAdditionalAngleReason: Equatable, Sendable {
 }
 
 enum MeasurementConsensusFailure: Equatable, Sendable {
-    case targetMoved
     case dimensionsInconsistent
     case invalidMeasurement
 }
@@ -461,8 +454,6 @@ enum MultiAngleMeasurementProgress: Equatable, Sendable {
             "dimensions_disagree,accepted_count=\(count)"
         case .accepted(let estimate):
             "accepted,agreement_count=\(estimate.comparisonAgreementCount ?? 0),angle_count=\(estimate.comparisonAngleCount ?? 0)"
-        case .inconsistent(.targetMoved):
-            "inconsistent,target_moved"
         case .inconsistent(.dimensionsInconsistent):
             "inconsistent,dimensions"
         case .inconsistent(.invalidMeasurement):
@@ -570,7 +561,9 @@ struct MultiAngleMeasurementWorkflow: Equatable, Sendable {
 
     @discardableResult
     mutating func record(_ capture: MeasurementAngleCapture) -> MultiAngleMeasurementProgress {
-        guard capture.evidence.estimate.hasValidDimensions else {
+        guard capture.evidence.estimate.hasValidDimensions,
+              capture.evidence.geometryCenter.allFinite,
+              capture.viewpoint.hasValidEvidence else {
             progress = .inconsistent(.invalidMeasurement)
             return progress
         }
@@ -598,9 +591,6 @@ struct MultiAngleMeasurementWorkflow: Equatable, Sendable {
                     reason: .viewpointTooSimilar,
                     acceptedCount: captures.count
                 )
-                return progress
-            case .targetMoved:
-                progress = .inconsistent(.targetMoved)
                 return progress
             }
         }
@@ -812,6 +802,12 @@ private extension SIMD3 where Scalar == Float {
 
     var horizontalXZ: SIMD2<Float> {
         SIMD2<Float>(x, z)
+    }
+}
+
+private extension SIMD2 where Scalar == Float {
+    var allFinite: Bool {
+        x.isFinite && y.isFinite
     }
 }
 
