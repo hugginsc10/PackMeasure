@@ -848,7 +848,7 @@ struct MeasurementARView: UIViewRepresentable {
             sessionConfiguration = configuration
             scannerState?.resetMeasurementSeries()
             if depthSupported {
-                scannerState?.beginCameraZoomApplication()
+                scannerState?.beginCameraZoomAvailabilityDiscovery()
             }
             arView?.session.run(configuration)
             scannerState?.phase = depthSupported

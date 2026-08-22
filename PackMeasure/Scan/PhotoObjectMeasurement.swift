@@ -10,6 +10,7 @@ enum PhotoObjectMeasurementError: Error, Equatable, Sendable {
     case invalidLabelMaskPixelValue
     case noForegroundInstance
     case ambiguousForegroundInstances(labels: [UInt32])
+    case noReticleDepthSurface
     case maskAreaTooSmall(actual: Float, minimum: Float)
     case maskAreaTooLarge(actual: Float, maximum: Float)
     case maskTouchesImageEdge
@@ -423,12 +424,98 @@ struct PhotoForegroundInstanceSelector: Sendable {
             )
         }
 
+        let matchingSelection = mask.labels.map { $0 == selectedLabel }
+        let selectedComponent = componentNearestImageCenter(
+            in: matchingSelection,
+            width: mask.width,
+            height: mask.height
+        )
+        var isolatedSelection = Array(repeating: false, count: matchingSelection.count)
+        for index in selectedComponent {
+            isolatedSelection[index] = true
+        }
+
         return PhotoSelectedInstanceMask(
             width: mask.width,
             height: mask.height,
             label: selectedLabel,
-            selected: mask.labels.map { $0 == selectedLabel }
+            selected: isolatedSelection
         )
+    }
+
+    /// Vision can occasionally assign one instance label to multiple disconnected
+    /// foreground islands. The scanner contract is reticle-driven, so retain only
+    /// the island containing or nearest the image center instead of measuring every
+    /// same-label object in the photo.
+    private func componentNearestImageCenter(
+        in selected: [Bool],
+        width: Int,
+        height: Int
+    ) -> [Int] {
+        var visited = Array(repeating: false, count: selected.count)
+        var components: [[Int]] = []
+
+        for seed in selected.indices where selected[seed] && !visited[seed] {
+            visited[seed] = true
+            var component = [seed]
+            var readIndex = 0
+            while readIndex < component.count {
+                let index = component[readIndex]
+                readIndex += 1
+                let x = index % width
+                let y = index / width
+                for offsetY in -1...1 {
+                    for offsetX in -1...1 where offsetX != 0 || offsetY != 0 {
+                        let neighborX = x + offsetX
+                        let neighborY = y + offsetY
+                        guard neighborX >= 0,
+                              neighborX < width,
+                              neighborY >= 0,
+                              neighborY < height else {
+                            continue
+                        }
+                        let neighbor = neighborY * width + neighborX
+                        guard selected[neighbor], !visited[neighbor] else { continue }
+                        visited[neighbor] = true
+                        component.append(neighbor)
+                    }
+                }
+            }
+            components.append(component)
+        }
+
+        let centerX = width / 2
+        let centerY = height / 2
+        return components.min { lhs, rhs in
+            let lhsDistance = minimumSquaredDistance(
+                from: lhs,
+                toX: centerX,
+                y: centerY,
+                width: width
+            )
+            let rhsDistance = minimumSquaredDistance(
+                from: rhs,
+                toX: centerX,
+                y: centerY,
+                width: width
+            )
+            if lhsDistance != rhsDistance { return lhsDistance < rhsDistance }
+            if lhs.count != rhs.count { return lhs.count > rhs.count }
+            return (lhs.min() ?? .max) < (rhs.min() ?? .max)
+        } ?? []
+    }
+
+    private func minimumSquaredDistance(
+        from component: [Int],
+        toX centerX: Int,
+        y centerY: Int,
+        width: Int
+    ) -> Int {
+        component.reduce(Int.max) { distance, index in
+            let deltaX = index % width - centerX
+            let deltaY = index / width - centerY
+            return min(distance, deltaX * deltaX + deltaY * deltaY)
+        }
     }
 }
 
@@ -461,6 +548,192 @@ struct PhotoDepthSelectionMask: Equatable, Sendable {
 
     var selectedIndices: [Int] {
         selected.indices.filter { selected[$0] }
+    }
+}
+
+/// Refines Vision's appearance mask with the LiDAR surface connected to the
+/// center reticle. This prevents a visually merged but depth-separated neighbor
+/// from contributing either outline pixels or measurement points.
+struct PhotoReticleDepthMaskFilter: Sendable {
+    private struct SurfaceComponent {
+        let indices: [Int]
+    }
+
+    var segmenter = DepthRegionSegmenter()
+    var minimumBroadSeamCoverage: Float = 0.6
+    var maximumBroadSeamDepthJumpMeters: Float = 0.3
+
+    func filter(
+        mask: PhotoDepthSelectionMask,
+        depthGrid: DepthGrid
+    ) throws -> PhotoDepthSelectionMask {
+        guard mask.width == depthGrid.width,
+              mask.height == depthGrid.height else {
+            throw PhotoObjectMeasurementError.depthGridResolutionMismatch
+        }
+
+        var constrainedGrid = depthGrid
+        for index in constrainedGrid.depths.indices {
+            let x = index % mask.width
+            let y = index / mask.width
+            guard mask.contains(x: x, y: y) else {
+                constrainedGrid.depths[index] = .nan
+                constrainedGrid.confidences[index] = 0
+                continue
+            }
+        }
+
+        guard let region = segmenter.segment(constrainedGrid) else {
+            throw PhotoObjectMeasurementError.noReticleDepthSurface
+        }
+        var retained = Set(region.indices)
+        var remaining = depthComponents(
+            in: constrainedGrid,
+            excluding: retained
+        )
+
+        // A hard box edge may split two legitimate faces even though the second
+        // face belongs to the same foreground instance. Rejoin only components
+        // that meet the retained surface across most of its width or height.
+        // A shoe or other nearby object joined by a narrow visual bridge stays out.
+        var didMerge = true
+        while didMerge {
+            didMerge = false
+            for index in remaining.indices.reversed() where shouldMerge(
+                remaining[index],
+                into: retained,
+                grid: constrainedGrid
+            ) {
+                retained.formUnion(remaining.remove(at: index).indices)
+                didMerge = true
+            }
+        }
+
+        var filteredSelection = Array(repeating: false, count: mask.width * mask.height)
+        for index in retained {
+            filteredSelection[index] = true
+        }
+        return try PhotoDepthSelectionMask(
+            width: mask.width,
+            height: mask.height,
+            selected: filteredSelection
+        )
+    }
+
+    private func depthComponents(
+        in grid: DepthGrid,
+        excluding excluded: Set<Int>
+    ) -> [SurfaceComponent] {
+        var visited = Array(repeating: false, count: grid.depths.count)
+        for index in excluded where visited.indices.contains(index) {
+            visited[index] = true
+        }
+        var components: [SurfaceComponent] = []
+
+        for seed in grid.depths.indices where !visited[seed] && isUsable(seed, in: grid) {
+            let seedDepth = grid.depths[seed]
+            let maximumSeedDelta = max(
+                segmenter.maximumSeedDeltaMeters,
+                seedDepth * segmenter.maximumSeedDeltaFraction
+            )
+            visited[seed] = true
+            var indices = [seed]
+            var readIndex = 0
+            while readIndex < indices.count {
+                let current = indices[readIndex]
+                readIndex += 1
+                let currentDepth = grid.depths[current]
+                for neighbor in neighbors(of: current, width: grid.width, height: grid.height) {
+                    guard !visited[neighbor], isUsable(neighbor, in: grid) else { continue }
+                    let candidateDepth = grid.depths[neighbor]
+                    let localLimit = max(
+                        segmenter.localJumpMeters,
+                        currentDepth * segmenter.localJumpFraction
+                    )
+                    guard abs(candidateDepth - seedDepth) <= maximumSeedDelta,
+                          abs(candidateDepth - currentDepth) <= localLimit else {
+                        continue
+                    }
+                    visited[neighbor] = true
+                    indices.append(neighbor)
+                }
+            }
+            components.append(SurfaceComponent(indices: indices))
+        }
+        return components
+    }
+
+    private func shouldMerge(
+        _ component: SurfaceComponent,
+        into retained: Set<Int>,
+        grid: DepthGrid
+    ) -> Bool {
+        guard !component.indices.isEmpty,
+              let retainedBounds = bounds(of: retained, width: grid.width) else {
+            return false
+        }
+
+        var horizontalSeamRows: Set<Int> = []
+        var verticalSeamColumns: Set<Int> = []
+        var depthJumps: [Float] = []
+        for index in component.indices {
+            let x = index % grid.width
+            let y = index / grid.width
+            for neighbor in neighbors(of: index, width: grid.width, height: grid.height)
+                where retained.contains(neighbor) {
+                let neighborX = neighbor % grid.width
+                if neighborX != x {
+                    horizontalSeamRows.insert(y)
+                } else {
+                    verticalSeamColumns.insert(x)
+                }
+                depthJumps.append(abs(grid.depths[index] - grid.depths[neighbor]))
+            }
+        }
+        guard !depthJumps.isEmpty else { return false }
+
+        let horizontalCoverage = Float(horizontalSeamRows.count)
+            / Float(max(1, retainedBounds.height))
+        let verticalCoverage = Float(verticalSeamColumns.count)
+            / Float(max(1, retainedBounds.width))
+        let sortedJumps = depthJumps.sorted()
+        let medianJump = sortedJumps[sortedJumps.count / 2]
+        return max(horizontalCoverage, verticalCoverage) >= minimumBroadSeamCoverage
+            && medianJump <= maximumBroadSeamDepthJumpMeters
+    }
+
+    private func bounds(
+        of indices: Set<Int>,
+        width: Int
+    ) -> (width: Int, height: Int)? {
+        guard !indices.isEmpty else { return nil }
+        let xs = indices.map { $0 % width }
+        let ys = indices.map { $0 / width }
+        guard let minX = xs.min(), let maxX = xs.max(),
+              let minY = ys.min(), let maxY = ys.max() else {
+            return nil
+        }
+        return (maxX - minX + 1, maxY - minY + 1)
+    }
+
+    private func isUsable(_ index: Int, in grid: DepthGrid) -> Bool {
+        let depth = grid.depths[index]
+        return depth.isFinite
+            && depth >= segmenter.minimumDepthMeters
+            && depth <= segmenter.maximumDepthMeters
+            && grid.confidences[index] >= segmenter.minimumConfidence
+    }
+
+    private func neighbors(of index: Int, width: Int, height: Int) -> [Int] {
+        let x = index % width
+        let y = index / width
+        var result: [Int] = []
+        result.reserveCapacity(4)
+        if x > 0 { result.append(index - 1) }
+        if x + 1 < width { result.append(index + 1) }
+        if y > 0 { result.append(index - width) }
+        if y + 1 < height { result.append(index + width) }
+        return result
     }
 }
 
@@ -536,11 +809,18 @@ struct PhotoDepthSupport: Equatable, Sendable {
 struct PhotoDepthSupportAnalyzer: Sendable {
     var policy = PhotoObjectMeasurementPolicy()
 
-    func analyze(mask: PhotoDepthSelectionMask, depthGrid: DepthGrid) throws
+    func analyze(
+        mask: PhotoDepthSelectionMask,
+        constrainedTo constraintMask: PhotoDepthSelectionMask? = nil,
+        depthGrid: DepthGrid
+    ) throws
         -> PhotoDepthSupport {
         try policy.validate()
+        let constraintMask = constraintMask ?? mask
         guard mask.width == depthGrid.width,
-              mask.height == depthGrid.height else {
+              mask.height == depthGrid.height,
+              constraintMask.width == depthGrid.width,
+              constraintMask.height == depthGrid.height else {
             throw PhotoObjectMeasurementError.depthGridResolutionMismatch
         }
 
@@ -550,6 +830,7 @@ struct PhotoDepthSupportAnalyzer: Sendable {
             for x in 0..<mask.width where mask.contains(x: x, y: y) {
                 let index = y * mask.width + x
                 maskIndices.append(index)
+                guard constraintMask.contains(x: x, y: y) else { continue }
                 let depth = depthGrid.depths[index]
                 if depth.isFinite,
                    depth >= policy.minimumDepthMeters,
@@ -707,6 +988,7 @@ struct PhotoObjectPointCloud: Sendable {
 struct PhotoObjectMeasurement: Sendable {
     var policy = PhotoObjectMeasurementPolicy()
     var instanceSelector = PhotoForegroundInstanceSelector()
+    var depthMaskFilter = PhotoReticleDepthMaskFilter()
 
     func makePointCloud(
         labelMask: PhotoInstanceLabelMask,
@@ -736,12 +1018,21 @@ struct PhotoObjectMeasurement: Sendable {
             throw PhotoObjectMeasurementError.maskTouchesImageEdge
         }
 
-        let depthMask = try selected.resampled(
+        let candidateDepthMask = try selected.resampled(
             toWidth: depthGrid.width,
             height: depthGrid.height
         )
+        var configuredDepthMaskFilter = depthMaskFilter
+        configuredDepthMaskFilter.segmenter.minimumConfidence = policy.minimumDepthConfidence
+        configuredDepthMaskFilter.segmenter.minimumDepthMeters = policy.minimumDepthMeters
+        configuredDepthMaskFilter.segmenter.maximumDepthMeters = policy.maximumDepthMeters
+        let depthMask = try configuredDepthMaskFilter.filter(
+            mask: candidateDepthMask,
+            depthGrid: depthGrid
+        )
         let support = try PhotoDepthSupportAnalyzer(policy: policy).analyze(
-            mask: depthMask,
+            mask: candidateDepthMask,
+            constrainedTo: depthMask,
             depthGrid: depthGrid
         )
         let points = try PhotoWorldPointProjector().project(
@@ -758,7 +1049,7 @@ struct PhotoObjectMeasurement: Sendable {
             objectOutline: MeasurementObjectOutline(
                 width: depthMask.width,
                 height: depthMask.height,
-                selectedIndices: depthMask.selectedIndices
+                selectedIndices: support.indices
             )
         )
     }

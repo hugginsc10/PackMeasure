@@ -199,7 +199,10 @@ extension PhotoObjectMeasurementError {
         switch self {
         case .maskAreaTooLarge, .maskTouchesImageEdge:
             .framing
-        case .noForegroundInstance, .ambiguousForegroundInstances, .maskAreaTooSmall:
+        case .noForegroundInstance,
+             .ambiguousForegroundInstances,
+             .noReticleDepthSurface,
+             .maskAreaTooSmall:
             .isolation
         case .insufficientDepthSamples,
              .insufficientDepthCoverage,
@@ -231,6 +234,8 @@ extension PhotoObjectMeasurementError {
             "F04"
         case .maskTouchesImageEdge:
             "F05"
+        case .noReticleDepthSurface:
+            "F06"
         case .insufficientDepthSamples:
             "D01"
         case .insufficientDepthCoverage:
@@ -276,6 +281,8 @@ extension PhotoObjectMeasurementError {
             "no_foreground_instance"
         case .ambiguousForegroundInstances(let labels):
             "ambiguous_foreground_instances,labels=\(labels.map(String.init).joined(separator: ","))"
+        case .noReticleDepthSurface:
+            "no_reticle_depth_surface"
         case let .maskAreaTooSmall(actual, minimum):
             "mask_area_too_small,actual=\(Self.metric(actual)),minimum=\(Self.metric(minimum))"
         case let .maskAreaTooLarge(actual, maximum):
@@ -345,6 +352,7 @@ enum SingleShotObjectMeasurement {
 
         case .noForegroundInstance,
              .ambiguousForegroundInstances,
+             .noReticleDepthSurface,
              .maskAreaTooSmall,
              .maskAreaTooLarge,
              .maskTouchesImageEdge,

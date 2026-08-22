@@ -1,5 +1,18 @@
 import SwiftUI
 
+enum ScannerCameraZoomPresentation: Equatable, Sendable {
+    case hidden
+    case checking
+    case selectable(
+        zooms: [ScannerCameraZoom],
+        selected: ScannerCameraZoom,
+        isApplying: Bool
+    )
+    case single(ScannerCameraZoom)
+    case fixed
+    case locked(ScannerCameraZoom)
+}
+
 struct ScannerSheetView: View {
     @MainActor
     @Observable
@@ -11,8 +24,10 @@ struct ScannerSheetView: View {
         var estimate: MeasurementEstimate?
         var objectOverlay: MeasurementObjectOverlay?
         private(set) var cameraZoom = ScannerCameraZoom.standard
+        private(set) var lastConfirmedCameraZoom = ScannerCameraZoom.standard
         private(set) var availableCameraZooms = [ScannerCameraZoom.standard]
         private(set) var cameraZoomUsesConfigurableDevice = false
+        private(set) var hasResolvedCameraZoomAvailability = false
         private(set) var hasConfirmedExplicitCameraZoom = false
         private(set) var isApplyingCameraZoom = false
         private(set) var isPreparingForAiming = false
@@ -44,6 +59,43 @@ struct ScannerSheetView: View {
                 && hasConfirmedExplicitCameraZoom
         }
 
+        var showsCameraGuide: Bool {
+            guard objectOverlay == nil else { return false }
+            return switch phase {
+            case .checkingSupport, .ready, .scanning:
+                true
+            case .measured, .failed:
+                isPreparingForAiming
+            case .unsupported:
+                false
+            }
+        }
+
+        var cameraZoomPresentation: ScannerCameraZoomPresentation {
+            guard showsCameraGuide, !phase.isCapturing else { return .hidden }
+            guard hasResolvedCameraZoomAvailability else { return .checking }
+            guard cameraZoomUsesConfigurableDevice else { return .fixed }
+            if !capturedEstimates.isEmpty {
+                return .locked(cameraZoom)
+            }
+            if availableCameraZooms.count > 1 {
+                return .selectable(
+                    zooms: availableCameraZooms,
+                    selected: cameraZoom,
+                    isApplying: isApplyingCameraZoom
+                )
+            }
+            if let onlyZoom = availableCameraZooms.first {
+                return .single(onlyZoom)
+            }
+            return .fixed
+        }
+
+        func beginCameraZoomAvailabilityDiscovery() {
+            hasResolvedCameraZoomAvailability = false
+            isApplyingCameraZoom = false
+        }
+
         func updateCameraZoomAvailability(
             _ zooms: [ScannerCameraZoom],
             selected: ScannerCameraZoom,
@@ -55,7 +107,9 @@ struct ScannerSheetView: View {
             cameraZoom = normalizedZooms.contains(selected)
                 ? selected
                 : normalizedZooms[0]
+            lastConfirmedCameraZoom = cameraZoom
             cameraZoomUsesConfigurableDevice = usesConfigurableDevice
+            hasResolvedCameraZoomAvailability = true
             if confirmsExplicitSelection {
                 hasConfirmedExplicitCameraZoom = true
             }
@@ -63,6 +117,7 @@ struct ScannerSheetView: View {
         }
 
         func cameraZoomApplicationFailed() {
+            cameraZoom = lastConfirmedCameraZoom
             hasConfirmedExplicitCameraZoom = false
             isApplyingCameraZoom = false
         }
@@ -178,16 +233,8 @@ struct ScannerSheetView: View {
                         .padding()
                 }
                 .overlay(alignment: .topTrailing) {
-                    if showsCameraZoomControl {
-                        CameraZoomControl(
-                            zooms: scannerState.availableCameraZooms,
-                            selectedZoom: scannerState.cameraZoom,
-                            isEnabled: scannerState.canChangeCameraZoom,
-                            isApplying: scannerState.isApplyingCameraZoom,
-                            onSelect: scannerState.selectCameraZoom
-                        )
+                    cameraZoomOverlay
                         .padding()
-                    }
                 }
                 .overlay(alignment: .bottom) {
                     if showsCameraGuide, !scannerState.phase.isCapturing {
@@ -430,8 +477,11 @@ struct ScannerSheetView: View {
         case .checkingSupport:
             return ScannerActionCopy.checkingSupport
         case .ready:
+            if !scannerState.hasResolvedCameraZoomAvailability {
+                return "Checking zoom availability…"
+            }
             if scannerState.isApplyingCameraZoom {
-                return "Confirming camera zoom…"
+                return "Switching to \(scannerState.cameraZoom.label)…"
             }
             return scannerState.capturedEstimates.isEmpty
                 ? "Ready"
@@ -462,19 +512,31 @@ struct ScannerSheetView: View {
     }
 
     private var showsCameraGuide: Bool {
-        guard scannerState.objectOverlay == nil else { return false }
-        return switch scannerState.phase {
-        case .checkingSupport, .ready, .scanning:
-            true
-        case .measured, .failed:
-            scannerState.isPreparingForAiming
-        case .unsupported:
-            false
-        }
+        scannerState.showsCameraGuide
     }
 
-    private var showsCameraZoomControl: Bool {
-        scannerState.availableCameraZooms.count > 1 && showsCameraGuide
+    @ViewBuilder
+    private var cameraZoomOverlay: some View {
+        switch scannerState.cameraZoomPresentation {
+        case .hidden:
+            EmptyView()
+        case .checking:
+            CameraZoomStatusBadge(text: "Checking zoom…", showsProgress: true)
+        case let .selectable(zooms, selectedZoom, isApplying):
+            CameraZoomControl(
+                zooms: zooms,
+                selectedZoom: selectedZoom,
+                isEnabled: scannerState.canChangeCameraZoom,
+                isApplying: isApplying,
+                onSelect: scannerState.selectCameraZoom
+            )
+        case .single(let zoom):
+            CameraZoomStatusBadge(text: "\(zoom.label) only")
+        case .fixed:
+            CameraZoomStatusBadge(text: "Fixed camera view")
+        case .locked(let zoom):
+            CameraZoomStatusBadge(text: "\(zoom.label) locked")
+        }
     }
 
     private var previewGuidanceText: String {
@@ -512,7 +574,7 @@ private struct CameraZoomControl: View {
                 } label: {
                     Text(zoom.label)
                         .font(.caption2.weight(.bold))
-                        .frame(minWidth: 32, minHeight: 28)
+                        .frame(minWidth: 44, minHeight: 44)
                         .foregroundStyle(zoom == selectedZoom ? .black : .white)
                         .background(
                             zoom == selectedZoom
@@ -528,7 +590,9 @@ private struct CameraZoomControl: View {
                 .accessibilityHint(
                     isEnabled
                         ? "Changes the camera field of view before the first angle"
-                        : "Zoom is locked after the first captured angle"
+                        : isApplying
+                            ? "Camera zoom is changing"
+                            : "Camera zoom is unavailable right now"
                 )
             }
 
@@ -542,6 +606,30 @@ private struct CameraZoomControl: View {
         }
         .padding(4)
         .background(.black.opacity(0.38), in: Capsule())
+    }
+}
+
+private struct CameraZoomStatusBadge: View {
+    let text: String
+    var showsProgress = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if showsProgress {
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(.white)
+            }
+            Text(text)
+                .font(.caption2.weight(.bold))
+        }
+        .foregroundStyle(.white)
+        .frame(minHeight: 44)
+        .padding(.horizontal, 12)
+        .background(.black.opacity(0.55), in: Capsule())
+        .allowsHitTesting(false)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(text)
     }
 }
 
@@ -707,6 +795,8 @@ enum ScannerPhotoFailureCopy {
         switch error {
         case .ambiguousForegroundInstances:
             "PackMeasure found more than one foreground object. Center only the item you want to measure and retake the photo."
+        case .noReticleDepthSurface:
+            "PackMeasure couldn't isolate a depth-connected object under the center of the frame. Center the item and retake the photo."
         case let .maskAreaTooSmall(actual, minimum):
             "The isolated object covered only \(percent(actual, rounded: .down))% of the photo; this build needs at least \(percent(minimum, rounded: .up))%. Move closer or use a more contrasting background."
         case let .maskAreaTooLarge(actual, maximum):

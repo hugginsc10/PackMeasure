@@ -254,7 +254,7 @@ struct ScannerCameraZoomTests {
         #expect(state.selectCameraZoom(.standard))
         state.cameraZoomApplicationFailed()
 
-        #expect(state.cameraZoom == .standard)
+        #expect(state.cameraZoom == .half)
         #expect(!state.hasConfirmedExplicitCameraZoom)
         #expect(!state.shouldReapplyCameraZoomAfterSessionRun)
         #expect(!state.isApplyingCameraZoom)
@@ -400,6 +400,137 @@ struct ScannerCameraZoomTests {
         state.selectCameraZoom(.standard)
         #expect(state.cameraZoom == .half)
         #expect(state.cameraZoomRequestID == zoomRequestID)
+    }
+
+    @Test @MainActor
+    func unresolvedCapabilitiesShowCheckingInsteadOfADeadSelector() {
+        let state = ScannerSheetView.ScannerStateModel()
+        state.phase = .ready
+
+        #expect(!state.hasResolvedCameraZoomAvailability)
+        #expect(state.cameraZoomPresentation == .checking)
+    }
+
+    @Test @MainActor
+    func unavailableConfigurableCameraShowsFixedViewTruthfully() {
+        let state = ScannerSheetView.ScannerStateModel()
+        state.phase = .ready
+        state.updateCameraZoomAvailability(
+            [.standard],
+            selected: .standard,
+            usesConfigurableDevice: false
+        )
+
+        #expect(state.cameraZoomPresentation == .fixed)
+    }
+
+    @Test @MainActor
+    func oneSupportedZoomShowsStaticOnlyBadge() {
+        let state = ScannerSheetView.ScannerStateModel()
+        state.phase = .ready
+        state.updateCameraZoomAvailability(
+            [.standard],
+            selected: .standard,
+            usesConfigurableDevice: true
+        )
+
+        #expect(state.cameraZoomPresentation == .single(.standard))
+    }
+
+    @Test @MainActor
+    func multipleSupportedZoomsShowInteractiveSelection() {
+        let state = ScannerSheetView.ScannerStateModel()
+        state.phase = .ready
+        state.updateCameraZoomAvailability(
+            [.half, .standard],
+            selected: .standard,
+            usesConfigurableDevice: true
+        )
+
+        #expect(
+            state.cameraZoomPresentation
+                == .selectable(
+                    zooms: [.half, .standard],
+                    selected: .standard,
+                    isApplying: false
+                )
+        )
+    }
+
+    @Test @MainActor
+    func applyingSelectionRemainsVisibleWithProgressState() {
+        let state = ScannerSheetView.ScannerStateModel()
+        state.phase = .ready
+        state.updateCameraZoomAvailability(
+            [.half, .standard],
+            selected: .standard,
+            usesConfigurableDevice: true
+        )
+
+        #expect(state.selectCameraZoom(.half))
+        #expect(
+            state.cameraZoomPresentation
+                == .selectable(
+                    zooms: [.half, .standard],
+                    selected: .half,
+                    isApplying: true
+                )
+        )
+    }
+
+    @Test @MainActor
+    func additionalAngleShowsLockedZoomInsteadOfDisabledButtons() {
+        let state = ScannerSheetView.ScannerStateModel()
+        state.phase = .ready
+        state.updateCameraZoomAvailability(
+            [.half, .standard],
+            selected: .half,
+            usesConfigurableDevice: true
+        )
+        state.receiveMeasurement(angleCapture(position: SIMD3<Float>(0, 0, 1)))
+        state.prepareForAiming()
+
+        #expect(state.cameraZoomPresentation == .locked(.half))
+    }
+
+    @Test @MainActor
+    func activeCaptureHidesZoomPresentation() {
+        let state = ScannerSheetView.ScannerStateModel()
+        state.phase = .ready
+        state.updateCameraZoomAvailability(
+            [.half, .standard],
+            selected: .standard,
+            usesConfigurableDevice: true
+        )
+        state.phase = .scanning(progress: 0.25)
+
+        #expect(state.cameraZoomPresentation == .hidden)
+    }
+
+    @Test @MainActor
+    func failedUnconfirmedSelectionRestoresLastObservedZoomForRetake() {
+        let state = ScannerSheetView.ScannerStateModel()
+        state.phase = .ready
+        state.updateCameraZoomAvailability(
+            [.half, .standard],
+            selected: .standard,
+            usesConfigurableDevice: true
+        )
+
+        #expect(state.selectCameraZoom(.half))
+        #expect(state.cameraZoom == .half)
+        state.cameraZoomApplicationFailed()
+
+        #expect(state.cameraZoom == .standard)
+        #expect(state.lastConfirmedCameraZoom == .standard)
+        #expect(
+            state.cameraZoomPresentation
+                == .selectable(
+                    zooms: [.half, .standard],
+                    selected: .standard,
+                    isApplying: false
+                )
+        )
     }
 
     private func angleCapture(
