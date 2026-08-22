@@ -85,6 +85,118 @@ final class PhotoObjectMeasurementTests: XCTestCase {
         XCTAssertFalse(lShape.contains(x: 4, y: 2), "the L-shape must not become its bounding box")
     }
 
+    func testObjectOutlinePreservesConcavityInsteadOfBecomingBoundingBox() throws {
+        let outline = try XCTUnwrap(
+            MeasurementObjectOutline(
+                width: 4,
+                height: 4,
+                selectedIndices: [0, 4, 5]
+            )
+        )
+        let loop = try XCTUnwrap(outline.loops.first)
+        let xs = loop.map(\.x)
+        let ys = loop.map(\.y)
+        let minX = try XCTUnwrap(xs.min())
+        let maxX = try XCTUnwrap(xs.max())
+        let minY = try XCTUnwrap(ys.min())
+        let maxY = try XCTUnwrap(ys.max())
+        let boundingArea = (maxX - minX) * (maxY - minY)
+
+        XCTAssertEqual(outline.loops.count, 1)
+        XCTAssertGreaterThan(boundingArea, 0)
+        XCTAssertLessThan(polygonArea(loop), boundingArea * 0.9)
+        XCTAssertTrue(loop.allSatisfy(isFiniteAndNormalized))
+    }
+
+    func testObjectOutlineRetainsDisconnectedSelectionsAndHole() throws {
+        let disconnected = try XCTUnwrap(
+            MeasurementObjectOutline(
+                width: 6,
+                height: 4,
+                selectedIndices: [0, 1, 6, 7, 16, 17, 22, 23]
+            )
+        )
+        let ringIndices = (0..<25).filter { index in
+            let x = index % 5
+            let y = index / 5
+            return x == 0 || x == 4 || y == 0 || y == 4
+        }
+        let ring = try XCTUnwrap(
+            MeasurementObjectOutline(width: 5, height: 5, selectedIndices: ringIndices)
+        )
+
+        XCTAssertEqual(disconnected.loops.count, 2)
+        XCTAssertEqual(ring.loops.count, 2, "the inner boundary must remain visible")
+        XCTAssertTrue(disconnected.loops.flatMap { $0 }.allSatisfy(isFiniteAndNormalized))
+        XCTAssertTrue(ring.loops.flatMap { $0 }.allSatisfy(isFiniteAndNormalized))
+    }
+
+    func testPointCloudCarriesOutlineFromExactDepthSelection() throws {
+        let labels = try lShapeMask(width: 12, height: 12)
+        let result = try PhotoObjectMeasurement(policy: permissivePolicy).makePointCloud(
+            labelMask: labels,
+            depthGrid: populatedDepthGrid(width: 12, height: 12),
+            calibration: calibration(imageWidth: 12, imageHeight: 12)
+        )
+        let outline = try XCTUnwrap(result.objectOutline)
+
+        XCTAssertFalse(outline.isEmpty)
+        XCTAssertTrue(outline.loops.flatMap { $0 }.allSatisfy(isFiniteAndNormalized))
+    }
+
+    func testObjectOverlayReprojectsAcrossAspectFillViewportChanges() throws {
+        let outline = MeasurementObjectOutline(
+            loops: [[
+                SIMD2<Float>(0, 0),
+                SIMD2<Float>(1, 0),
+                SIMD2<Float>(1, 1),
+                SIMD2<Float>(0, 1),
+            ]]
+        )
+        let overlay = MeasurementObjectOverlay(
+            displayOrientedImageSize: SIMD2<Float>(3, 4),
+            outline: outline
+        )
+
+        let portraitPoint = try XCTUnwrap(
+            overlay.normalizedPreviewPoint(
+                SIMD2<Float>(0.5, 0.5),
+                viewportSize: SIMD2<Float>(300, 400)
+            )
+        )
+        let squareLeftEdge = try XCTUnwrap(
+            overlay.normalizedPreviewPoint(
+                SIMD2<Float>(0, 0.5),
+                viewportSize: SIMD2<Float>(300, 300)
+            )
+        )
+        let squareRightEdge = try XCTUnwrap(
+            overlay.normalizedPreviewPoint(
+                SIMD2<Float>(1, 0.5),
+                viewportSize: SIMD2<Float>(300, 300)
+            )
+        )
+        let squareTopEdge = try XCTUnwrap(
+            overlay.normalizedPreviewPoint(
+                SIMD2<Float>(0.5, 0),
+                viewportSize: SIMD2<Float>(300, 300)
+            )
+        )
+        let squareBottomEdge = try XCTUnwrap(
+            overlay.normalizedPreviewPoint(
+                SIMD2<Float>(0.5, 1),
+                viewportSize: SIMD2<Float>(300, 300)
+            )
+        )
+
+        XCTAssertEqual(portraitPoint.x, 0.5, accuracy: 0.0001)
+        XCTAssertEqual(portraitPoint.y, 0.5, accuracy: 0.0001)
+        XCTAssertEqual(squareLeftEdge.x, 0, accuracy: 0.0001)
+        XCTAssertEqual(squareRightEdge.x, 1, accuracy: 0.0001)
+        XCTAssertLessThan(squareTopEdge.y, 0)
+        XCTAssertGreaterThan(squareBottomEdge.y, 1)
+    }
+
     func testBuildsWorldPointCloudForBoxEllipseAndLShapeMasks() throws {
         let masks = [
             try boxMask(width: 12, height: 12, x: 3...8, y: 3...8),
@@ -258,6 +370,21 @@ final class PhotoObjectMeasurementTests: XCTestCase {
             minimumHorizontalDepthSupport: 0.6,
             minimumVerticalDepthSupport: 0.6
         )
+    }
+
+    private func polygonArea(_ points: [SIMD2<Float>]) -> Float {
+        guard points.count >= 3 else { return 0 }
+        let followingPoints = Array(points.dropFirst()) + [points[0]]
+        return abs(zip(points, followingPoints).reduce(0) { total, pair in
+            total + pair.0.x * pair.1.y - pair.1.x * pair.0.y
+        }) / 2
+    }
+
+    private func isFiniteAndNormalized(_ point: SIMD2<Float>) -> Bool {
+        point.x.isFinite
+            && point.y.isFinite
+            && (0...1).contains(point.x)
+            && (0...1).contains(point.y)
     }
 
     private func labelMask(_ rows: [[UInt32]]) throws -> PhotoInstanceLabelMask {

@@ -1,6 +1,7 @@
 @preconcurrency import ARKit
 import Foundation
 import OSLog
+import QuartzCore
 import RealityKit
 import SwiftUI
 import Vision
@@ -122,6 +123,121 @@ struct ScannerSessionEventGate: Equatable, Sendable {
     }
 }
 
+@MainActor
+final class MeasurementPreviewARView: ARView {
+    var objectOverlay: MeasurementObjectOverlay? {
+        didSet {
+            guard oldValue != objectOverlay else { return }
+            accessibilityValue = objectOverlay == nil
+                ? "Live camera preview"
+                : "Object outline detected and used for measurement"
+            setNeedsLayout()
+        }
+    }
+
+    private let fillLayer = CAShapeLayer()
+    private let haloLayer = CAShapeLayer()
+    private let strokeLayer = CAShapeLayer()
+
+    required init(frame frameRect: CGRect) {
+        super.init(frame: frameRect)
+        configureOutlineLayers()
+    }
+
+    required init?(coder decoder: NSCoder) {
+        super.init(coder: decoder)
+        configureOutlineLayers()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        renderObjectOutline()
+    }
+
+    private func configureOutlineLayers() {
+        isAccessibilityElement = true
+        accessibilityLabel = "Measurement camera preview"
+        accessibilityValue = "Live camera preview"
+
+        fillLayer.fillRule = .evenOdd
+        haloLayer.fillColor = nil
+        haloLayer.lineCap = .round
+        haloLayer.lineJoin = .round
+        strokeLayer.fillColor = nil
+        strokeLayer.lineCap = .round
+        strokeLayer.lineJoin = .round
+        layer.addSublayer(fillLayer)
+        layer.addSublayer(haloLayer)
+        layer.addSublayer(strokeLayer)
+        configureColorsAndWidths()
+    }
+
+    private func configureColorsAndWidths() {
+        let highContrast = traitCollection.accessibilityContrast == .high
+        let fillAlpha: CGFloat = UIAccessibility.isReduceTransparencyEnabled ? 0.18 : 0.11
+        fillLayer.fillColor = UIColor.systemCyan.withAlphaComponent(fillAlpha).cgColor
+        haloLayer.strokeColor = UIColor.black.withAlphaComponent(0.82).cgColor
+        haloLayer.lineWidth = highContrast ? 8 : 6
+        strokeLayer.strokeColor = UIColor.systemCyan.cgColor
+        strokeLayer.lineWidth = highContrast ? 4 : 3
+    }
+
+    private func renderObjectOutline() {
+        configureColorsAndWidths()
+        let layers = [fillLayer, haloLayer, strokeLayer]
+        layers.forEach { $0.frame = bounds }
+
+        guard !bounds.isEmpty,
+              let objectOverlay,
+              objectOverlay.isRenderable else {
+            setOutlinePath(nil)
+            return
+        }
+
+        let path = CGMutablePath()
+        for loop in objectOverlay.outline.loops {
+            guard let first = loop.first,
+                  let firstViewPoint = viewPoint(first, overlay: objectOverlay) else {
+                continue
+            }
+            path.move(to: firstViewPoint)
+            for point in loop.dropFirst() {
+                guard let mappedPoint = viewPoint(point, overlay: objectOverlay) else {
+                    continue
+                }
+                path.addLine(to: mappedPoint)
+            }
+            path.closeSubpath()
+        }
+        setOutlinePath(path.isEmpty ? nil : path)
+    }
+
+    private func viewPoint(
+        _ normalizedImagePoint: SIMD2<Float>,
+        overlay: MeasurementObjectOverlay
+    ) -> CGPoint? {
+        guard let normalizedViewPoint = overlay.normalizedPreviewPoint(
+            normalizedImagePoint,
+            viewportSize: SIMD2<Float>(Float(bounds.width), Float(bounds.height))
+        ) else {
+            return nil
+        }
+        return CGPoint(
+            x: CGFloat(normalizedViewPoint.x) * bounds.width,
+            y: CGFloat(normalizedViewPoint.y) * bounds.height
+        )
+    }
+
+    private func setOutlinePath(_ path: CGPath?) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        fillLayer.path = path
+        haloLayer.path = path
+        strokeLayer.path = path
+        CATransaction.commit()
+    }
+}
+
 struct MeasurementARView: UIViewRepresentable {
     @Bindable var scannerState: ScannerSheetView.ScannerStateModel
 
@@ -131,22 +247,23 @@ struct MeasurementARView: UIViewRepresentable {
         return coordinator
     }
 
-    func makeUIView(context: Context) -> ARView {
-        let view = ARView(frame: .zero)
+    func makeUIView(context: Context) -> MeasurementPreviewARView {
+        let view = MeasurementPreviewARView(frame: .zero)
         view.cameraMode = .ar
         context.coordinator.attach(to: view)
         return view
     }
 
-    func updateUIView(_ uiView: ARView, context: Context) {
+    func updateUIView(_ uiView: MeasurementPreviewARView, context: Context) {
         context.coordinator.scannerState = scannerState
+        uiView.objectOverlay = scannerState.objectOverlay
         context.coordinator.handleRequests(
             previewRequestID: scannerState.previewRequestID,
             captureRequestID: scannerState.captureRequestID
         )
     }
 
-    static func dismantleUIView(_ uiView: ARView, coordinator: Coordinator) {
+    static func dismantleUIView(_ uiView: MeasurementPreviewARView, coordinator: Coordinator) {
         coordinator.stop()
     }
 
@@ -173,6 +290,7 @@ struct MeasurementARView: UIViewRepresentable {
             var capturePath = SingleShotCapturePath.visionMask
             var fallbackTrigger: SingleShotCaptureFailure?
             var fallbackResult = SingleShotFallbackResult.notAttempted
+            var objectOverlay: MeasurementObjectOverlay?
         }
 
         private struct FrameCalibrationDiagnostics: Sendable {
@@ -185,7 +303,11 @@ struct MeasurementARView: UIViewRepresentable {
         }
 
         private enum DepthFrameSample {
-            case accepted([SIMD3<Float>], FrameCalibrationDiagnostics)
+            case accepted(
+                [SIMD3<Float>],
+                FrameCalibrationDiagnostics,
+                MeasurementObjectOutline?
+            )
             case rejected(CenteredTargetRejection, FrameCalibrationDiagnostics?)
             case unavailable(FrameCalibrationDiagnostics?)
         }
@@ -194,6 +316,7 @@ struct MeasurementARView: UIViewRepresentable {
             case accepted(
                 [SIMD3<Float>],
                 FrameCalibrationDiagnostics,
+                MeasurementObjectOutline?,
                 SingleShotCaptureRoute
             )
             case failed(
@@ -416,10 +539,13 @@ struct MeasurementARView: UIViewRepresentable {
             session.pause()
 
             switch sampleSingleShotFrame(from: frame) {
-            case .accepted(let points, let diagnostics, let route):
+            case .accepted(let points, let diagnostics, let outline, let route):
                 activeCapture.worldPoints = points
                 activeCapture.frameCount = 1
                 activeCapture.lastCalibration = diagnostics
+                activeCapture.objectOverlay = outline.flatMap {
+                    measurementObjectOverlay(from: $0, frame: frame)
+                }
                 apply(route, to: &activeCapture)
                 finalizeCapture(activeCapture)
             case .failed(let photoFailure, let diagnostics, let route):
@@ -557,7 +683,8 @@ struct MeasurementARView: UIViewRepresentable {
 
             let angleCapture = MeasurementAngleCapture(
                 evidence: evidence,
-                viewpoint: cameraViewpoint
+                viewpoint: cameraViewpoint,
+                objectOverlay: capture.objectOverlay
             )
 
             logCalibrationSummary(capture, result: .success(evidence.estimate))
@@ -750,7 +877,15 @@ struct MeasurementARView: UIViewRepresentable {
 
             return points.isEmpty
                 ? .unavailable(diagnostics)
-                : .accepted(points, diagnostics)
+                : .accepted(
+                    points,
+                    diagnostics,
+                    MeasurementObjectOutline(
+                        width: grid.width,
+                        height: grid.height,
+                        selectedIndices: region.indices
+                    )
+                )
         }
 
         private func sampleSingleShotFrame(from frame: ARFrame) -> SingleShotFrameSample {
@@ -805,7 +940,12 @@ struct MeasurementARView: UIViewRepresentable {
                     elevationAboveFloorMeters: nil,
                     floorEstimate: nil
                 )
-                return .accepted(pointCloud.worldPoints, diagnostics, .visionMask)
+                return .accepted(
+                    pointCloud.worldPoints,
+                    diagnostics,
+                    pointCloud.objectOutline,
+                    .visionMask
+                )
             } catch let error as PhotoObjectMeasurementError {
                 return frameSample(
                     after: .photo(error),
@@ -822,6 +962,53 @@ struct MeasurementARView: UIViewRepresentable {
             }
         }
 
+        /// Converts raw camera-image contours into a portrait-oriented image
+        /// space while the measured ARFrame is still alive. Using a viewport
+        /// with the rotated image's native aspect ratio isolates orientation
+        /// from cropping; the ARView applies its current aspect-fill crop later.
+        private func measurementObjectOverlay(
+            from outline: MeasurementObjectOutline,
+            frame: ARFrame
+        ) -> MeasurementObjectOverlay? {
+            let imageResolution = frame.camera.imageResolution
+            let orientedSize = CGSize(
+                width: imageResolution.height,
+                height: imageResolution.width
+            )
+            guard orientedSize.width > 0, orientedSize.height > 0 else { return nil }
+
+            let transform: CGAffineTransform
+            if #available(iOS 27.0, *) {
+                // PackMeasure is portrait-only, and ARKit expresses this angle
+                // in degrees for the iOS 27 display-transform API.
+                transform = frame.displayTransform(
+                    viewRotationAngle: 90,
+                    viewportSize: orientedSize
+                )
+            } else {
+                transform = frame.displayTransform(
+                    for: .portrait,
+                    viewportSize: orientedSize
+                )
+            }
+
+            let displayOutline = outline.mappingPoints { point in
+                let mapped = CGPoint(
+                    x: CGFloat(point.x),
+                    y: CGFloat(point.y)
+                ).applying(transform)
+                return SIMD2<Float>(Float(mapped.x), Float(mapped.y))
+            }
+            let overlay = MeasurementObjectOverlay(
+                displayOrientedImageSize: SIMD2<Float>(
+                    Float(orientedSize.width),
+                    Float(orientedSize.height)
+                ),
+                outline: displayOutline
+            )
+            return overlay.isRenderable ? overlay : nil
+        }
+
         private func frameSample(
             after failure: SingleShotCaptureFailure,
             from frame: ARFrame,
@@ -836,10 +1023,11 @@ struct MeasurementARView: UIViewRepresentable {
                 grid: grid,
                 maximumCount: Self.maximumAccumulatedPoints
             ) {
-            case .accepted(let points, let diagnostics):
+            case .accepted(let points, let diagnostics, let outline):
                 return .accepted(
                     points,
                     diagnostics,
+                    outline,
                     SingleShotCaptureRoute(
                         path: .reticleDepthFallback,
                         fallbackTrigger: failure,
@@ -1425,6 +1613,7 @@ struct MeasurementARView: UIViewRepresentable {
                     state.resetMeasurementSeries()
                 }
                 state.estimate = nil
+                state.objectOverlay = nil
                 state.phase = .failed(message)
             }
         }
