@@ -26,6 +26,7 @@
 		72B2BD9B3F2229A3E60FD7C9 /* MeasurementEstimator.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1FDBE8DEE3F3C0C88A2B2D8 /* MeasurementEstimator.swift */; };
 		8AD56996B4FAC128B09E64BA /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77EE721A9A7420432B19066B /* HomeView.swift */; };
 		91AD755F1BCD2E4F9302040A /* GuidedBoxMeasurement.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6C55F1052A5849E765D593B /* GuidedBoxMeasurement.swift */; };
+		948887BBF3D249A4522DDB48 /* ScannerCameraZoomTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EF900F501945DF4F2CBD830 /* ScannerCameraZoomTests.swift */; };
 		9ACAC0C2DE532E56CF9C8912 /* PackMeasureApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D518452488C8F3B0C8FACA8 /* PackMeasureApp.swift */; };
 		9BEDDCCAB0B572616A1BE54E /* ManualEntryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96CE46D4CD43343EBB49FF22 /* ManualEntryTests.swift */; };
 		9C825739E009739E0C6D92F7 /* SingleShotObjectMeasurementTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35CC0B9C38D98D8F0A49EDD3 /* SingleShotObjectMeasurementTests.swift */; };
@@ -70,6 +71,7 @@
 		5A6E5BC93C71F94AB333A1BF /* MeasurementMath.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeasurementMath.swift; sourceTree = "<group>"; };
 		5E7680F43D417158C818E786 /* GeometryModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GeometryModels.swift; sourceTree = "<group>"; };
 		5ED8ABA37AF0157830862257 /* PackMeasureTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = PackMeasureTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		5EF900F501945DF4F2CBD830 /* ScannerCameraZoomTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScannerCameraZoomTests.swift; sourceTree = "<group>"; };
 		6C32970059157769F21557D7 /* GuidedBoxWorkflow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuidedBoxWorkflow.swift; sourceTree = "<group>"; };
 		6E12DBF221D2E3F67479FE70 /* PackingModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PackingModels.swift; sourceTree = "<group>"; };
 		720B306F033EEFA5D3D7BADE /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
@@ -186,6 +188,7 @@
 			isa = PBXGroup;
 			children = (
 				0BEC26224D7E1CD00B41CDF5 /* MeasurementEstimatorTests.swift */,
+				5EF900F501945DF4F2CBD830 /* ScannerCameraZoomTests.swift */,
 			);
 			path = Scanner;
 			sourceTree = "<group>";
@@ -395,6 +398,7 @@
 				3D0B36D28510CAD37D056EE5 /* PackMeasureTests.swift in Sources */,
 				E481A09E4252F3209E588661 /* PackingPlannerTests.swift in Sources */,
 				42AD551A4A6F786DDA2A25F6 /* PhotoObjectMeasurementTests.swift in Sources */,
+				948887BBF3D249A4522DDB48 /* ScannerCameraZoomTests.swift in Sources */,
 				5E0B34A313A28EA94D945649 /* ScannerCapturePolicyTests.swift in Sources */,
 				9C825739E009739E0C6D92F7 /* SingleShotObjectMeasurementTests.swift in Sources */,
 			);
@@ -484,7 +488,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 16;
+				CURRENT_PROJECT_VERSION = 17;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -577,7 +581,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 16;
+				CURRENT_PROJECT_VERSION = 17;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
