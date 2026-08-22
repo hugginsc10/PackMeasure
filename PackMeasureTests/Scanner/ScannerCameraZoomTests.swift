@@ -116,66 +116,70 @@ struct ScannerCameraZoomTests {
     }
 
     @Test
-    func confirmationRequiresTwoNewerNormalDepthFrames() {
+    func confirmationRequiresTwoPostMutationNormalDepthFrames() {
         var gate = ScannerCameraZoomConfirmationGate(
-            minimumFrameTimestamp: 10
+            minimumFrameSequence: 10
         )
 
         let staleFrameAccepted = gate.observe(
-            frameTimestamp: 10,
+            frameSequence: 10,
             hasNormalDepth: true,
             zoomMatches: true
         )
         let firstNewFrameAccepted = gate.observe(
-            frameTimestamp: 10.1,
+            frameSequence: 11,
             hasNormalDepth: true,
             zoomMatches: true
         )
         let secondNewFrameAccepted = gate.observe(
-            frameTimestamp: 10.2,
+            frameSequence: 12,
             hasNormalDepth: true,
             zoomMatches: true
         )
 
+        // ARFrame timestamps can be lower than, or unrelated to, host uptime
+        // after a session transition. Confirmation intentionally depends only
+        // on the serial delegate's post-mutation frame sequence.
         #expect(!staleFrameAccepted)
         #expect(!firstNewFrameAccepted)
         #expect(secondNewFrameAccepted)
         #expect(gate.matchingFrameCount == 2)
+        #expect(gate.lastMatchingFrameSequence == 12)
     }
 
     @Test
     func confirmationResetsWhenDepthOrReadbackStopsMatching() {
         var gate = ScannerCameraZoomConfirmationGate(
-            minimumFrameTimestamp: 20
+            minimumFrameSequence: 20
         )
 
         let firstMatch = gate.observe(
-            frameTimestamp: 20.1,
+            frameSequence: 21,
             hasNormalDepth: true,
             zoomMatches: true
         )
         let missingDepth = gate.observe(
-            frameTimestamp: 20.2,
+            frameSequence: 22,
             hasNormalDepth: false,
             zoomMatches: true
         )
         let firstMatchAfterDepth = gate.observe(
-            frameTimestamp: 20.3,
+            frameSequence: 23,
             hasNormalDepth: true,
             zoomMatches: true
         )
         let mismatchedReadback = gate.observe(
-            frameTimestamp: 20.4,
+            frameSequence: 24,
             hasNormalDepth: true,
             zoomMatches: false
         )
         let firstMatchAfterMismatch = gate.observe(
-            frameTimestamp: 20.5,
+            frameSequence: 25,
             hasNormalDepth: true,
             zoomMatches: true
         )
         let secondMatchAfterMismatch = gate.observe(
-            frameTimestamp: 20.6,
+            frameSequence: 26,
             hasNormalDepth: true,
             zoomMatches: true
         )
@@ -186,6 +190,74 @@ struct ScannerCameraZoomTests {
         #expect(!mismatchedReadback)
         #expect(!firstMatchAfterMismatch)
         #expect(secondMatchAfterMismatch)
+    }
+
+    @Test @MainActor
+    func baselineConfigurableDeviceDiscoveryDoesNotOwnSessionReapply() {
+        let state = ScannerSheetView.ScannerStateModel()
+
+        state.updateCameraZoomAvailability(
+            [.half, .standard],
+            selected: .standard,
+            usesConfigurableDevice: true
+        )
+
+        #expect(state.cameraZoomUsesConfigurableDevice)
+        #expect(!state.hasConfirmedExplicitCameraZoom)
+        #expect(!state.shouldReapplyCameraZoomAfterSessionRun)
+    }
+
+    @Test @MainActor
+    func confirmedExplicitSelectionOwnsSessionReapply() {
+        let state = ScannerSheetView.ScannerStateModel()
+        state.phase = .ready
+        state.updateCameraZoomAvailability(
+            [.half, .standard],
+            selected: .standard,
+            usesConfigurableDevice: true
+        )
+
+        #expect(state.selectCameraZoom(.half))
+        #expect(!state.shouldReapplyCameraZoomAfterSessionRun)
+
+        state.updateCameraZoomAvailability(
+            [.half, .standard],
+            selected: .half,
+            usesConfigurableDevice: true,
+            confirmsExplicitSelection: true
+        )
+
+        #expect(state.cameraZoom == .half)
+        #expect(state.hasConfirmedExplicitCameraZoom)
+        #expect(state.shouldReapplyCameraZoomAfterSessionRun)
+        #expect(!state.isApplyingCameraZoom)
+    }
+
+    @Test @MainActor
+    func failedExplicitSelectionClearsSessionReapplyOwnership() {
+        let state = ScannerSheetView.ScannerStateModel()
+        state.phase = .ready
+        state.updateCameraZoomAvailability(
+            [.half, .standard],
+            selected: .standard,
+            usesConfigurableDevice: true
+        )
+        #expect(state.selectCameraZoom(.half))
+        state.updateCameraZoomAvailability(
+            [.half, .standard],
+            selected: .half,
+            usesConfigurableDevice: true,
+            confirmsExplicitSelection: true
+        )
+        #expect(state.shouldReapplyCameraZoomAfterSessionRun)
+
+        #expect(state.selectCameraZoom(.standard))
+        state.cameraZoomApplicationFailed()
+
+        #expect(state.cameraZoom == .standard)
+        #expect(!state.hasConfirmedExplicitCameraZoom)
+        #expect(!state.shouldReapplyCameraZoomAfterSessionRun)
+        #expect(!state.isApplyingCameraZoom)
     }
 
     @Test @MainActor
