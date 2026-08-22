@@ -109,6 +109,219 @@ struct PhotoInstanceLabelMask: Equatable, Sendable {
     }
 }
 
+/// A compact vector trace of the image pixels selected for measurement.
+///
+/// Points use normalized camera-image coordinates. Keeping only contour loops
+/// avoids retaining an AR frame, pixel buffer, or full-resolution mask after
+/// the settled photo has been processed.
+struct MeasurementObjectOutline: Equatable, Sendable {
+    private static let maximumSegmentCount = 12_000
+
+    let loops: [[SIMD2<Float>]]
+
+    var isEmpty: Bool { loops.isEmpty }
+
+    init(loops: [[SIMD2<Float>]]) {
+        self.loops = loops.filter { $0.count >= 3 }
+    }
+
+    init?(width: Int, height: Int, selectedIndices: [Int]) {
+        guard width > 0, height > 0, !selectedIndices.isEmpty else { return nil }
+
+        var selected = Array(repeating: false, count: width * height)
+        for index in selectedIndices where selected.indices.contains(index) {
+            selected[index] = true
+        }
+        guard selected.contains(true) else { return nil }
+
+        let segments = Self.marchingSquaresSegments(
+            width: width,
+            height: height,
+            selected: selected
+        )
+        guard segments.count <= Self.maximumSegmentCount else { return nil }
+        let tracedLoops = Self.traceLoops(from: segments)
+            .map { loop in
+                loop.map { point in
+                    let imageX = Float(point.x - 1) / 2
+                    let imageY = Float(point.y - 1) / 2
+                    return SIMD2<Float>(
+                        imageX / Float(width),
+                        imageY / Float(height)
+                    )
+                }
+            }
+            .filter { $0.count >= 3 }
+
+        guard !tracedLoops.isEmpty else { return nil }
+        self.loops = tracedLoops
+    }
+
+    func mappingPoints(
+        _ transform: (SIMD2<Float>) -> SIMD2<Float>
+    ) -> MeasurementObjectOutline {
+        MeasurementObjectOutline(loops: loops.map { $0.map(transform) })
+    }
+
+    private struct LatticePoint: Hashable {
+        let x: Int
+        let y: Int
+    }
+
+    private struct Segment: Hashable {
+        let first: LatticePoint
+        let second: LatticePoint
+
+        init(_ first: LatticePoint, _ second: LatticePoint) {
+            if first.x < second.x || (first.x == second.x && first.y <= second.y) {
+                self.first = first
+                self.second = second
+            } else {
+                self.first = second
+                self.second = first
+            }
+        }
+    }
+
+    /// Marching squares over a one-pixel false border produces closed contours
+    /// for edge-adjacent selections without any special-case clipping logic.
+    private static func marchingSquaresSegments(
+        width: Int,
+        height: Int,
+        selected: [Bool]
+    ) -> [Segment] {
+        func contains(paddedX: Int, paddedY: Int) -> Bool {
+            let x = paddedX - 1
+            let y = paddedY - 1
+            guard x >= 0, x < width, y >= 0, y < height else { return false }
+            return selected[y * width + x]
+        }
+
+        var segments: [Segment] = []
+        segments.reserveCapacity((width + height) * 2)
+
+        for y in 0...height {
+            for x in 0...width {
+                let topLeft = contains(paddedX: x, paddedY: y) ? 8 : 0
+                let topRight = contains(paddedX: x + 1, paddedY: y) ? 4 : 0
+                let bottomRight = contains(paddedX: x + 1, paddedY: y + 1) ? 2 : 0
+                let bottomLeft = contains(paddedX: x, paddedY: y + 1) ? 1 : 0
+                let value = topLeft | topRight | bottomRight | bottomLeft
+
+                let top = LatticePoint(x: 2 * x + 1, y: 2 * y)
+                let right = LatticePoint(x: 2 * x + 2, y: 2 * y + 1)
+                let bottom = LatticePoint(x: 2 * x + 1, y: 2 * y + 2)
+                let left = LatticePoint(x: 2 * x, y: 2 * y + 1)
+
+                switch value {
+                case 1: segments.append(Segment(left, bottom))
+                case 2: segments.append(Segment(bottom, right))
+                case 3: segments.append(Segment(left, right))
+                case 4: segments.append(Segment(top, right))
+                case 5:
+                    segments.append(Segment(top, right))
+                    segments.append(Segment(bottom, left))
+                case 6: segments.append(Segment(top, bottom))
+                case 7: segments.append(Segment(top, left))
+                case 8: segments.append(Segment(left, top))
+                case 9: segments.append(Segment(top, bottom))
+                case 10:
+                    segments.append(Segment(left, top))
+                    segments.append(Segment(right, bottom))
+                case 11: segments.append(Segment(top, right))
+                case 12: segments.append(Segment(left, right))
+                case 13: segments.append(Segment(right, bottom))
+                case 14: segments.append(Segment(bottom, left))
+                default: break
+                }
+            }
+        }
+        return segments
+    }
+
+    private static func traceLoops(from segments: [Segment]) -> [[LatticePoint]] {
+        var adjacency: [LatticePoint: [LatticePoint]] = [:]
+        for segment in segments {
+            adjacency[segment.first, default: []].append(segment.second)
+            adjacency[segment.second, default: []].append(segment.first)
+        }
+
+        var visited: Set<Segment> = []
+        var loops: [[LatticePoint]] = []
+
+        for segment in segments where !visited.contains(segment) {
+            let start = segment.first
+            var previous = segment.first
+            var current = segment.second
+            var loop = [start]
+            visited.insert(segment)
+
+            while current != start {
+                loop.append(current)
+                guard let next = adjacency[current]?.first(where: { candidate in
+                    candidate != previous && !visited.contains(Segment(current, candidate))
+                }) else {
+                    loop.removeAll()
+                    break
+                }
+                visited.insert(Segment(current, next))
+                previous = current
+                current = next
+            }
+
+            if loop.count >= 3 {
+                loops.append(loop)
+            }
+        }
+        return loops
+    }
+}
+
+/// The outline produced from the exact settled camera frame used for an angle.
+///
+/// The contour is converted into display-oriented image coordinates while that
+/// frame is still available. The preview can therefore reproject it after a
+/// layout change without consulting `ARSession.currentFrame`, which may already
+/// have advanced past the measured RGB/depth pair.
+struct MeasurementObjectOverlay: Equatable, Sendable {
+    let displayOrientedImageSize: SIMD2<Float>
+    let outline: MeasurementObjectOutline
+
+    var isRenderable: Bool {
+        displayOrientedImageSize.x.isFinite
+            && displayOrientedImageSize.y.isFinite
+            && displayOrientedImageSize.x > 0
+            && displayOrientedImageSize.y > 0
+            && !outline.isEmpty
+            && outline.loops.flatMap { $0 }.allSatisfy { point in
+                point.x.isFinite && point.y.isFinite
+            }
+    }
+
+    /// Maps an oriented-image point through the same centered aspect-fill rule
+    /// used by the camera background into normalized preview coordinates.
+    func normalizedPreviewPoint(
+        _ point: SIMD2<Float>,
+        viewportSize: SIMD2<Float>
+    ) -> SIMD2<Float>? {
+        guard isRenderable,
+              viewportSize.x.isFinite,
+              viewportSize.y.isFinite,
+              viewportSize.x > 0,
+              viewportSize.y > 0 else {
+            return nil
+        }
+
+        let scale = max(
+            viewportSize.x / displayOrientedImageSize.x,
+            viewportSize.y / displayOrientedImageSize.y
+        )
+        let displayedSize = displayOrientedImageSize * scale
+        let origin = (viewportSize - displayedSize) / 2
+        return (origin + point * displayedSize) / viewportSize
+    }
+}
+
 struct PhotoMaskQuality: Equatable, Sendable {
     let selectedPixelCount: Int
     let areaFraction: Float
@@ -244,6 +457,10 @@ struct PhotoDepthSelectionMask: Equatable, Sendable {
     func contains(x: Int, y: Int) -> Bool {
         guard x >= 0, x < width, y >= 0, y < height else { return false }
         return selected[y * width + x]
+    }
+
+    var selectedIndices: [Int] {
+        selected.indices.filter { selected[$0] }
     }
 }
 
@@ -482,6 +699,7 @@ struct PhotoObjectPointCloud: Sendable {
     let worldPoints: [SIMD3<Float>]
     let maskQuality: PhotoMaskQuality
     let depthSupport: PhotoDepthSupport
+    let objectOutline: MeasurementObjectOutline?
 }
 
 /// Deterministic core for the one-shutter path. Platform adapters only need to
@@ -536,7 +754,12 @@ struct PhotoObjectMeasurement: Sendable {
             selectedLabel: selected.label,
             worldPoints: points,
             maskQuality: quality,
-            depthSupport: support
+            depthSupport: support,
+            objectOutline: MeasurementObjectOutline(
+                width: depthMask.width,
+                height: depthMask.height,
+                selectedIndices: depthMask.selectedIndices
+            )
         )
     }
 

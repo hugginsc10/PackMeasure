@@ -8,6 +8,7 @@ struct ScannerSheetView: View {
         var previewRequestID = 0
         var phase: ScannerPhase = .checkingSupport
         var estimate: MeasurementEstimate?
+        var objectOverlay: MeasurementObjectOverlay?
         private(set) var isPreparingForAiming = false
         private(set) var measurementSeriesID = 0
         private(set) var measurementWorkflow = MultiAngleMeasurementWorkflow()
@@ -25,6 +26,7 @@ struct ScannerSheetView: View {
             _ capture: MeasurementAngleCapture
         ) -> MultiAngleMeasurementProgress {
             isPreparingForAiming = false
+            objectOverlay = capture.objectOverlay
             guard capture.evidence.estimate.confidence != .low else {
                 estimate = capture.evidence.estimate
                 phase = .measured
@@ -46,6 +48,7 @@ struct ScannerSheetView: View {
             measurementWorkflow.reset()
             measurementSeriesID += 1
             estimate = nil
+            objectOverlay = nil
             isPreparingForAiming = false
         }
 
@@ -63,6 +66,7 @@ struct ScannerSheetView: View {
                 break
             }
             estimate = nil
+            objectOverlay = nil
             isPreparingForAiming = true
             previewRequestID += 1
         }
@@ -70,6 +74,7 @@ struct ScannerSheetView: View {
         func startMeasurement() {
             guard ScannerActionPolicy.canStartMeasurement(phase: phase) else { return }
             estimate = nil
+            objectOverlay = nil
             isPreparingForAiming = false
             captureRequestID += 1
             phase = .scanning(progress: 0)
@@ -94,7 +99,7 @@ struct ScannerSheetView: View {
                 .frame(minHeight: 260, idealHeight: 360, maxHeight: 420)
                 .clipShape(RoundedRectangle(cornerRadius: 24))
                 .overlay {
-                    if showsCameraGuide {
+                    if showsCameraGuide, scannerState.objectOverlay == nil {
                         CameraObjectFrame()
                     }
                 }
@@ -377,9 +382,15 @@ struct ScannerSheetView: View {
     }
 
     private var showsCameraGuide: Bool {
-        guard scannerState.estimate == nil else { return false }
-        if case .unsupported = scannerState.phase { return false }
-        return true
+        guard scannerState.objectOverlay == nil else { return false }
+        return switch scannerState.phase {
+        case .checkingSupport, .ready, .scanning:
+            true
+        case .measured, .failed:
+            scannerState.isPreparingForAiming
+        case .unsupported:
+            false
+        }
     }
 
     private var previewGuidanceText: String {

@@ -379,6 +379,17 @@ struct MeasurementCameraViewpoint: Equatable, Sendable {
 struct MeasurementAngleCapture: Equatable, Sendable {
     let evidence: MeasurementCaptureEvidence
     let viewpoint: MeasurementCameraViewpoint
+    let objectOverlay: MeasurementObjectOverlay?
+
+    init(
+        evidence: MeasurementCaptureEvidence,
+        viewpoint: MeasurementCameraViewpoint,
+        objectOverlay: MeasurementObjectOverlay? = nil
+    ) {
+        self.evidence = evidence
+        self.viewpoint = viewpoint
+        self.objectOverlay = objectOverlay
+    }
 }
 
 enum MeasurementViewpointValidation: Equatable, Sendable {

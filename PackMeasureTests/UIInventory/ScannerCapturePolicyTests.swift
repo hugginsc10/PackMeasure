@@ -204,6 +204,61 @@ struct ScannerCapturePolicyTests {
     }
 
     @Test @MainActor
+    func measuredObjectOutlineIsStoredThenClearedBeforeLiveAiming() throws {
+        let state = ScannerSheetView.ScannerStateModel()
+        state.phase = .scanning(progress: 0.5)
+        let outline = try #require(
+            MeasurementObjectOutline(
+                width: 4,
+                height: 4,
+                selectedIndices: [5, 6, 9, 10]
+            )
+        )
+        let overlay = MeasurementObjectOverlay(
+            displayOrientedImageSize: SIMD2<Float>(3, 4),
+            outline: outline
+        )
+
+        _ = state.receiveMeasurement(
+            angleCapture(
+                position: SIMD3<Float>(0, 0, 1),
+                objectOverlay: overlay
+            )
+        )
+
+        #expect(state.objectOverlay == overlay)
+        #expect(state.capturedEstimates.count == 1)
+
+        state.prepareForAiming()
+
+        #expect(state.objectOverlay == nil)
+        #expect(state.capturedEstimates.count == 1)
+        #expect(state.isPreparingForAiming)
+    }
+
+    @Test @MainActor
+    func restartingMeasurementSeriesClearsMeasuredObjectOutline() throws {
+        let state = ScannerSheetView.ScannerStateModel()
+        let outline = try #require(
+            MeasurementObjectOutline(width: 2, height: 2, selectedIndices: [0])
+        )
+        _ = state.receiveMeasurement(
+            angleCapture(
+                position: SIMD3<Float>(0, 0, 1),
+                objectOverlay: MeasurementObjectOverlay(
+                    displayOrientedImageSize: SIMD2<Float>(3, 4),
+                    outline: outline
+                )
+            )
+        )
+
+        state.resetMeasurementSeries()
+
+        #expect(state.objectOverlay == nil)
+        #expect(state.capturedEstimates.isEmpty)
+    }
+
+    @Test @MainActor
     func failedPhotoReturnsToLivePreviewWithoutStartingCapture() {
         let state = ScannerSheetView.ScannerStateModel()
         state.captureRequestID = 7
@@ -559,7 +614,8 @@ struct ScannerCapturePolicyTests {
         pointCloudConfidence: ScanConfidence = .high,
         center: SIMD3<Float> = .zero,
         position: SIMD3<Float>,
-        horizontalForward: SIMD2<Float>? = nil
+        horizontalForward: SIMD2<Float>? = nil,
+        objectOverlay: MeasurementObjectOverlay? = nil
     ) -> MeasurementAngleCapture {
         let derivedForward = SIMD2<Float>(-position.x, -position.z)
         let resolvedForward: SIMD2<Float>
@@ -587,7 +643,8 @@ struct ScannerCapturePolicyTests {
             viewpoint: MeasurementCameraViewpoint(
                 position: position,
                 horizontalForward: resolvedForward
-            )
+            ),
+            objectOverlay: objectOverlay
         )
     }
 
