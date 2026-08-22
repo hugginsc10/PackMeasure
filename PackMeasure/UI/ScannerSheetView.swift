@@ -507,8 +507,6 @@ enum ScannerGuidanceCopy {
         for failure: MeasurementConsensusFailure
     ) -> String {
         switch failure {
-        case .targetMoved:
-            "The item appears to have moved between photos. Put it back and restart the scan."
         case .dimensionsInconsistent:
             "The three angles did not agree enough for a reliable estimate. Restart with the item still."
         case .invalidMeasurement:

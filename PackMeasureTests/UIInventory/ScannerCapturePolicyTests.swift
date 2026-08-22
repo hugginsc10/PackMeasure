@@ -1,4 +1,5 @@
 import Testing
+import simd
 @testable import PackMeasure
 
 @Suite("Scanner capture review policy")
@@ -306,6 +307,44 @@ struct ScannerCapturePolicyTests {
     }
 
     @Test @MainActor
+    func stationaryBoxLargeFitCenterDriftResolvesWithoutAlignmentRetryLoop() throws {
+        let state = ScannerSheetView.ScannerStateModel()
+        let first = angleCapture(
+            length: meters(fromInches: 16),
+            width: meters(fromInches: 10),
+            height: meters(fromInches: 5),
+            position: SIMD3<Float>(0, 0, 1)
+        )
+        state.receiveMeasurement(first)
+        let progress = state.receiveMeasurement(
+            angleCapture(
+                length: meters(fromInches: 16),
+                width: meters(fromInches: 11),
+                height: meters(fromInches: 5),
+                center: SIMD3<Float>(2.5, -1.5, 3.0),
+                position: SIMD3<Float>(1, 0, 0)
+            )
+        )
+
+        guard case .accepted(let consensus) = progress else {
+            Issue.record("expected stationary box views to resolve without an alignment retry")
+            return
+        }
+        #expect(state.capturedEstimates.count == 2)
+        #expect(state.estimate == consensus)
+        #expect(consensus.lengthMeters == meters(fromInches: 16))
+        #expect(consensus.widthMeters == meters(fromInches: 11))
+        #expect(consensus.heightMeters == meters(fromInches: 5))
+        #expect(
+            ScannerCapturePolicy.reviewState(
+                phase: state.phase,
+                estimate: state.estimate,
+                measurementProgress: state.measurementProgress
+            ) == .accepted
+        )
+    }
+
+    @Test @MainActor
     func lowConfidenceRetryDoesNotConsumeStagedAngleAndLaterGoodViewResolves() {
         let state = ScannerSheetView.ScannerStateModel()
         let first = angleCapture(position: SIMD3<Float>(0, 0, 1))
@@ -519,9 +558,20 @@ struct ScannerCapturePolicyTests {
         height: Double = 0.50,
         pointCloudConfidence: ScanConfidence = .high,
         center: SIMD3<Float> = .zero,
-        position: SIMD3<Float>
+        position: SIMD3<Float>,
+        horizontalForward: SIMD2<Float>? = nil
     ) -> MeasurementAngleCapture {
-        MeasurementAngleCapture(
+        let derivedForward = SIMD2<Float>(-position.x, -position.z)
+        let resolvedForward: SIMD2<Float>
+        if let horizontalForward {
+            resolvedForward = horizontalForward
+        } else if simd_length(derivedForward) > 0.0001 {
+            resolvedForward = simd_normalize(derivedForward)
+        } else {
+            resolvedForward = SIMD2<Float>(0, -1)
+        }
+
+        return MeasurementAngleCapture(
             evidence: MeasurementCaptureEvidence(
                 estimate: MeasurementEstimate(
                     lengthMeters: length,
@@ -534,7 +584,14 @@ struct ScannerCapturePolicyTests {
                 pointCloudConfidence: pointCloudConfidence,
                 geometryCenter: center
             ),
-            viewpoint: MeasurementCameraViewpoint(position: position)
+            viewpoint: MeasurementCameraViewpoint(
+                position: position,
+                horizontalForward: resolvedForward
+            )
         )
+    }
+
+    private func meters(fromInches inches: Double) -> Double {
+        inches * 0.0254
     }
 }

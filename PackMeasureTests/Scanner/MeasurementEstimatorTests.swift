@@ -507,16 +507,26 @@ struct MeasurementEstimatorTests {
         let belowThreshold = angleCapture(position: SIMD3<Float>(0.074, 0, 0))
         let aboveThreshold = angleCapture(position: SIMD3<Float>(0.076, 0, 0))
 
-        #expect(policy.validate(belowThreshold, against: reference) == .tooSimilar)
-        #expect(policy.validate(aboveThreshold, against: reference) == .distinct)
+        #expect(
+            policy.validate(
+                belowThreshold,
+                against: reference
+            ) == .tooSimilar
+        )
+        #expect(
+            policy.validate(
+                aboveThreshold,
+                against: reference
+            ) == .distinct
+        )
     }
 
     @Test
-    func viewpointRequiresTwentyFiveDegreeOrbitInsteadOfDistanceAlone() {
+    func viewpointRequiresTwentyDegreeViewingDirectionChange() {
         let policy = MeasurementViewpointPolicy()
         let reference = angleCapture(position: SIMD3<Float>(0, 0, 1))
-        let belowAngle = Float.pi * 24 / 180
-        let aboveAngle = Float.pi * 26 / 180
+        let belowAngle = Float.pi * 19 / 180
+        let aboveAngle = Float.pi * 21 / 180
         let tooSimilar = angleCapture(
             position: SIMD3<Float>(sin(belowAngle), 0, cos(belowAngle))
         )
@@ -524,25 +534,188 @@ struct MeasurementEstimatorTests {
             position: SIMD3<Float>(sin(aboveAngle), 0, cos(aboveAngle))
         )
 
-        #expect(policy.validate(tooSimilar, against: reference) == .tooSimilar)
-        #expect(policy.validate(distinct, against: reference) == .distinct)
+        #expect(
+            policy.validate(
+                tooSimilar,
+                against: reference
+            ) == .tooSimilar
+        )
+        #expect(
+            policy.validate(
+                distinct,
+                against: reference
+            ) == .distinct
+        )
     }
 
     @Test
-    func viewpointRejectsTargetCenterDriftBeforeComparingOrbit() {
+    func cameraTransformUsesARKitNegativeZAsHorizontalForward() {
+        var transform = matrix_identity_float4x4
+        transform.columns.3 = SIMD4<Float>(1, 2, 3, 1)
+
+        let viewpoint = MeasurementCameraViewpoint(cameraTransform: transform)
+
+        #expect(viewpoint.position == SIMD3<Float>(1, 2, 3))
+        #expect(viewpoint.horizontalForward == SIMD2<Float>(0, -1))
+        #expect(viewpoint.hasValidEvidence)
+    }
+
+    @Test
+    func pitchOnlyCameraChangeWithSameHeadingRemainsTooSimilar() {
         let policy = MeasurementViewpointPolicy()
-        let reference = angleCapture(position: SIMD3<Float>(0, 0, 1))
-        let stable = angleCapture(
-            center: SIMD3<Float>(0.0508, 0, 0),
-            position: SIMD3<Float>(1, 0, 0)
+        var referenceTransform = matrix_identity_float4x4
+        referenceTransform.columns.3 = SIMD4<Float>(0, 0, 1, 1)
+
+        let pitch = Float.pi / 3
+        var pitchedTransform = matrix_identity_float4x4
+        pitchedTransform.columns.2 = SIMD4<Float>(0, sin(pitch), cos(pitch), 0)
+        pitchedTransform.columns.3 = SIMD4<Float>(0, 0, 0.70, 1)
+
+        let referenceViewpoint = MeasurementCameraViewpoint(
+            cameraTransform: referenceTransform
         )
-        let moved = angleCapture(
-            center: SIMD3<Float>(0.061, 0, 0),
+        let pitchedViewpoint = MeasurementCameraViewpoint(
+            cameraTransform: pitchedTransform
+        )
+        let referenceEvidence = angleCapture(
+            position: referenceViewpoint.position
+        ).evidence
+        let pitchedEvidence = angleCapture(
+            position: pitchedViewpoint.position
+        ).evidence
+        let reference = MeasurementAngleCapture(
+            evidence: referenceEvidence,
+            viewpoint: referenceViewpoint
+        )
+        let pitched = MeasurementAngleCapture(
+            evidence: pitchedEvidence,
+            viewpoint: pitchedViewpoint
+        )
+
+        #expect(policy.validate(pitched, against: reference) == .tooSimilar)
+    }
+
+    @Test
+    func viewpointValidationIsSymmetricDespiteFitCenterOrder() {
+        let policy = MeasurementViewpointPolicy()
+        let first = angleCapture(
+            center: SIMD3<Float>(8, -3, 4),
+            position: SIMD3<Float>(0, 0, 1),
+            horizontalForward: SIMD2<Float>(0, -1)
+        )
+        let second = angleCapture(
+            center: SIMD3<Float>(-5, 2, -7),
+            position: SIMD3<Float>(1, 0, 0),
+            horizontalForward: SIMD2<Float>(-1, 0)
+        )
+
+        #expect(policy.validate(second, against: first) == .distinct)
+        #expect(policy.validate(first, against: second) == .distinct)
+    }
+
+    @Test
+    func viewpointIgnoresLargeCandidateFitCenterDriftForDistinctCameraView() {
+        let policy = MeasurementViewpointPolicy()
+        let reference = angleCapture(
+            length: meters(fromInches: 16),
+            width: meters(fromInches: 10),
+            height: meters(fromInches: 5),
+            position: SIMD3<Float>(0, 0, 1)
+        )
+        let distinctViewWithLargeFitDrift = angleCapture(
+            length: meters(fromInches: 16),
+            width: meters(fromInches: 11),
+            height: meters(fromInches: 5),
+            center: SIMD3<Float>(2.5, -1.5, 3.0),
             position: SIMD3<Float>(1, 0, 0)
         )
 
-        #expect(policy.validate(stable, against: reference) == .distinct)
-        #expect(policy.validate(moved, against: reference) == .targetMoved)
+        #expect(
+            policy.validate(
+                distinctViewWithLargeFitDrift,
+                against: reference
+            )
+                == .distinct
+        )
+    }
+
+    @Test
+    func largeFitCenterDriftDoesNotTurnSameCameraViewIntoDistinctView() {
+        let policy = MeasurementViewpointPolicy()
+        let reference = angleCapture(
+            length: meters(fromInches: 16),
+            width: meters(fromInches: 10),
+            height: meters(fromInches: 5),
+            position: SIMD3<Float>(0, 0, 1)
+        )
+        let sameViewWithLargeFitDrift = angleCapture(
+            length: meters(fromInches: 16),
+            width: meters(fromInches: 11),
+            height: meters(fromInches: 5),
+            center: SIMD3<Float>(2.5, -1.5, 3.0),
+            position: SIMD3<Float>(0.10, 0, 1)
+        )
+
+        #expect(
+            policy.validate(
+                sameViewWithLargeFitDrift,
+                against: reference
+            )
+                == .tooSimilar
+        )
+    }
+
+    @Test
+    func movedObjectAndPhoneWithUnchangedRelativeViewRemainTooSimilar() {
+        let policy = MeasurementViewpointPolicy()
+        let reference = angleCapture(
+            center: SIMD3<Float>(0, 0, 0),
+            position: SIMD3<Float>(0, 0, 1),
+            horizontalForward: SIMD2<Float>(0, -1)
+        )
+        let objectAndPhoneShiftedTogether = angleCapture(
+            center: SIMD3<Float>(1, 0, 0),
+            position: SIMD3<Float>(1, 0, 1),
+            horizontalForward: SIMD2<Float>(0, -1)
+        )
+
+        #expect(
+            policy.validate(objectAndPhoneShiftedTogether, against: reference)
+                == .tooSimilar
+        )
+    }
+
+    @Test
+    func straightCameraMoveWithUnchangedViewDirectionRemainsTooSimilar() {
+        let policy = MeasurementViewpointPolicy()
+        let reference = angleCapture(
+            position: SIMD3<Float>(0, 0, 1),
+            horizontalForward: SIMD2<Float>(0, -1)
+        )
+        let closerAlongSameView = angleCapture(
+            position: SIMD3<Float>(0, 0, 0.70),
+            horizontalForward: SIMD2<Float>(0, -1)
+        )
+
+        #expect(
+            policy.validate(closerAlongSameView, against: reference)
+                == .tooSimilar
+        )
+    }
+
+    @Test
+    func trueOrbitWithChangedViewDirectionIsDistinct() {
+        let policy = MeasurementViewpointPolicy()
+        let reference = angleCapture(
+            position: SIMD3<Float>(0, 0, 1),
+            horizontalForward: SIMD2<Float>(0, -1)
+        )
+        let orbitingView = angleCapture(
+            position: SIMD3<Float>(1, 0, 0),
+            horizontalForward: SIMD2<Float>(-1, 0)
+        )
+
+        #expect(policy.validate(orbitingView, against: reference) == .distinct)
     }
 
     @Test
@@ -604,6 +777,32 @@ struct MeasurementEstimatorTests {
     }
 
     @Test
+    func largeFitCenterDriftStillRequiresThirdAngleWhenDimensionsDisagree() {
+        var workflow = MultiAngleMeasurementWorkflow()
+        let first = angleCapture(
+            length: meters(fromInches: 16),
+            width: meters(fromInches: 10),
+            height: meters(fromInches: 5),
+            position: SIMD3<Float>(0, 0, 1)
+        )
+        let dimensionallyDiscordant = angleCapture(
+            length: meters(fromInches: 16),
+            width: meters(fromInches: 12),
+            height: meters(fromInches: 5),
+            center: SIMD3<Float>(2.5, -1.5, 3.0),
+            position: SIMD3<Float>(1, 0, 0)
+        )
+
+        _ = workflow.record(first)
+
+        #expect(
+            workflow.record(dimensionallyDiscordant)
+                == .needsAnotherAngle(reason: .dimensionsDisagree, acceptedCount: 2)
+        )
+        #expect(workflow.captures == [first, dimensionallyDiscordant])
+    }
+
+    @Test
     func tooSimilarRetryIsNotAppendedAndLaterDistinctViewCanResolve() throws {
         var workflow = MultiAngleMeasurementWorkflow()
         let first = angleCapture(position: SIMD3<Float>(0, 0, 1))
@@ -634,6 +833,247 @@ struct MeasurementEstimatorTests {
         #expect(workflow.captures == [first, laterDistinct])
         #expect(consensus.comparisonAngleCount == 2)
         #expect(consensus.comparisonAgreementCount == 2)
+    }
+
+    @Test
+    func largeFitCenterDriftAgreeingBoxViewResolvesWithoutRetryLoop() throws {
+        var workflow = MultiAngleMeasurementWorkflow()
+        let first = angleCapture(
+            length: meters(fromInches: 16),
+            width: meters(fromInches: 10),
+            height: meters(fromInches: 5),
+            position: SIMD3<Float>(0, 0, 1)
+        )
+        let agreeingDistinctView = angleCapture(
+            length: meters(fromInches: 16),
+            width: meters(fromInches: 11),
+            height: meters(fromInches: 5),
+            center: SIMD3<Float>(2.5, -1.5, 3.0),
+            position: SIMD3<Float>(1, 0, 0)
+        )
+
+        #expect(
+            workflow.record(first)
+                == .needsAnotherAngle(reason: .firstAngleCaptured, acceptedCount: 1)
+        )
+        guard case .accepted(let consensus) = workflow.record(agreeingDistinctView) else {
+            Issue.record("expected agreeing dimensions to resolve despite fitted-center drift")
+            return
+        }
+        #expect(workflow.captures == [first, agreeingDistinctView])
+        #expect(consensus.lengthMeters == meters(fromInches: 16))
+        #expect(consensus.widthMeters == meters(fromInches: 11))
+        #expect(consensus.heightMeters == meters(fromInches: 5))
+        #expect(consensus.comparisonAngleCount == 2)
+        #expect(consensus.comparisonAgreementCount == 2)
+    }
+
+    @Test
+    func agreeingBoxConsensusIsInvariantToWhichAngleHasBadFitCenter() throws {
+        let firstViewPosition = SIMD3<Float>(0, 0, 1)
+        let secondViewPosition = SIMD3<Float>(1, 0, 0)
+        let badFitCenter = SIMD3<Float>(2.5, -1.5, 3.0)
+
+        var badFirstCenterWorkflow = MultiAngleMeasurementWorkflow()
+        _ = badFirstCenterWorkflow.record(
+            angleCapture(
+                length: meters(fromInches: 16),
+                width: meters(fromInches: 10),
+                height: meters(fromInches: 5),
+                center: badFitCenter,
+                position: firstViewPosition
+            )
+        )
+        let badFirstProgress = badFirstCenterWorkflow.record(
+            angleCapture(
+                length: meters(fromInches: 16),
+                width: meters(fromInches: 11),
+                height: meters(fromInches: 5),
+                position: secondViewPosition
+            )
+        )
+
+        var badSecondCenterWorkflow = MultiAngleMeasurementWorkflow()
+        _ = badSecondCenterWorkflow.record(
+            angleCapture(
+                length: meters(fromInches: 16),
+                width: meters(fromInches: 10),
+                height: meters(fromInches: 5),
+                position: firstViewPosition
+            )
+        )
+        let badSecondProgress = badSecondCenterWorkflow.record(
+            angleCapture(
+                length: meters(fromInches: 16),
+                width: meters(fromInches: 11),
+                height: meters(fromInches: 5),
+                center: badFitCenter,
+                position: secondViewPosition
+            )
+        )
+
+        guard case .accepted(let badFirstConsensus) = badFirstProgress,
+              case .accepted(let badSecondConsensus) = badSecondProgress else {
+            Issue.record("expected capture order to be independent of fitted-center quality")
+            return
+        }
+        #expect(badFirstConsensus == badSecondConsensus)
+    }
+
+    @Test
+    func largeFitCenterDriftThirdAngleCanResolveWithoutRetryLoop() throws {
+        var workflow = MultiAngleMeasurementWorkflow()
+        let first = angleCapture(
+            length: meters(fromInches: 16),
+            width: meters(fromInches: 12),
+            height: meters(fromInches: 5),
+            position: SIMD3<Float>(0, 0, 1),
+            horizontalForward: SIMD2<Float>(0, -1)
+        )
+        let second = angleCapture(
+            length: meters(fromInches: 16),
+            width: meters(fromInches: 10),
+            height: meters(fromInches: 5),
+            center: SIMD3<Float>(2.5, -1.5, 3.0),
+            position: SIMD3<Float>(1, 0, 0),
+            horizontalForward: SIMD2<Float>(-1, 0)
+        )
+        let agreeingThird = angleCapture(
+            length: meters(fromInches: 16),
+            width: meters(fromInches: 12),
+            height: meters(fromInches: 5),
+            center: SIMD3<Float>(-3.0, 2.0, -2.5),
+            position: SIMD3<Float>(0, 0, -1),
+            horizontalForward: SIMD2<Float>(0, 1)
+        )
+
+        _ = workflow.record(first)
+        #expect(
+            workflow.record(second)
+                == .needsAnotherAngle(reason: .dimensionsDisagree, acceptedCount: 2)
+        )
+        guard case .accepted(let consensus) = workflow.record(agreeingThird) else {
+            Issue.record("expected the agreeing third angle to resolve despite center drift")
+            return
+        }
+        #expect(workflow.captures == [first, second, agreeingThird])
+        #expect(consensus.widthMeters == meters(fromInches: 12))
+        #expect(consensus.comparisonAngleCount == 3)
+        #expect(consensus.comparisonAgreementCount == 2)
+    }
+
+    @Test
+    func thirdAngleMustChangeViewDirectionFromEverySavedCapture() {
+        var workflow = MultiAngleMeasurementWorkflow()
+        let first = angleCapture(
+            length: meters(fromInches: 16),
+            width: meters(fromInches: 12),
+            height: meters(fromInches: 5),
+            position: SIMD3<Float>(0, 0, 1),
+            horizontalForward: SIMD2<Float>(0, -1)
+        )
+        let second = angleCapture(
+            length: meters(fromInches: 16),
+            width: meters(fromInches: 10),
+            height: meters(fromInches: 5),
+            position: SIMD3<Float>(1, 0, 0),
+            horizontalForward: SIMD2<Float>(-1, 0)
+        )
+        let repeatsFirstDirection = angleCapture(
+            length: meters(fromInches: 16),
+            width: meters(fromInches: 12),
+            height: meters(fromInches: 5),
+            position: SIMD3<Float>(0, 0, -1),
+            horizontalForward: SIMD2<Float>(0, -1)
+        )
+
+        _ = workflow.record(first)
+        #expect(
+            workflow.record(second)
+                == .needsAnotherAngle(reason: .dimensionsDisagree, acceptedCount: 2)
+        )
+        #expect(
+            workflow.record(repeatsFirstDirection)
+                == .needsAnotherAngle(reason: .viewpointTooSimilar, acceptedCount: 2)
+        )
+        #expect(workflow.captures == [first, second])
+    }
+
+    @Test
+    func invalidMeasurementRemainsTerminalWithoutAppendingCapture() {
+        var workflow = MultiAngleMeasurementWorkflow()
+        let invalid = angleCapture(
+            length: .nan,
+            position: SIMD3<Float>(0, 0, 1)
+        )
+
+        #expect(workflow.record(invalid) == .inconsistent(.invalidMeasurement))
+        #expect(workflow.captures.isEmpty)
+    }
+
+    @Test
+    func nonfiniteSpatialEvidenceRemainsTerminalWithoutAppendingCandidate() {
+        let first = angleCapture(position: SIMD3<Float>(0, 0, 1))
+
+        var invalidCenterWorkflow = MultiAngleMeasurementWorkflow()
+        _ = invalidCenterWorkflow.record(first)
+        let invalidCenter = angleCapture(
+            center: SIMD3<Float>(.nan, 0, 0),
+            position: SIMD3<Float>(1, 0, 0)
+        )
+        #expect(
+            invalidCenterWorkflow.record(invalidCenter)
+                == .inconsistent(.invalidMeasurement)
+        )
+        #expect(invalidCenterWorkflow.captures == [first])
+
+        var invalidCameraWorkflow = MultiAngleMeasurementWorkflow()
+        _ = invalidCameraWorkflow.record(first)
+        let invalidCamera = angleCapture(
+            position: SIMD3<Float>(.infinity, 0, 0)
+        )
+        #expect(
+            invalidCameraWorkflow.record(invalidCamera)
+                == .inconsistent(.invalidMeasurement)
+        )
+        #expect(invalidCameraWorkflow.captures == [first])
+    }
+
+    @Test
+    func nonfiniteOrZeroHorizontalForwardRemainsTerminal() {
+        let first = angleCapture(position: SIMD3<Float>(0, 0, 1))
+
+        let invalidForwards = [
+            SIMD2<Float>(.nan, 0),
+            SIMD2<Float>(.infinity, 0),
+            SIMD2<Float>.zero,
+        ]
+
+        for invalidForward in invalidForwards {
+            let invalidFirst = angleCapture(
+                position: SIMD3<Float>(0, 0, 1),
+                horizontalForward: invalidForward
+            )
+            var invalidFirstWorkflow = MultiAngleMeasurementWorkflow()
+            #expect(
+                invalidFirstWorkflow.record(invalidFirst)
+                    == .inconsistent(.invalidMeasurement)
+            )
+            #expect(invalidFirstWorkflow.captures.isEmpty)
+
+            var workflow = MultiAngleMeasurementWorkflow()
+            _ = workflow.record(first)
+            let invalidCandidate = angleCapture(
+                position: SIMD3<Float>(1, 0, 0),
+                horizontalForward: invalidForward
+            )
+
+            #expect(
+                workflow.record(invalidCandidate)
+                    == .inconsistent(.invalidMeasurement)
+            )
+            #expect(workflow.captures == [first])
+        }
     }
 
     @Test
@@ -970,9 +1410,20 @@ struct MeasurementEstimatorTests {
         sampleCount: Int = 100,
         pointCloudConfidence: ScanConfidence = .high,
         center: SIMD3<Float> = .zero,
-        position: SIMD3<Float>
+        position: SIMD3<Float>,
+        horizontalForward: SIMD2<Float>? = nil
     ) -> MeasurementAngleCapture {
-        MeasurementAngleCapture(
+        let derivedForward = SIMD2<Float>(-position.x, -position.z)
+        let resolvedForward: SIMD2<Float>
+        if let horizontalForward {
+            resolvedForward = horizontalForward
+        } else if simd_length(derivedForward) > 0.0001 {
+            resolvedForward = simd_normalize(derivedForward)
+        } else {
+            resolvedForward = SIMD2<Float>(0, -1)
+        }
+
+        return MeasurementAngleCapture(
             evidence: MeasurementCaptureEvidence(
                 estimate: MeasurementEstimate(
                     lengthMeters: length,
@@ -985,7 +1436,10 @@ struct MeasurementEstimatorTests {
                 pointCloudConfidence: pointCloudConfidence,
                 geometryCenter: center
             ),
-            viewpoint: MeasurementCameraViewpoint(position: position)
+            viewpoint: MeasurementCameraViewpoint(
+                position: position,
+                horizontalForward: resolvedForward
+            )
         )
     }
 
