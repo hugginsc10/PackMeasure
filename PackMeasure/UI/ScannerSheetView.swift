@@ -6,9 +6,14 @@ struct ScannerSheetView: View {
     final class ScannerStateModel {
         var captureRequestID = 0
         var previewRequestID = 0
+        private(set) var cameraZoomRequestID = 0
         var phase: ScannerPhase = .checkingSupport
         var estimate: MeasurementEstimate?
         var objectOverlay: MeasurementObjectOverlay?
+        private(set) var cameraZoom = ScannerCameraZoom.standard
+        private(set) var availableCameraZooms = [ScannerCameraZoom.standard]
+        private(set) var cameraZoomUsesConfigurableDevice = false
+        private(set) var isApplyingCameraZoom = false
         private(set) var isPreparingForAiming = false
         private(set) var measurementSeriesID = 0
         private(set) var measurementWorkflow = MultiAngleMeasurementWorkflow()
@@ -19,6 +24,49 @@ struct ScannerSheetView: View {
 
         var capturedEstimates: [MeasurementEstimate] {
             measurementWorkflow.captures.map(\.evidence.estimate)
+        }
+
+        var canChangeCameraZoom: Bool {
+            availableCameraZooms.count > 1
+                && capturedEstimates.isEmpty
+                && phase == .ready
+                && !isApplyingCameraZoom
+        }
+
+        var canStartMeasurement: Bool {
+            ScannerActionPolicy.canStartMeasurement(phase: phase)
+                && !isApplyingCameraZoom
+        }
+
+        func updateCameraZoomAvailability(
+            _ zooms: [ScannerCameraZoom],
+            selected: ScannerCameraZoom,
+            usesConfigurableDevice: Bool = true
+        ) {
+            let normalizedZooms = zooms.isEmpty ? [.standard] : zooms
+            availableCameraZooms = normalizedZooms
+            cameraZoom = normalizedZooms.contains(selected)
+                ? selected
+                : normalizedZooms[0]
+            cameraZoomUsesConfigurableDevice = usesConfigurableDevice
+            isApplyingCameraZoom = false
+        }
+
+        func beginCameraZoomApplication() {
+            isApplyingCameraZoom = true
+        }
+
+        @discardableResult
+        func selectCameraZoom(_ zoom: ScannerCameraZoom) -> Bool {
+            guard canChangeCameraZoom,
+                  availableCameraZooms.contains(zoom),
+                  zoom != cameraZoom else {
+                return false
+            }
+            cameraZoom = zoom
+            isApplyingCameraZoom = true
+            cameraZoomRequestID += 1
+            return true
         }
 
         @discardableResult
@@ -49,6 +97,7 @@ struct ScannerSheetView: View {
             measurementSeriesID += 1
             estimate = nil
             objectOverlay = nil
+            isApplyingCameraZoom = false
             isPreparingForAiming = false
         }
 
@@ -72,7 +121,7 @@ struct ScannerSheetView: View {
         }
 
         func startMeasurement() {
-            guard ScannerActionPolicy.canStartMeasurement(phase: phase) else { return }
+            guard canStartMeasurement else { return }
             estimate = nil
             objectOverlay = nil
             isPreparingForAiming = false
@@ -111,6 +160,18 @@ struct ScannerSheetView: View {
                         .foregroundStyle(.white)
                         .background(.black.opacity(0.55), in: Capsule())
                         .padding()
+                }
+                .overlay(alignment: .topTrailing) {
+                    if showsCameraZoomControl {
+                        CameraZoomControl(
+                            zooms: scannerState.availableCameraZooms,
+                            selectedZoom: scannerState.cameraZoom,
+                            isEnabled: scannerState.canChangeCameraZoom,
+                            isApplying: scannerState.isApplyingCameraZoom,
+                            onSelect: scannerState.selectCameraZoom
+                        )
+                        .padding()
+                    }
                 }
                 .overlay(alignment: .bottom) {
                     if showsCameraGuide, !scannerState.phase.isCapturing {
@@ -328,7 +389,7 @@ struct ScannerSheetView: View {
         }
         .disabled(
             scannerState.estimate == nil
-                && !ScannerActionPolicy.canStartMeasurement(phase: scannerState.phase)
+                && !scannerState.canStartMeasurement
         )
     }
 
@@ -353,6 +414,9 @@ struct ScannerSheetView: View {
         case .checkingSupport:
             return ScannerActionCopy.checkingSupport
         case .ready:
+            if scannerState.isApplyingCameraZoom {
+                return "Confirming camera zoom…"
+            }
             return scannerState.capturedEstimates.isEmpty
                 ? "Ready"
                 : "Ready for angle \(scannerState.capturedEstimates.count + 1)"
@@ -393,6 +457,10 @@ struct ScannerSheetView: View {
         }
     }
 
+    private var showsCameraZoomControl: Bool {
+        scannerState.availableCameraZooms.count > 1 && showsCameraGuide
+    }
+
     private var previewGuidanceText: String {
         scannerState.capturedEstimates.isEmpty
             ? ScannerGuidanceCopy.previewTarget
@@ -410,6 +478,54 @@ struct ScannerSheetView: View {
         "\(MeasurementMath.inchString(from: estimate.lengthMeters)) × "
             + "\(MeasurementMath.inchString(from: estimate.widthMeters)) × "
             + "\(MeasurementMath.inchString(from: estimate.heightMeters))"
+    }
+}
+
+private struct CameraZoomControl: View {
+    let zooms: [ScannerCameraZoom]
+    let selectedZoom: ScannerCameraZoom
+    let isEnabled: Bool
+    let isApplying: Bool
+    let onSelect: (ScannerCameraZoom) -> Bool
+
+    var body: some View {
+        HStack(spacing: 4) {
+            ForEach(zooms) { zoom in
+                Button {
+                    _ = onSelect(zoom)
+                } label: {
+                    Text(zoom.label)
+                        .font(.caption2.weight(.bold))
+                        .frame(minWidth: 32, minHeight: 28)
+                        .foregroundStyle(zoom == selectedZoom ? .black : .white)
+                        .background(
+                            zoom == selectedZoom
+                                ? Color.cyan
+                                : Color.black.opacity(0.55),
+                            in: Capsule()
+                        )
+                }
+                .buttonStyle(.plain)
+                .disabled(!isEnabled || isApplying)
+                .accessibilityLabel("Camera zoom \(zoom.label)")
+                .accessibilityValue(zoom == selectedZoom ? "Selected" : "Not selected")
+                .accessibilityHint(
+                    isEnabled
+                        ? "Changes the camera field of view before the first angle"
+                        : "Zoom is locked after the first captured angle"
+                )
+            }
+
+            if isApplying {
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(.white)
+                    .padding(.leading, 2)
+                    .accessibilityLabel("Changing camera zoom")
+            }
+        }
+        .padding(4)
+        .background(.black.opacity(0.38), in: Capsule())
     }
 }
 
