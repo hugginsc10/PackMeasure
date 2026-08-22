@@ -13,6 +13,7 @@ struct ScannerSheetView: View {
         private(set) var cameraZoom = ScannerCameraZoom.standard
         private(set) var availableCameraZooms = [ScannerCameraZoom.standard]
         private(set) var cameraZoomUsesConfigurableDevice = false
+        private(set) var hasConfirmedExplicitCameraZoom = false
         private(set) var isApplyingCameraZoom = false
         private(set) var isPreparingForAiming = false
         private(set) var measurementSeriesID = 0
@@ -38,10 +39,16 @@ struct ScannerSheetView: View {
                 && !isApplyingCameraZoom
         }
 
+        var shouldReapplyCameraZoomAfterSessionRun: Bool {
+            cameraZoomUsesConfigurableDevice
+                && hasConfirmedExplicitCameraZoom
+        }
+
         func updateCameraZoomAvailability(
             _ zooms: [ScannerCameraZoom],
             selected: ScannerCameraZoom,
-            usesConfigurableDevice: Bool = true
+            usesConfigurableDevice: Bool = true,
+            confirmsExplicitSelection: Bool = false
         ) {
             let normalizedZooms = zooms.isEmpty ? [.standard] : zooms
             availableCameraZooms = normalizedZooms
@@ -49,6 +56,14 @@ struct ScannerSheetView: View {
                 ? selected
                 : normalizedZooms[0]
             cameraZoomUsesConfigurableDevice = usesConfigurableDevice
+            if confirmsExplicitSelection {
+                hasConfirmedExplicitCameraZoom = true
+            }
+            isApplyingCameraZoom = false
+        }
+
+        func cameraZoomApplicationFailed() {
+            hasConfirmedExplicitCameraZoom = false
             isApplyingCameraZoom = false
         }
 
@@ -64,6 +79,7 @@ struct ScannerSheetView: View {
                 return false
             }
             cameraZoom = zoom
+            hasConfirmedExplicitCameraZoom = false
             isApplyingCameraZoom = true
             cameraZoomRequestID += 1
             return true

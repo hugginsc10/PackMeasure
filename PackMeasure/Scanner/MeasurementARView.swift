@@ -93,36 +93,35 @@ enum ScannerCameraZoomPolicy {
 }
 
 struct ScannerCameraZoomConfirmationGate: Equatable, Sendable {
-    let minimumFrameTimestamp: TimeInterval?
+    let minimumFrameSequence: UInt64?
     let requiredMatchingFrameCount: Int
     private(set) var matchingFrameCount = 0
-    private(set) var lastMatchingFrameTimestamp: TimeInterval?
+    private(set) var lastMatchingFrameSequence: UInt64?
 
     init(
-        minimumFrameTimestamp: TimeInterval?,
+        minimumFrameSequence: UInt64?,
         requiredMatchingFrameCount: Int = 2
     ) {
-        self.minimumFrameTimestamp = minimumFrameTimestamp
+        self.minimumFrameSequence = minimumFrameSequence
         self.requiredMatchingFrameCount = max(1, requiredMatchingFrameCount)
     }
 
     mutating func observe(
-        frameTimestamp: TimeInterval,
+        frameSequence: UInt64,
         hasNormalDepth: Bool,
         zoomMatches: Bool
     ) -> Bool {
-        guard frameTimestamp.isFinite,
-              hasNormalDepth,
+        guard hasNormalDepth,
               zoomMatches,
-              minimumFrameTimestamp.map({ frameTimestamp > $0 }) ?? true,
-              lastMatchingFrameTimestamp.map({ frameTimestamp > $0 }) ?? true else {
+              minimumFrameSequence.map({ frameSequence > $0 }) ?? true,
+              lastMatchingFrameSequence.map({ frameSequence > $0 }) ?? true else {
             matchingFrameCount = 0
-            lastMatchingFrameTimestamp = nil
+            lastMatchingFrameSequence = nil
             return false
         }
 
         matchingFrameCount += 1
-        lastMatchingFrameTimestamp = frameTimestamp
+        lastMatchingFrameSequence = frameSequence
         return matchingFrameCount >= requiredMatchingFrameCount
     }
 }
@@ -400,6 +399,11 @@ struct MeasurementARView: UIViewRepresentable {
             let measurementSeriesID: Int
             let zoom: ScannerCameraZoom
             var confirmationGate: ScannerCameraZoomConfirmationGate
+            var observedFrameCount = 0
+            var trackingNotNormalCount = 0
+            var missingDepthCount = 0
+            var snapshotUnavailableCount = 0
+            var factorMismatchCount = 0
         }
 
         private struct CameraZoomSnapshot: Sendable {
@@ -534,6 +538,7 @@ struct MeasurementARView: UIViewRepresentable {
         private var capture: CaptureAccumulator?
         private var pendingCameraZoom: PendingCameraZoom?
         private var cameraZoomApplicationSequence = 0
+        private var cameraFrameSequence: UInt64 = 0
         private var didPublishInitialCameraZoom = false
         private var sessionEventSequence = 0
 
@@ -661,7 +666,7 @@ struct MeasurementARView: UIViewRepresentable {
                     return
                 }
 
-                var zoomAppliedAt: TimeInterval?
+                var zoomWasApplied = false
                 do {
                     try device.lockForConfiguration()
                     defer { device.unlockForConfiguration() }
@@ -689,7 +694,7 @@ struct MeasurementARView: UIViewRepresentable {
                         && self.lifecycleGeneration == lifecycleGeneration
                     if mayApply {
                         device.videoZoomFactor = CGFloat(targetFactor)
-                        zoomAppliedAt = CACurrentMediaTime()
+                        zoomWasApplied = true
                     }
                     lifecycleLock.unlock()
                     guard mayApply else { return }
@@ -707,7 +712,7 @@ struct MeasurementARView: UIViewRepresentable {
                 }
 
                 guard isLifecycleActive(lifecycleGeneration),
-                      let zoomAppliedAt else { return }
+                      zoomWasApplied else { return }
                 cameraZoomApplicationSequence += 1
                 pendingCameraZoom = PendingCameraZoom(
                     applicationID: cameraZoomApplicationSequence,
@@ -716,7 +721,7 @@ struct MeasurementARView: UIViewRepresentable {
                     measurementSeriesID: measurementSeriesID,
                     zoom: zoom,
                     confirmationGate: ScannerCameraZoomConfirmationGate(
-                        minimumFrameTimestamp: zoomAppliedAt
+                        minimumFrameSequence: cameraFrameSequence
                     )
                 )
                 scheduleCameraZoomTimeout(
@@ -742,7 +747,7 @@ struct MeasurementARView: UIViewRepresentable {
                 pendingCameraZoom = nil
                 let snapshot = cameraZoomSnapshot()
                 Self.calibrationLogger.error(
-                    "camera_zoom_timeout request_id=\(pending.requestID, privacy: .public)"
+                    "camera_zoom_timeout request_id=\(pending.requestID, privacy: .public) observed_frames=\(pending.observedFrameCount, privacy: .public) tracking_not_normal=\(pending.trackingNotNormalCount, privacy: .public) missing_depth=\(pending.missingDepthCount, privacy: .public) snapshot_unavailable=\(pending.snapshotUnavailableCount, privacy: .public) factor_mismatch=\(pending.factorMismatchCount, privacy: .public) matched_frames=\(pending.confirmationGate.matchingFrameCount, privacy: .public)"
                 )
                 publishCameraZoomFailure(
                     snapshot,
@@ -757,7 +762,7 @@ struct MeasurementARView: UIViewRepresentable {
         @discardableResult
         private func reapplyCameraZoomAfterSessionRun() -> Bool {
             guard let state = scannerState,
-                  state.cameraZoomUsesConfigurableDevice else {
+                  state.shouldReapplyCameraZoomAfterSessionRun else {
                 return false
             }
             state.beginCameraZoomApplication()
@@ -857,8 +862,12 @@ struct MeasurementARView: UIViewRepresentable {
         func session(_ session: ARSession, didUpdate frame: ARFrame) {
             // ARKit calls this method on processingQueue; never move ARFrame or
             // its pixel buffers across another concurrency boundary.
+            cameraFrameSequence &+= 1
             publishInitialCameraZoomIfNeeded(with: frame)
-            confirmPendingCameraZoom(with: frame)
+            confirmPendingCameraZoom(
+                with: frame,
+                frameSequence: cameraFrameSequence
+            )
 
             guard var activeCapture = capture else { return }
             guard case .normal = frame.camera.trackingState else {
@@ -982,24 +991,42 @@ struct MeasurementARView: UIViewRepresentable {
             )
         }
 
-        private func confirmPendingCameraZoom(with frame: ARFrame) {
+        private func confirmPendingCameraZoom(
+            with frame: ARFrame,
+            frameSequence: UInt64
+        ) {
             guard var pendingCameraZoom else { return }
             guard isLifecycleActive(pendingCameraZoom.lifecycleGeneration) else {
                 self.pendingCameraZoom = nil
                 return
             }
-            let hasNormalDepth: Bool = if case .normal = frame.camera.trackingState {
-                frame.smoothedSceneDepth ?? frame.sceneDepth != nil
+            pendingCameraZoom.observedFrameCount += 1
+            let trackingIsNormal: Bool = if case .normal = frame.camera.trackingState {
+                true
             } else {
                 false
             }
+            if !trackingIsNormal {
+                pendingCameraZoom.trackingNotNormalCount += 1
+            }
+            let hasDepth = frame.smoothedSceneDepth ?? frame.sceneDepth != nil
+            if trackingIsNormal, !hasDepth {
+                pendingCameraZoom.missingDepthCount += 1
+            }
+            let hasNormalDepth = trackingIsNormal && hasDepth
             let snapshot = hasNormalDepth ? cameraZoomSnapshot() : .unavailable
+            if hasNormalDepth, snapshot.appliedDisplayFactor == nil {
+                pendingCameraZoom.snapshotUnavailableCount += 1
+            }
             let wasApplied = snapshot.appliedDisplayFactor.map {
                 abs($0 - pendingCameraZoom.zoom.rawValue)
                     <= Self.cameraZoomConfirmationTolerance
             } ?? false
+            if snapshot.appliedDisplayFactor != nil, !wasApplied {
+                pendingCameraZoom.factorMismatchCount += 1
+            }
             guard pendingCameraZoom.confirmationGate.observe(
-                frameTimestamp: frame.timestamp,
+                frameSequence: frameSequence,
                 hasNormalDepth: hasNormalDepth,
                 zoomMatches: wasApplied
             ) else {
@@ -1016,7 +1043,8 @@ struct MeasurementARView: UIViewRepresentable {
                 snapshot,
                 requestID: pendingCameraZoom.requestID,
                 measurementSeriesID: pendingCameraZoom.measurementSeriesID,
-                lifecycleGeneration: pendingCameraZoom.lifecycleGeneration
+                lifecycleGeneration: pendingCameraZoom.lifecycleGeneration,
+                confirmsExplicitSelection: true
             )
         }
 
@@ -1075,7 +1103,8 @@ struct MeasurementARView: UIViewRepresentable {
             _ snapshot: CameraZoomSnapshot,
             requestID: Int?,
             measurementSeriesID: Int? = nil,
-            lifecycleGeneration: Int
+            lifecycleGeneration: Int,
+            confirmsExplicitSelection: Bool = false
         ) {
             Task { @MainActor [weak self] in
                 guard let self,
@@ -1095,7 +1124,8 @@ struct MeasurementARView: UIViewRepresentable {
                 state.updateCameraZoomAvailability(
                     snapshot.availableZooms,
                     selected: snapshot.selectedZoom,
-                    usesConfigurableDevice: snapshot.usesConfigurableDevice
+                    usesConfigurableDevice: snapshot.usesConfigurableDevice,
+                    confirmsExplicitSelection: confirmsExplicitSelection
                 )
             }
         }
@@ -1126,6 +1156,7 @@ struct MeasurementARView: UIViewRepresentable {
                         usesConfigurableDevice: true
                     )
                 }
+                state.cameraZoomApplicationFailed()
                 state.resetMeasurementSeries()
                 state.phase = .failed(
                     "Camera zoom could not be confirmed with depth. Retake the photo to try again."
