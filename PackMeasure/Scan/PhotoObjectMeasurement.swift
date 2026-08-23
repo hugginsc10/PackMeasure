@@ -287,12 +287,29 @@ struct MeasurementObjectOutline: Equatable, Sendable {
 struct MeasurementObjectOverlay: Equatable, Sendable {
     let displayOrientedImageSize: SIMD2<Float>
     let outline: MeasurementObjectOutline
+    /// The live camera viewport aspect ratio used when this exact frame was
+    /// captured. The paused result must preserve it so the visible image and
+    /// measured contour cannot acquire a new aspect-fill crop during review.
+    let capturedPreviewAspectRatio: Float
+
+    init(
+        displayOrientedImageSize: SIMD2<Float>,
+        outline: MeasurementObjectOutline,
+        capturedPreviewAspectRatio: Float? = nil
+    ) {
+        self.displayOrientedImageSize = displayOrientedImageSize
+        self.outline = outline
+        self.capturedPreviewAspectRatio = capturedPreviewAspectRatio
+            ?? displayOrientedImageSize.x / displayOrientedImageSize.y
+    }
 
     var isRenderable: Bool {
         displayOrientedImageSize.x.isFinite
             && displayOrientedImageSize.y.isFinite
             && displayOrientedImageSize.x > 0
             && displayOrientedImageSize.y > 0
+            && capturedPreviewAspectRatio.isFinite
+            && capturedPreviewAspectRatio > 0
             && !outline.isEmpty
             && outline.loops.flatMap { $0 }.allSatisfy { point in
                 point.x.isFinite && point.y.isFinite

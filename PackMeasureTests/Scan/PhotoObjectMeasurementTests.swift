@@ -274,7 +274,7 @@ final class PhotoObjectMeasurementTests: XCTestCase {
         )
     }
 
-    func testObjectOverlayThatFitsLivePreviewCanFailCanonicalResultPreview() throws {
+    func testObjectOverlayPreservesCapturedPreviewAspectRatioForReview() throws {
         let outline = MeasurementObjectOutline(
             loops: [[
                 SIMD2<Float>(0.25, 0.2),
@@ -285,9 +285,11 @@ final class PhotoObjectMeasurementTests: XCTestCase {
         )
         let overlay = MeasurementObjectOverlay(
             displayOrientedImageSize: SIMD2<Float>(3, 4),
-            outline: outline
+            outline: outline,
+            capturedPreviewAspectRatio: 0.75
         )
 
+        XCTAssertEqual(overlay.capturedPreviewAspectRatio, 0.75, accuracy: 0.0001)
         XCTAssertTrue(
             overlay.isFullyVisible(
                 in: SIMD2<Float>(300, 400),
@@ -295,16 +297,9 @@ final class PhotoObjectMeasurementTests: XCTestCase {
             ),
             "the outline is visibly inset in the tall live aiming preview"
         )
-        XCTAssertFalse(
-            overlay.isFullyVisible(
-                in: SIMD2<Float>(360, 300),
-                protectedInsetFraction: 0.02
-            ),
-            "the same outline would be cropped after the result preview becomes shorter"
-        )
     }
 
-    func testObjectOverlayWithResultMarginFitsBothPreviewLayouts() throws {
+    func testObjectOverlayDefaultsToDisplayImageAspectRatioForLegacyCallers() throws {
         let outline = MeasurementObjectOutline(
             loops: [[
                 SIMD2<Float>(0.25, 0.21),
@@ -318,14 +313,7 @@ final class PhotoObjectMeasurementTests: XCTestCase {
             outline: outline
         )
 
-        for viewport in [SIMD2<Float>(300, 400), SIMD2<Float>(360, 300)] {
-            XCTAssertTrue(
-                overlay.isFullyVisible(
-                    in: viewport,
-                    protectedInsetFraction: 0.02
-                )
-            )
-        }
+        XCTAssertEqual(overlay.capturedPreviewAspectRatio, 0.75, accuracy: 0.0001)
     }
 
     func testBuildsWorldPointCloudForBoxEllipseAndLShapeMasks() throws {

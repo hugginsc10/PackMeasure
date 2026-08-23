@@ -283,11 +283,36 @@ struct ScannerCapturePolicyTests {
         state.startMeasurement()
         #expect(state.captureRequestID == 7)
 
-        state.phase = .ready
+        #expect(state.previewBecameReady())
         state.startMeasurement()
 
         #expect(state.captureRequestID == 8)
         #expect(!state.isPreparingForAiming)
+    }
+
+    @Test @MainActor
+    func initialPreviewBecomesReadyOnlyThroughFrameReadinessPublication() {
+        let state = ScannerSheetView.ScannerStateModel()
+
+        #expect(state.phase == .checkingSupport)
+        #expect(state.previewBecameReady())
+        #expect(state.phase == .ready)
+        #expect(!state.previewBecameReady())
+    }
+
+    @Test @MainActor
+    func failedPreviewResumeStaysDisabledUntilFrameBecomesReady() {
+        let state = ScannerSheetView.ScannerStateModel()
+        state.phase = .failed("Retake")
+
+        state.prepareForAiming()
+
+        #expect(state.isPreparingForAiming)
+        #expect(!state.canStartMeasurement)
+        #expect(state.previewBecameReady())
+        #expect(state.phase == .ready)
+        #expect(!state.isPreparingForAiming)
+        #expect(state.canStartMeasurement)
     }
 
     @Test @MainActor

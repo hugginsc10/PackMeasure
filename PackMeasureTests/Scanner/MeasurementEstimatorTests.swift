@@ -41,6 +41,94 @@ struct MeasurementEstimatorTests {
     }
 
     @Test
+    func recreatedViewBaselinesExistingRequestsWithoutReplayingThem() {
+        var tracker = ScannerViewRequestTracker(
+            previewRequestID: 7,
+            captureRequestID: 11
+        )
+
+        #expect(
+            tracker.commands(previewRequestID: 7, captureRequestID: 11).isEmpty
+        )
+        #expect(
+            tracker.commands(previewRequestID: 8, captureRequestID: 11)
+                == [.resumePreview]
+        )
+        #expect(
+            tracker.commands(previewRequestID: 8, captureRequestID: 12)
+                == [.startCapture]
+        )
+    }
+
+    @Test
+    func previewReadinessRequiresTrackingDepthAndLaidOutViewport() {
+        let validViewport = SIMD2<Float>(320, 420)
+
+        #expect(
+            !ScannerPreviewReadinessPolicy.isReady(
+                trackingIsNormal: false,
+                hasDepth: true,
+                viewportSize: validViewport
+            )
+        )
+        #expect(
+            !ScannerPreviewReadinessPolicy.isReady(
+                trackingIsNormal: true,
+                hasDepth: false,
+                viewportSize: validViewport
+            )
+        )
+        #expect(
+            !ScannerPreviewReadinessPolicy.isReady(
+                trackingIsNormal: true,
+                hasDepth: true,
+                viewportSize: SIMD2<Float>(320, 0)
+            )
+        )
+        #expect(
+            ScannerPreviewReadinessPolicy.isReady(
+                trackingIsNormal: true,
+                hasDepth: true,
+                viewportSize: validViewport
+            )
+        )
+    }
+
+    @Test
+    func previewReadinessRejectsFramesCapturedBeforeTheLatestSessionRun() {
+        #expect(
+            ScannerPreviewReadinessPolicy.isFrameFresh(
+                timestamp: 101,
+                after: 100
+            )
+        )
+        #expect(
+            !ScannerPreviewReadinessPolicy.isFrameFresh(
+                timestamp: 100,
+                after: 100
+            )
+        )
+        #expect(
+            !ScannerPreviewReadinessPolicy.isFrameFresh(
+                timestamp: 99,
+                after: 100
+            )
+        )
+        #expect(
+            ScannerPreviewReadinessPolicy.isFrameFresh(
+                timestamp: 1,
+                after: nil
+            )
+        )
+        #expect(
+            !ScannerPreviewReadinessPolicy.isFrameFresh(
+                timestamp: .nan,
+                after: nil
+            )
+        )
+    }
+
+    @Test
     func frameImmediatelyAfterTapIsIgnoredUntilCameraSettles() {
         let policy = SettledFrameCapturePolicy(settleInterval: 0.25)
 

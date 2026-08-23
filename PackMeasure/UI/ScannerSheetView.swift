@@ -1,10 +1,42 @@
 import SwiftUI
 
-enum ScannerPreviewLayout {
-    /// Keeps the paused camera result stable while result forms appear below it.
-    /// The live aiming view can remain taller, but a saved outline must also fit
-    /// this canonical result viewport without being cropped by aspect fill.
-    static let resultAspectRatio: CGFloat = 6.0 / 5.0
+/// Keeps the AR representable at one stable SwiftUI identity while allowing a
+/// captured result to use the exact viewport aspect ratio from its live frame.
+/// The live preview retains its flexible 260...420 point height instead of
+/// passing a nil aspect ratio, which can collapse a UIViewRepresentable.
+private struct ScannerPreviewSizingLayout: Layout {
+    let capturedAspectRatio: CGFloat?
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) -> CGSize {
+        guard let subview = subviews.first else { return .zero }
+        guard let capturedAspectRatio,
+              capturedAspectRatio.isFinite,
+              capturedAspectRatio > 0,
+              let width = proposal.width,
+              width.isFinite,
+              width > 0 else {
+            return subview.sizeThatFits(proposal)
+        }
+        return CGSize(width: width, height: width / capturedAspectRatio)
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) {
+        guard let subview = subviews.first else { return }
+        subview.place(
+            at: CGPoint(x: bounds.midX, y: bounds.midY),
+            anchor: .center,
+            proposal: ProposedViewSize(width: bounds.width, height: bounds.height)
+        )
+    }
 }
 
 enum ScannerCameraZoomPresentation: Equatable, Sendable {
@@ -198,6 +230,19 @@ struct ScannerSheetView: View {
             previewRequestID += 1
         }
 
+        /// ARKit, not `session.run`, decides when the preview can safely accept
+        /// a photo. A normal-tracking frame with depth and a laid-out viewport
+        /// calls this after initial startup and every preview resume.
+        @discardableResult
+        func previewBecameReady() -> Bool {
+            guard phase == .checkingSupport || isPreparingForAiming else {
+                return false
+            }
+            isPreparingForAiming = false
+            phase = .ready
+            return true
+        }
+
         func startMeasurement() {
             guard canStartMeasurement else { return }
             estimate = nil
@@ -310,17 +355,23 @@ struct ScannerSheetView: View {
         }
     }
 
-    @ViewBuilder
     private var cameraPreview: some View {
-        if scannerState.objectOverlay == nil {
-            cameraPreviewSurface
-                .frame(maxWidth: .infinity)
-                .frame(minHeight: 260, idealHeight: 360, maxHeight: 420)
-        } else {
-            cameraPreviewSurface
-                .frame(maxWidth: .infinity)
-                .aspectRatio(ScannerPreviewLayout.resultAspectRatio, contentMode: .fit)
+        let isReviewingCapture = scannerState.objectOverlay != nil
+        let capturedAspectRatio = scannerState.objectOverlay.map {
+            CGFloat($0.capturedPreviewAspectRatio)
         }
+
+        return ScannerPreviewSizingLayout(
+            capturedAspectRatio: capturedAspectRatio
+        ) {
+            cameraPreviewSurface
+        }
+            .frame(maxWidth: .infinity)
+            .frame(
+                minHeight: isReviewingCapture ? nil : 260,
+                idealHeight: isReviewingCapture ? nil : 360,
+                maxHeight: isReviewingCapture ? nil : 420
+            )
     }
 
     private var cameraPreviewSurface: some View {
