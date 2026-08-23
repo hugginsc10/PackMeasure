@@ -11,6 +11,7 @@ import simd
 enum ScannerCameraZoom: Double, CaseIterable, Identifiable, Sendable {
     case half = 0.5
     case standard = 1
+    case double = 2
 
     var id: Double { rawValue }
 
@@ -20,6 +21,19 @@ enum ScannerCameraZoom: Double, CaseIterable, Identifiable, Sendable {
             "0.5×"
         case .standard:
             "1×"
+        case .double:
+            "2×"
+        }
+    }
+
+    var controlIdentifier: String {
+        switch self {
+        case .half:
+            "scanner.zoom.0_5"
+        case .standard:
+            "scanner.zoom.1_0"
+        case .double:
+            "scanner.zoom.2_0"
         }
     }
 }
@@ -39,8 +53,7 @@ enum ScannerCameraZoomPolicy {
     static func supportedZooms(
         displayMultiplier: Double,
         minDeviceFactor: Double,
-        maxDeviceFactor: Double,
-        depthCompatibleDeviceFactorRanges: [ClosedRange<Double>]? = nil
+        maxDeviceFactor: Double
     ) -> [ScannerCameraZoom] {
         guard displayMultiplier.isFinite,
               minDeviceFactor.isFinite,
@@ -62,11 +75,7 @@ enum ScannerCameraZoomPolicy {
                   factor <= maxDeviceFactor + factorTolerance else {
                 return false
             }
-            guard let depthCompatibleDeviceFactorRanges,
-                  !depthCompatibleDeviceFactorRanges.isEmpty else {
-                return true
-            }
-            return depthCompatibleDeviceFactorRanges.contains { $0.contains(factor) }
+            return true
         }
     }
 
@@ -89,6 +98,57 @@ enum ScannerCameraZoomPolicy {
             return nil
         }
         return nearest
+    }
+}
+
+enum ScannerCameraFrameZoomPolicy {
+    private static let transitionTolerance = 0.15
+    private static let referenceTolerance = 0.12
+
+    static func normalizedFocalLength(
+        focalLengthPixels: Double,
+        imageWidthPixels: Double
+    ) -> Double? {
+        guard focalLengthPixels.isFinite,
+              imageWidthPixels.isFinite,
+              focalLengthPixels > 0,
+              imageWidthPixels > 0 else {
+            return nil
+        }
+        return focalLengthPixels / imageWidthPixels
+    }
+
+    static func confirmsVisibleTransition(
+        from previousZoom: ScannerCameraZoom,
+        baselineNormalizedFocalLength: Double,
+        to requestedZoom: ScannerCameraZoom,
+        currentNormalizedFocalLength: Double,
+        confirmedReferenceNormalizedFocalLength: Double? = nil
+    ) -> Bool {
+        guard baselineNormalizedFocalLength.isFinite,
+              currentNormalizedFocalLength.isFinite,
+              baselineNormalizedFocalLength > 0,
+              currentNormalizedFocalLength > 0 else {
+            return false
+        }
+
+        if let confirmedReferenceNormalizedFocalLength,
+           confirmedReferenceNormalizedFocalLength.isFinite,
+           confirmedReferenceNormalizedFocalLength > 0 {
+            let relativeError = abs(
+                currentNormalizedFocalLength
+                    / confirmedReferenceNormalizedFocalLength - 1
+            )
+            return relativeError <= referenceTolerance
+        }
+
+        guard previousZoom != requestedZoom else { return false }
+
+        let observedRatio = currentNormalizedFocalLength
+            / baselineNormalizedFocalLength
+        let requestedRatio = requestedZoom.rawValue / previousZoom.rawValue
+        let relativeError = abs(observedRatio / requestedRatio - 1)
+        return relativeError <= transitionTolerance
     }
 }
 
@@ -397,13 +457,17 @@ struct MeasurementARView: UIViewRepresentable {
             let lifecycleGeneration: Int
             let requestID: Int
             let measurementSeriesID: Int
+            let previousZoom: ScannerCameraZoom
             let zoom: ScannerCameraZoom
+            let baselineNormalizedFocalLength: Double
+            let confirmedReferenceNormalizedFocalLength: Double?
             var confirmationGate: ScannerCameraZoomConfirmationGate
             var observedFrameCount = 0
             var trackingNotNormalCount = 0
             var missingDepthCount = 0
             var snapshotUnavailableCount = 0
             var factorMismatchCount = 0
+            var frameFieldOfViewMismatchCount = 0
         }
 
         private struct CameraZoomSnapshot: Sendable {
@@ -423,6 +487,7 @@ struct MeasurementARView: UIViewRepresentable {
         private struct CaptureAccumulator {
             let requestID: Int
             let measurementSeriesID: Int
+            let previewViewportSize: SIMD2<Float>
             var settledFrameGate: SettledFrameCaptureGate
             var cameraViewpoint: MeasurementCameraViewpoint?
             var geometryCenter: SIMD3<Float>?
@@ -515,6 +580,11 @@ struct MeasurementARView: UIViewRepresentable {
         private static let maximumRegionCoverage = 0.94
         private static let peripheralSampleTarget = 1_200
         private static let edgeMarginPixels = 2
+        private static let protectedPreviewInsetFraction: Float = 0.02
+        private static let resultPreviewViewportSize = SIMD2<Float>(
+            Float(ScannerPreviewLayout.resultAspectRatio),
+            1
+        )
         private static let minimumTargetElevationForFloorFiltering: Float = 0.08
 
         private let processingQueue = DispatchQueue(
@@ -539,6 +609,8 @@ struct MeasurementARView: UIViewRepresentable {
         private var pendingCameraZoom: PendingCameraZoom?
         private var cameraZoomApplicationSequence = 0
         private var cameraFrameSequence: UInt64 = 0
+        private var latestCameraNormalizedFocalLength: Double?
+        private var confirmedCameraNormalizedFocalLengths: [ScannerCameraZoom: Double] = [:]
         private var didPublishInitialCameraZoom = false
         private var sessionEventSequence = 0
 
@@ -666,6 +738,21 @@ struct MeasurementARView: UIViewRepresentable {
                     return
                 }
 
+                let previousSnapshot = cameraZoomSnapshot()
+                guard let baselineNormalizedFocalLength = latestCameraNormalizedFocalLength,
+                      previousSnapshot.appliedDisplayFactor != nil else {
+                    publishCameraZoomFailure(
+                        cameraZoomSnapshot(),
+                        requestID: requestID,
+                        measurementSeriesID: measurementSeriesID,
+                        lifecycleGeneration: lifecycleGeneration
+                    )
+                    return
+                }
+                let previousZoom = previousSnapshot.selectedZoom
+                let confirmedReferenceNormalizedFocalLength =
+                    confirmedCameraNormalizedFocalLengths[zoom]
+
                 var zoomWasApplied = false
                 do {
                     try device.lockForConfiguration()
@@ -719,10 +806,17 @@ struct MeasurementARView: UIViewRepresentable {
                     lifecycleGeneration: lifecycleGeneration,
                     requestID: requestID,
                     measurementSeriesID: measurementSeriesID,
+                    previousZoom: previousZoom,
                     zoom: zoom,
+                    baselineNormalizedFocalLength: baselineNormalizedFocalLength,
+                    confirmedReferenceNormalizedFocalLength:
+                        confirmedReferenceNormalizedFocalLength,
                     confirmationGate: ScannerCameraZoomConfirmationGate(
                         minimumFrameSequence: cameraFrameSequence
                     )
+                )
+                Self.calibrationLogger.notice(
+                    "camera_zoom_requested request_id=\(requestID, privacy: .public) from=\(previousZoom.label, privacy: .public) to=\(zoom.label, privacy: .public) baseline_focal=\(baselineNormalizedFocalLength, privacy: .public) target_reference=\(confirmedReferenceNormalizedFocalLength ?? -1, privacy: .public)"
                 )
                 scheduleCameraZoomTimeout(
                     applicationID: cameraZoomApplicationSequence,
@@ -745,9 +839,10 @@ struct MeasurementARView: UIViewRepresentable {
                     return
                 }
                 pendingCameraZoom = nil
+                restoreCameraZoom(pending.previousZoom)
                 let snapshot = cameraZoomSnapshot()
                 Self.calibrationLogger.error(
-                    "camera_zoom_timeout request_id=\(pending.requestID, privacy: .public) observed_frames=\(pending.observedFrameCount, privacy: .public) tracking_not_normal=\(pending.trackingNotNormalCount, privacy: .public) missing_depth=\(pending.missingDepthCount, privacy: .public) snapshot_unavailable=\(pending.snapshotUnavailableCount, privacy: .public) factor_mismatch=\(pending.factorMismatchCount, privacy: .public) matched_frames=\(pending.confirmationGate.matchingFrameCount, privacy: .public)"
+                    "camera_zoom_timeout request_id=\(pending.requestID, privacy: .public) observed_frames=\(pending.observedFrameCount, privacy: .public) tracking_not_normal=\(pending.trackingNotNormalCount, privacy: .public) missing_depth=\(pending.missingDepthCount, privacy: .public) snapshot_unavailable=\(pending.snapshotUnavailableCount, privacy: .public) factor_mismatch=\(pending.factorMismatchCount, privacy: .public) frame_fov_mismatch=\(pending.frameFieldOfViewMismatchCount, privacy: .public) matched_frames=\(pending.confirmationGate.matchingFrameCount, privacy: .public) baseline_focal=\(pending.baselineNormalizedFocalLength, privacy: .public) current_focal=\(self.latestCameraNormalizedFocalLength ?? -1, privacy: .public)"
                 )
                 publishCameraZoomFailure(
                     snapshot,
@@ -810,6 +905,22 @@ struct MeasurementARView: UIViewRepresentable {
 
             let requestID = requestTracker.lastCaptureRequestID
             let measurementSeriesID = scannerState?.measurementSeriesID ?? 0
+            guard let arView else {
+                scannerState?.phase = .failed(
+                    "The camera preview is not ready. Try the photo again."
+                )
+                return
+            }
+            let previewViewportSize = SIMD2<Float>(
+                Float(arView.bounds.width),
+                Float(arView.bounds.height)
+            )
+            guard previewViewportSize.x > 0, previewViewportSize.y > 0 else {
+                scannerState?.phase = .failed(
+                    "The camera preview is not ready. Try the photo again."
+                )
+                return
+            }
             let now = CACurrentMediaTime()
             scannerState?.estimate = nil
             scannerState?.phase = .scanning(progress: 0)
@@ -818,6 +929,7 @@ struct MeasurementARView: UIViewRepresentable {
                 self?.capture = CaptureAccumulator(
                     requestID: requestID,
                     measurementSeriesID: measurementSeriesID,
+                    previewViewportSize: previewViewportSize,
                     settledFrameGate: SettledFrameCaptureGate(
                         requestedAt: now,
                         policy: Self.settledFramePolicy
@@ -848,7 +960,7 @@ struct MeasurementARView: UIViewRepresentable {
             sessionConfiguration = configuration
             scannerState?.resetMeasurementSeries()
             if depthSupported {
-                scannerState?.beginCameraZoomApplication()
+                scannerState?.beginCameraZoomAvailabilityDiscovery()
             }
             arView?.session.run(configuration)
             scannerState?.phase = depthSupported
@@ -863,6 +975,7 @@ struct MeasurementARView: UIViewRepresentable {
             // ARKit calls this method on processingQueue; never move ARFrame or
             // its pixel buffers across another concurrency boundary.
             cameraFrameSequence &+= 1
+            latestCameraNormalizedFocalLength = normalizedFocalLength(for: frame)
             publishInitialCameraZoomIfNeeded(with: frame)
             confirmPendingCameraZoom(
                 with: frame,
@@ -908,12 +1021,45 @@ struct MeasurementARView: UIViewRepresentable {
 
             switch sampleSingleShotFrame(from: frame) {
             case .accepted(let points, let diagnostics, let outline, let route):
+                let objectOverlay = outline.flatMap {
+                    measurementObjectOverlay(from: $0, frame: frame)
+                }
+                if let objectOverlay,
+                   ![
+                       activeCapture.previewViewportSize,
+                       Self.resultPreviewViewportSize,
+                   ].allSatisfy({ viewportSize in
+                       objectOverlay.isFullyVisible(
+                           in: viewportSize,
+                           protectedInsetFraction: Self.protectedPreviewInsetFraction
+                       )
+                   }) {
+                    let photoFailure = SingleShotCaptureFailure.photo(
+                        .maskTouchesImageEdge
+                    )
+                    activeCapture.lastPhotoFailure = photoFailure
+                    activeCapture.lastCalibration = diagnostics
+                    activeCapture.rejectedFrameCount = 1
+                    activeCapture.lastRejection = .insufficientSurfaceEvidence
+                    apply(route, to: &activeCapture)
+                    logCalibrationSummary(
+                        activeCapture,
+                        result: .failure(.targetRejected(.insufficientSurfaceEvidence))
+                    )
+                    publishFailure(
+                        ScannerPhotoFailureCopy.message(
+                            for: photoFailure,
+                            fallbackResult: route.fallbackResult
+                        ),
+                        requestID: activeCapture.requestID,
+                        measurementSeriesID: activeCapture.measurementSeriesID
+                    )
+                    return
+                }
                 activeCapture.worldPoints = points
                 activeCapture.frameCount = 1
                 activeCapture.lastCalibration = diagnostics
-                activeCapture.objectOverlay = outline.flatMap {
-                    measurementObjectOverlay(from: $0, frame: frame)
-                }
+                activeCapture.objectOverlay = objectOverlay
                 apply(route, to: &activeCapture)
                 finalizeCapture(activeCapture)
             case .failed(let photoFailure, let diagnostics, let route):
@@ -971,6 +1117,11 @@ struct MeasurementARView: UIViewRepresentable {
             guard let lifecycleGeneration = activeLifecycleGeneration() else { return }
             if ARWorldTrackingConfiguration.configurableCaptureDeviceForPrimaryCamera != nil {
                 let snapshot = cameraZoomSnapshot()
+                if snapshot.appliedDisplayFactor != nil,
+                   let normalizedFocalLength = normalizedFocalLength(for: frame) {
+                    confirmedCameraNormalizedFocalLengths[snapshot.selectedZoom] =
+                        normalizedFocalLength
+                }
                 // ARKit scene depth is independent from AVFoundation depth-data
                 // formats. This depth-bearing frame proves baseline scanning is
                 // usable even when zoom capabilities cannot be mapped. In that
@@ -1025,19 +1176,38 @@ struct MeasurementARView: UIViewRepresentable {
             if snapshot.appliedDisplayFactor != nil, !wasApplied {
                 pendingCameraZoom.factorMismatchCount += 1
             }
+            let currentNormalizedFocalLength = normalizedFocalLength(for: frame)
+            let frameFieldOfViewMatches = currentNormalizedFocalLength.map {
+                ScannerCameraFrameZoomPolicy.confirmsVisibleTransition(
+                    from: pendingCameraZoom.previousZoom,
+                    baselineNormalizedFocalLength:
+                        pendingCameraZoom.baselineNormalizedFocalLength,
+                    to: pendingCameraZoom.zoom,
+                    currentNormalizedFocalLength: $0,
+                    confirmedReferenceNormalizedFocalLength:
+                        pendingCameraZoom.confirmedReferenceNormalizedFocalLength
+                )
+            } ?? false
+            if hasNormalDepth, !frameFieldOfViewMatches {
+                pendingCameraZoom.frameFieldOfViewMismatchCount += 1
+            }
             guard pendingCameraZoom.confirmationGate.observe(
                 frameSequence: frameSequence,
                 hasNormalDepth: hasNormalDepth,
-                zoomMatches: wasApplied
+                zoomMatches: wasApplied && frameFieldOfViewMatches
             ) else {
                 self.pendingCameraZoom = pendingCameraZoom
                 return
             }
 
             self.pendingCameraZoom = nil
+            if let currentNormalizedFocalLength {
+                confirmedCameraNormalizedFocalLengths[pendingCameraZoom.zoom] =
+                    currentNormalizedFocalLength
+            }
             didPublishInitialCameraZoom = true
             Self.calibrationLogger.notice(
-                "camera_zoom_applied display=\(pendingCameraZoom.zoom.label, privacy: .public) confirmed_frames=\(pendingCameraZoom.confirmationGate.matchingFrameCount, privacy: .public)"
+                "camera_zoom_applied display=\(pendingCameraZoom.zoom.label, privacy: .public) confirmed_frames=\(pendingCameraZoom.confirmationGate.matchingFrameCount, privacy: .public) baseline_focal=\(pendingCameraZoom.baselineNormalizedFocalLength, privacy: .public) confirmed_focal=\(currentNormalizedFocalLength ?? -1, privacy: .public)"
             )
             publishCameraZoomSnapshot(
                 snapshot,
@@ -1060,6 +1230,36 @@ struct MeasurementARView: UIViewRepresentable {
                 return cameraZoomSnapshot(forLockedDevice: device)
             } catch {
                 return .unavailable
+            }
+        }
+
+        private func normalizedFocalLength(for frame: ARFrame) -> Double? {
+            ScannerCameraFrameZoomPolicy.normalizedFocalLength(
+                focalLengthPixels: Double(frame.camera.intrinsics.columns.0.x),
+                imageWidthPixels: Double(frame.camera.imageResolution.width)
+            )
+        }
+
+        private func restoreCameraZoom(_ zoom: ScannerCameraZoom) {
+            guard let device = ARWorldTrackingConfiguration
+                .configurableCaptureDeviceForPrimaryCamera else {
+                return
+            }
+            do {
+                try device.lockForConfiguration()
+                defer { device.unlockForConfiguration() }
+                guard let factor = ScannerCameraZoomPolicy.deviceFactor(
+                    for: zoom,
+                    displayMultiplier: Double(device.displayVideoZoomFactorMultiplier)
+                ), factor >= Double(device.minAvailableVideoZoomFactor),
+                   factor <= Double(device.maxAvailableVideoZoomFactor) else {
+                    return
+                }
+                device.videoZoomFactor = CGFloat(factor)
+            } catch {
+                Self.calibrationLogger.error(
+                    "camera_zoom_restore_failed zoom=\(zoom.label, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+                )
             }
         }
 
@@ -1088,14 +1288,14 @@ struct MeasurementARView: UIViewRepresentable {
             forLockedDevice device: AVCaptureDevice
         ) -> [ScannerCameraZoom] {
             let multiplier = Double(device.displayVideoZoomFactorMultiplier)
-            let depthRanges = device.activeFormat
-                .supportedVideoZoomRangesForDepthDataDelivery
-                .map { Double($0.lowerBound) ... Double($0.upperBound) }
+            // AVCapture depth-data delivery is a separate pipeline from ARKit
+            // scene depth. Limit candidates to factors the live configurable
+            // capture device can apply, then let the existing AR-frame gate
+            // prove tracking, scene depth, and the visible field-of-view change.
             return ScannerCameraZoomPolicy.supportedZooms(
                 displayMultiplier: multiplier,
                 minDeviceFactor: Double(device.minAvailableVideoZoomFactor),
-                maxDeviceFactor: Double(device.maxAvailableVideoZoomFactor),
-                depthCompatibleDeviceFactorRanges: depthRanges
+                maxDeviceFactor: Double(device.maxAvailableVideoZoomFactor)
             )
         }
 

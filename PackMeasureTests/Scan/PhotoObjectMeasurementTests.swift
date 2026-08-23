@@ -58,6 +58,27 @@ final class PhotoObjectMeasurementTests: XCTestCase {
         }
     }
 
+    func testSelectsOnlyCenterConnectedComponentWhenVisionReusesOneLabel() throws {
+        let labels = try labelMask(
+            [
+                [5, 5, 0, 0, 0, 0, 0],
+                [5, 5, 0, 0, 0, 0, 0],
+                [0, 0, 0, 5, 5, 5, 0],
+                [0, 0, 0, 5, 5, 5, 0],
+                [0, 0, 0, 5, 5, 5, 0],
+                [0, 0, 0, 0, 0, 0, 0],
+                [0, 0, 0, 0, 0, 0, 0],
+            ]
+        )
+
+        let selected = try PhotoForegroundInstanceSelector().select(in: labels)
+
+        XCTAssertEqual(selected.label, 5)
+        XCTAssertEqual(selected.selectedPixelCount, 9)
+        XCTAssertTrue(selected.contains(x: 3, y: 3))
+        XCTAssertFalse(selected.contains(x: 0, y: 0), "a disconnected same-label object must be removed")
+    }
+
     func testReportsAreaAndEdgeQualityForBoxMask() throws {
         let selected = try PhotoForegroundInstanceSelector().select(
             in: try boxMask(width: 7, height: 7, x: 2...4, y: 2...4)
@@ -197,6 +218,116 @@ final class PhotoObjectMeasurementTests: XCTestCase {
         XCTAssertGreaterThan(squareBottomEdge.y, 1)
     }
 
+    func testObjectOverlayRejectsContourCroppedByVisibleAspectFillPreview() throws {
+        let fullImageOutline = MeasurementObjectOutline(
+            loops: [[
+                SIMD2<Float>(0, 0),
+                SIMD2<Float>(1, 0),
+                SIMD2<Float>(1, 1),
+                SIMD2<Float>(0, 1),
+            ]]
+        )
+        let safelyFramedOutline = MeasurementObjectOutline(
+            loops: [[
+                SIMD2<Float>(0.2, 0.2),
+                SIMD2<Float>(0.8, 0.2),
+                SIMD2<Float>(0.8, 0.8),
+                SIMD2<Float>(0.2, 0.8),
+            ]]
+        )
+        let viewport = SIMD2<Float>(300, 300)
+
+        XCTAssertFalse(
+            MeasurementObjectOverlay(
+                displayOrientedImageSize: SIMD2<Float>(3, 4),
+                outline: fullImageOutline
+            ).isFullyVisible(in: viewport, protectedInsetFraction: 0.02),
+            "an image-edge-safe contour can still be clipped by the visible aspect-fill crop"
+        )
+        XCTAssertTrue(
+            MeasurementObjectOverlay(
+                displayOrientedImageSize: SIMD2<Float>(3, 4),
+                outline: safelyFramedOutline
+            ).isFullyVisible(in: viewport, protectedInsetFraction: 0.02)
+        )
+    }
+
+    func testObjectOverlayRequiresVisibleSpaceAroundEveryContourEdge() throws {
+        let bottomEdgeOutline = MeasurementObjectOutline(
+            loops: [[
+                SIMD2<Float>(0.3, 0.45),
+                SIMD2<Float>(0.7, 0.45),
+                SIMD2<Float>(0.7, 0.87),
+                SIMD2<Float>(0.3, 0.87),
+            ]]
+        )
+        let overlay = MeasurementObjectOverlay(
+            displayOrientedImageSize: SIMD2<Float>(3, 4),
+            outline: bottomEdgeOutline
+        )
+
+        XCTAssertFalse(
+            overlay.isFullyVisible(
+                in: SIMD2<Float>(300, 300),
+                protectedInsetFraction: 0.02
+            )
+        )
+    }
+
+    func testObjectOverlayThatFitsLivePreviewCanFailCanonicalResultPreview() throws {
+        let outline = MeasurementObjectOutline(
+            loops: [[
+                SIMD2<Float>(0.25, 0.2),
+                SIMD2<Float>(0.75, 0.2),
+                SIMD2<Float>(0.75, 0.81),
+                SIMD2<Float>(0.25, 0.81),
+            ]]
+        )
+        let overlay = MeasurementObjectOverlay(
+            displayOrientedImageSize: SIMD2<Float>(3, 4),
+            outline: outline
+        )
+
+        XCTAssertTrue(
+            overlay.isFullyVisible(
+                in: SIMD2<Float>(300, 400),
+                protectedInsetFraction: 0.02
+            ),
+            "the outline is visibly inset in the tall live aiming preview"
+        )
+        XCTAssertFalse(
+            overlay.isFullyVisible(
+                in: SIMD2<Float>(360, 300),
+                protectedInsetFraction: 0.02
+            ),
+            "the same outline would be cropped after the result preview becomes shorter"
+        )
+    }
+
+    func testObjectOverlayWithResultMarginFitsBothPreviewLayouts() throws {
+        let outline = MeasurementObjectOutline(
+            loops: [[
+                SIMD2<Float>(0.25, 0.21),
+                SIMD2<Float>(0.75, 0.21),
+                SIMD2<Float>(0.75, 0.79),
+                SIMD2<Float>(0.25, 0.79),
+            ]]
+        )
+        let overlay = MeasurementObjectOverlay(
+            displayOrientedImageSize: SIMD2<Float>(3, 4),
+            outline: outline
+        )
+
+        for viewport in [SIMD2<Float>(300, 400), SIMD2<Float>(360, 300)] {
+            XCTAssertTrue(
+                overlay.isFullyVisible(
+                    in: viewport,
+                    protectedInsetFraction: 0.02
+                )
+            )
+        }
+    }
+
     func testBuildsWorldPointCloudForBoxEllipseAndLShapeMasks() throws {
         let masks = [
             try boxMask(width: 12, height: 12, x: 3...8, y: 3...8),
@@ -223,6 +354,195 @@ final class PhotoObjectMeasurementTests: XCTestCase {
             XCTAssertGreaterThan(result.worldPoints.count, 10)
             XCTAssertTrue(result.worldPoints.allSatisfy(isFinite))
         }
+    }
+
+    func testPointCloudExcludesDisconnectedSameLabelClutter() throws {
+        let width = 12
+        let height = 12
+        var labels = Array(repeating: UInt32(0), count: width * height)
+        for y in 2...9 {
+            for x in 4...7 {
+                labels[y * width + x] = 5
+            }
+        }
+        for y in 8...9 {
+            for x in 9...10 {
+                labels[y * width + x] = 5
+            }
+        }
+        let result = try PhotoObjectMeasurement(policy: permissivePolicy).makePointCloud(
+            labelMask: try PhotoInstanceLabelMask(width: width, height: height, labels: labels),
+            depthGrid: populatedDepthGrid(width: width, height: height),
+            calibration: calibration(imageWidth: width, imageHeight: height)
+        )
+
+        XCTAssertEqual(result.maskQuality.selectedPixelCount, 32)
+        XCTAssertEqual(result.depthSupport.selectedMaskSampleCount, 32)
+        XCTAssertEqual(
+            Set(result.depthSupport.indices),
+            Set((2...9).flatMap { y in (4...7).map { x in y * width + x } })
+        )
+        XCTAssertEqual(result.objectOutline?.loops.count, 1)
+    }
+
+    func testPointCloudExcludesVisuallyConnectedClutterAcrossDepthJump() throws {
+        let width = 12
+        let height = 12
+        var labels = Array(repeating: UInt32(0), count: width * height)
+        var depthGrid = populatedDepthGrid(width: width, height: height)
+        for y in 2...9 {
+            for x in 3...7 {
+                labels[y * width + x] = 5
+            }
+        }
+        for y in 6...8 {
+            for x in 8...10 {
+                let index = y * width + x
+                labels[index] = 5
+                depthGrid.depths[index] = 1.5
+            }
+        }
+
+        let result = try PhotoObjectMeasurement(policy: permissivePolicy).makePointCloud(
+            labelMask: try PhotoInstanceLabelMask(width: width, height: height, labels: labels),
+            depthGrid: depthGrid,
+            calibration: calibration(imageWidth: width, imageHeight: height)
+        )
+
+        XCTAssertEqual(result.depthSupport.selectedMaskSampleCount, 49)
+        XCTAssertEqual(result.depthSupport.supportedSampleCount, 40)
+        XCTAssertEqual(
+            Set(result.depthSupport.indices),
+            Set((2...9).flatMap { y in (3...7).map { x in y * width + x } })
+        )
+        XCTAssertTrue(result.worldPoints.allSatisfy { abs($0.z + 1) < 0.0001 })
+        XCTAssertEqual(result.objectOutline?.loops.count, 1)
+    }
+
+    func testPointCloudExcludesNarrowlyAttachedClutterAtSimilarDepth() throws {
+        let width = 12
+        let height = 12
+        var labels = Array(repeating: UInt32(0), count: width * height)
+        var depthGrid = populatedDepthGrid(width: width, height: height)
+        for y in 2...9 {
+            for x in 3...7 {
+                labels[y * width + x] = 5
+            }
+        }
+        for y in 6...8 {
+            for x in 8...10 {
+                let index = y * width + x
+                labels[index] = 5
+                depthGrid.depths[index] = 1.15
+            }
+        }
+
+        let result = try PhotoObjectMeasurement(policy: permissivePolicy).makePointCloud(
+            labelMask: try PhotoInstanceLabelMask(width: width, height: height, labels: labels),
+            depthGrid: depthGrid,
+            calibration: calibration(imageWidth: width, imageHeight: height)
+        )
+
+        XCTAssertEqual(result.depthSupport.selectedMaskSampleCount, 49)
+        XCTAssertEqual(result.depthSupport.supportedSampleCount, 40)
+        XCTAssertEqual(
+            Set(result.depthSupport.indices),
+            Set((2...9).flatMap { y in (3...7).map { x in y * width + x } })
+        )
+        XCTAssertTrue(result.worldPoints.allSatisfy { abs($0.z + 1) < 0.0001 })
+        XCTAssertEqual(result.objectOutline?.loops.count, 1)
+    }
+
+    func testReticleDepthFilterPreservesGraduallySlopedTargetSurface() throws {
+        let width = 13
+        let height = 11
+        let labels = try boxMask(width: width, height: height, x: 3...9, y: 2...8)
+        var depthGrid = populatedDepthGrid(width: width, height: height)
+        for y in 2...8 {
+            for x in 3...9 {
+                depthGrid.depths[y * width + x] = 1 + Float(abs(x - 6)) * 0.04
+            }
+        }
+
+        let result = try PhotoObjectMeasurement(policy: permissivePolicy).makePointCloud(
+            labelMask: labels,
+            depthGrid: depthGrid,
+            calibration: calibration(imageWidth: width, imageHeight: height)
+        )
+
+        XCTAssertEqual(result.depthSupport.selectedMaskSampleCount, 49)
+        XCTAssertEqual(result.depthSupport.supportedSampleCount, 49)
+        XCTAssertEqual(
+            Set(result.depthSupport.indices),
+            Set((2...8).flatMap { y in (3...9).map { x in y * width + x } })
+        )
+    }
+
+    func testReticleDepthFilterRetainsTwoVisibleFacesOfBox() throws {
+        let width = 8
+        let height = 8
+        let labels = try boxMask(width: width, height: height, x: 1...6, y: 1...6)
+        var depthGrid = populatedDepthGrid(width: width, height: height)
+        for y in 1...6 {
+            for x in 1...3 {
+                depthGrid.depths[y * width + x] = 1.25
+            }
+            for x in 4...6 {
+                depthGrid.depths[y * width + x] = 1.45
+            }
+        }
+
+        let result = try PhotoObjectMeasurement(policy: permissivePolicy).makePointCloud(
+            labelMask: labels,
+            depthGrid: depthGrid,
+            calibration: calibration(imageWidth: width, imageHeight: height)
+        )
+
+        XCTAssertEqual(result.depthSupport.selectedMaskSampleCount, 36)
+        XCTAssertEqual(result.depthSupport.supportedSampleCount, 36)
+        XCTAssertEqual(
+            Set(result.depthSupport.indices),
+            Set((1...6).flatMap { y in (1...6).map { x in y * width + x } })
+        )
+    }
+
+    func testRejectsMaskWithoutReticleConnectedDepthSurface() throws {
+        let width = 12
+        let height = 12
+        let labels = try boxMask(width: width, height: height, x: 1...2, y: 1...2)
+        let depthGrid = populatedDepthGrid(width: width, height: height)
+
+        XCTAssertThrowsError(
+            try PhotoObjectMeasurement(policy: permissivePolicy).makePointCloud(
+                labelMask: labels,
+                depthGrid: depthGrid,
+                calibration: calibration(imageWidth: width, imageHeight: height)
+            )
+        ) { error in
+            XCTAssertEqual(error as? PhotoObjectMeasurementError, .noReticleDepthSurface)
+        }
+    }
+
+    func testOutlineUsesExactlyTheDepthSupportedMeasurementRegion() throws {
+        let width = 9
+        let height = 9
+        let labels = try boxMask(width: width, height: height, x: 2...6, y: 2...6)
+        var depthGrid = populatedDepthGrid(width: width, height: height)
+        depthGrid.confidences[2 * width + 2] = 1
+
+        let result = try PhotoObjectMeasurement(policy: permissivePolicy).makePointCloud(
+            labelMask: labels,
+            depthGrid: depthGrid,
+            calibration: calibration(imageWidth: width, imageHeight: height)
+        )
+        let expectedOutline = MeasurementObjectOutline(
+            width: width,
+            height: height,
+            selectedIndices: result.depthSupport.indices
+        )
+
+        XCTAssertEqual(result.worldPoints.count, result.depthSupport.indices.count)
+        XCTAssertEqual(result.objectOutline, expectedOutline)
     }
 
     func testRejectsMaskClippedByImageEdge() throws {

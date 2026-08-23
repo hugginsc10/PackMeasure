@@ -14,6 +14,15 @@ check measured a stated 24 × 20 × 20-inch box as 24 × 24 × 20 inches. Do not
 the current estimates as the sole basis for tight clearances or safety-critical
 loading decisions.
 
+## App preview
+
+These real-device scans show PackMeasure tracing the item after the first
+viewpoint, then converging on an accepted estimate after two angles agree.
+
+| Trace the item | Review the estimate |
+| --- | --- |
+| <img src="Docs/Screenshots/multi-angle-capture.png" alt="PackMeasure tracing a suitcase during multi-angle capture" width="300"> | <img src="Docs/Screenshots/successful-isolation-result.png" alt="PackMeasure showing a clean suitcase outline and estimated dimensions" width="300"> |
+
 ## Use it
 
 1. Put one item in view with visible separation from the background.
