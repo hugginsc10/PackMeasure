@@ -43,7 +43,7 @@ struct ScannerCameraZoomTests {
             maxDeviceFactor: 4.0
         )
 
-        #expect(zooms == [.standard])
+        #expect(zooms == [.standard, .double])
     }
 
     @Test
@@ -55,7 +55,7 @@ struct ScannerCameraZoomTests {
             depthCompatibleDeviceFactorRanges: [1.75 ... 2.25, 3.0 ... 4.0]
         )
 
-        #expect(zooms == [.standard])
+        #expect(zooms == [.standard, .double])
     }
 
     @Test
@@ -67,7 +67,19 @@ struct ScannerCameraZoomTests {
             depthCompatibleDeviceFactorRanges: []
         )
 
-        #expect(zooms == [.half, .standard])
+        #expect(zooms == [.half, .standard, .double])
+    }
+
+    @Test
+    func wideOnlyARCameraOffersRealOneAndTwoTimesZoom() {
+        let zooms = ScannerCameraZoomPolicy.supportedZooms(
+            displayMultiplier: 1,
+            minDeviceFactor: 1,
+            maxDeviceFactor: 8,
+            depthCompatibleDeviceFactorRanges: []
+        )
+
+        #expect(zooms == [.standard, .double])
     }
 
     @Test
@@ -190,6 +202,110 @@ struct ScannerCameraZoomTests {
         #expect(!mismatchedReadback)
         #expect(!firstMatchAfterMismatch)
         #expect(secondMatchAfterMismatch)
+    }
+
+    @Test
+    func frameEvidenceRejectsDeviceReadbackWhenFieldOfViewDidNotChange() {
+        #expect(
+            !ScannerCameraFrameZoomPolicy.confirmsVisibleTransition(
+                from: .standard,
+                baselineNormalizedFocalLength: 0.75,
+                to: .double,
+                currentNormalizedFocalLength: 0.75
+            )
+        )
+    }
+
+    @Test
+    func frameEvidenceAcceptsMaterialZoomInAndZoomOut() {
+        #expect(
+            ScannerCameraFrameZoomPolicy.confirmsVisibleTransition(
+                from: .standard,
+                baselineNormalizedFocalLength: 0.75,
+                to: .double,
+                currentNormalizedFocalLength: 1.5
+            )
+        )
+        #expect(
+            ScannerCameraFrameZoomPolicy.confirmsVisibleTransition(
+                from: .double,
+                baselineNormalizedFocalLength: 1.5,
+                to: .standard,
+                currentNormalizedFocalLength: 0.75
+            )
+        )
+    }
+
+    @Test
+    func frameEvidenceRejectsPartialCropForTwoTimesRequest() {
+        #expect(
+            !ScannerCameraFrameZoomPolicy.confirmsVisibleTransition(
+                from: .standard,
+                baselineNormalizedFocalLength: 0.75,
+                to: .double,
+                currentNormalizedFocalLength: 0.90
+            )
+        )
+    }
+
+    @Test
+    func frameEvidenceUsesConfirmedReferenceWhenSessionReappliesSameZoom() {
+        #expect(
+            ScannerCameraFrameZoomPolicy.confirmsVisibleTransition(
+                from: .double,
+                baselineNormalizedFocalLength: 1.49,
+                to: .double,
+                currentNormalizedFocalLength: 1.51,
+                confirmedReferenceNormalizedFocalLength: 1.5
+            )
+        )
+        #expect(
+            !ScannerCameraFrameZoomPolicy.confirmsVisibleTransition(
+                from: .double,
+                baselineNormalizedFocalLength: 0.75,
+                to: .double,
+                currentNormalizedFocalLength: 0.75,
+                confirmedReferenceNormalizedFocalLength: 1.5
+            )
+        )
+    }
+
+    @Test
+    func frameEvidenceUsesTargetReferenceAfterSessionResetsDeviceZoom() {
+        #expect(
+            ScannerCameraFrameZoomPolicy.confirmsVisibleTransition(
+                from: .standard,
+                baselineNormalizedFocalLength: 1.5,
+                to: .double,
+                currentNormalizedFocalLength: 1.51,
+                confirmedReferenceNormalizedFocalLength: 1.5
+            )
+        )
+        #expect(
+            !ScannerCameraFrameZoomPolicy.confirmsVisibleTransition(
+                from: .standard,
+                baselineNormalizedFocalLength: 1.5,
+                to: .double,
+                currentNormalizedFocalLength: 0.75,
+                confirmedReferenceNormalizedFocalLength: 1.5
+            )
+        )
+    }
+
+    @Test
+    func normalizedFocalLengthRejectsInvalidCalibrationInputs() {
+        #expect(
+            ScannerCameraFrameZoomPolicy.normalizedFocalLength(
+                focalLengthPixels: 1_500,
+                imageWidthPixels: 2_000
+            ) == 0.75
+        )
+        #expect(
+            ScannerCameraFrameZoomPolicy.normalizedFocalLength(
+                focalLengthPixels: 1_500,
+                imageWidthPixels: 0
+            ) == nil
+        )
     }
 
     @Test @MainActor

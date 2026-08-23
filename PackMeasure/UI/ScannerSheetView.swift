@@ -531,9 +531,9 @@ struct ScannerSheetView: View {
                 onSelect: scannerState.selectCameraZoom
             )
         case .single(let zoom):
-            CameraZoomStatusBadge(text: "\(zoom.label) only")
+            CameraZoomStatusBadge(text: "\(zoom.label) fixed for LiDAR")
         case .fixed:
-            CameraZoomStatusBadge(text: "Fixed camera view")
+            CameraZoomStatusBadge(text: "Zoom unavailable with LiDAR")
         case .locked(let zoom):
             CameraZoomStatusBadge(text: "\(zoom.label) locked")
         }
@@ -585,7 +585,9 @@ private struct CameraZoomControl: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(!isEnabled || isApplying)
+                .opacity(isEnabled && !isApplying ? 1 : 0.55)
                 .accessibilityLabel("Camera zoom \(zoom.label)")
+                .accessibilityIdentifier(zoom.controlIdentifier)
                 .accessibilityValue(zoom == selectedZoom ? "Selected" : "Not selected")
                 .accessibilityHint(
                     isEnabled
