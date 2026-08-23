@@ -53,8 +53,7 @@ enum ScannerCameraZoomPolicy {
     static func supportedZooms(
         displayMultiplier: Double,
         minDeviceFactor: Double,
-        maxDeviceFactor: Double,
-        depthCompatibleDeviceFactorRanges: [ClosedRange<Double>]? = nil
+        maxDeviceFactor: Double
     ) -> [ScannerCameraZoom] {
         guard displayMultiplier.isFinite,
               minDeviceFactor.isFinite,
@@ -76,11 +75,7 @@ enum ScannerCameraZoomPolicy {
                   factor <= maxDeviceFactor + factorTolerance else {
                 return false
             }
-            guard let depthCompatibleDeviceFactorRanges,
-                  !depthCompatibleDeviceFactorRanges.isEmpty else {
-                return true
-            }
-            return depthCompatibleDeviceFactorRanges.contains { $0.contains(factor) }
+            return true
         }
     }
 
@@ -492,6 +487,7 @@ struct MeasurementARView: UIViewRepresentable {
         private struct CaptureAccumulator {
             let requestID: Int
             let measurementSeriesID: Int
+            let previewViewportSize: SIMD2<Float>
             var settledFrameGate: SettledFrameCaptureGate
             var cameraViewpoint: MeasurementCameraViewpoint?
             var geometryCenter: SIMD3<Float>?
@@ -584,6 +580,11 @@ struct MeasurementARView: UIViewRepresentable {
         private static let maximumRegionCoverage = 0.94
         private static let peripheralSampleTarget = 1_200
         private static let edgeMarginPixels = 2
+        private static let protectedPreviewInsetFraction: Float = 0.02
+        private static let resultPreviewViewportSize = SIMD2<Float>(
+            Float(ScannerPreviewLayout.resultAspectRatio),
+            1
+        )
         private static let minimumTargetElevationForFloorFiltering: Float = 0.08
 
         private let processingQueue = DispatchQueue(
@@ -904,6 +905,22 @@ struct MeasurementARView: UIViewRepresentable {
 
             let requestID = requestTracker.lastCaptureRequestID
             let measurementSeriesID = scannerState?.measurementSeriesID ?? 0
+            guard let arView else {
+                scannerState?.phase = .failed(
+                    "The camera preview is not ready. Try the photo again."
+                )
+                return
+            }
+            let previewViewportSize = SIMD2<Float>(
+                Float(arView.bounds.width),
+                Float(arView.bounds.height)
+            )
+            guard previewViewportSize.x > 0, previewViewportSize.y > 0 else {
+                scannerState?.phase = .failed(
+                    "The camera preview is not ready. Try the photo again."
+                )
+                return
+            }
             let now = CACurrentMediaTime()
             scannerState?.estimate = nil
             scannerState?.phase = .scanning(progress: 0)
@@ -912,6 +929,7 @@ struct MeasurementARView: UIViewRepresentable {
                 self?.capture = CaptureAccumulator(
                     requestID: requestID,
                     measurementSeriesID: measurementSeriesID,
+                    previewViewportSize: previewViewportSize,
                     settledFrameGate: SettledFrameCaptureGate(
                         requestedAt: now,
                         policy: Self.settledFramePolicy
@@ -1003,12 +1021,45 @@ struct MeasurementARView: UIViewRepresentable {
 
             switch sampleSingleShotFrame(from: frame) {
             case .accepted(let points, let diagnostics, let outline, let route):
+                let objectOverlay = outline.flatMap {
+                    measurementObjectOverlay(from: $0, frame: frame)
+                }
+                if let objectOverlay,
+                   ![
+                       activeCapture.previewViewportSize,
+                       Self.resultPreviewViewportSize,
+                   ].allSatisfy({ viewportSize in
+                       objectOverlay.isFullyVisible(
+                           in: viewportSize,
+                           protectedInsetFraction: Self.protectedPreviewInsetFraction
+                       )
+                   }) {
+                    let photoFailure = SingleShotCaptureFailure.photo(
+                        .maskTouchesImageEdge
+                    )
+                    activeCapture.lastPhotoFailure = photoFailure
+                    activeCapture.lastCalibration = diagnostics
+                    activeCapture.rejectedFrameCount = 1
+                    activeCapture.lastRejection = .insufficientSurfaceEvidence
+                    apply(route, to: &activeCapture)
+                    logCalibrationSummary(
+                        activeCapture,
+                        result: .failure(.targetRejected(.insufficientSurfaceEvidence))
+                    )
+                    publishFailure(
+                        ScannerPhotoFailureCopy.message(
+                            for: photoFailure,
+                            fallbackResult: route.fallbackResult
+                        ),
+                        requestID: activeCapture.requestID,
+                        measurementSeriesID: activeCapture.measurementSeriesID
+                    )
+                    return
+                }
                 activeCapture.worldPoints = points
                 activeCapture.frameCount = 1
                 activeCapture.lastCalibration = diagnostics
-                activeCapture.objectOverlay = outline.flatMap {
-                    measurementObjectOverlay(from: $0, frame: frame)
-                }
+                activeCapture.objectOverlay = objectOverlay
                 apply(route, to: &activeCapture)
                 finalizeCapture(activeCapture)
             case .failed(let photoFailure, let diagnostics, let route):
@@ -1237,14 +1288,14 @@ struct MeasurementARView: UIViewRepresentable {
             forLockedDevice device: AVCaptureDevice
         ) -> [ScannerCameraZoom] {
             let multiplier = Double(device.displayVideoZoomFactorMultiplier)
-            let depthRanges = device.activeFormat
-                .supportedVideoZoomRangesForDepthDataDelivery
-                .map { Double($0.lowerBound) ... Double($0.upperBound) }
+            // AVCapture depth-data delivery is a separate pipeline from ARKit
+            // scene depth. Limit candidates to factors the live configurable
+            // capture device can apply, then let the existing AR-frame gate
+            // prove tracking, scene depth, and the visible field-of-view change.
             return ScannerCameraZoomPolicy.supportedZooms(
                 displayMultiplier: multiplier,
                 minDeviceFactor: Double(device.minAvailableVideoZoomFactor),
-                maxDeviceFactor: Double(device.maxAvailableVideoZoomFactor),
-                depthCompatibleDeviceFactorRanges: depthRanges
+                maxDeviceFactor: Double(device.maxAvailableVideoZoomFactor)
             )
         }
 

@@ -47,24 +47,11 @@ struct ScannerCameraZoomTests {
     }
 
     @Test
-    func capabilityMappingKeepsOnlyDepthCompatibleFactors() {
+    func capabilityMappingDoesNotRequireAVDepthDeliverySupport() {
         let zooms = ScannerCameraZoomPolicy.supportedZooms(
             displayMultiplier: 0.5,
             minDeviceFactor: 1.0,
-            maxDeviceFactor: 4.0,
-            depthCompatibleDeviceFactorRanges: [1.75 ... 2.25, 3.0 ... 4.0]
-        )
-
-        #expect(zooms == [.standard, .double])
-    }
-
-    @Test
-    func emptyAVDepthRangesFallBackToARKitSceneDepthConfirmation() {
-        let zooms = ScannerCameraZoomPolicy.supportedZooms(
-            displayMultiplier: 0.5,
-            minDeviceFactor: 1.0,
-            maxDeviceFactor: 4.0,
-            depthCompatibleDeviceFactorRanges: []
+            maxDeviceFactor: 4.0
         )
 
         #expect(zooms == [.half, .standard, .double])
@@ -75,8 +62,7 @@ struct ScannerCameraZoomTests {
         let zooms = ScannerCameraZoomPolicy.supportedZooms(
             displayMultiplier: 1,
             minDeviceFactor: 1,
-            maxDeviceFactor: 8,
-            depthCompatibleDeviceFactorRanges: []
+            maxDeviceFactor: 8
         )
 
         #expect(zooms == [.standard, .double])

@@ -218,6 +218,116 @@ final class PhotoObjectMeasurementTests: XCTestCase {
         XCTAssertGreaterThan(squareBottomEdge.y, 1)
     }
 
+    func testObjectOverlayRejectsContourCroppedByVisibleAspectFillPreview() throws {
+        let fullImageOutline = MeasurementObjectOutline(
+            loops: [[
+                SIMD2<Float>(0, 0),
+                SIMD2<Float>(1, 0),
+                SIMD2<Float>(1, 1),
+                SIMD2<Float>(0, 1),
+            ]]
+        )
+        let safelyFramedOutline = MeasurementObjectOutline(
+            loops: [[
+                SIMD2<Float>(0.2, 0.2),
+                SIMD2<Float>(0.8, 0.2),
+                SIMD2<Float>(0.8, 0.8),
+                SIMD2<Float>(0.2, 0.8),
+            ]]
+        )
+        let viewport = SIMD2<Float>(300, 300)
+
+        XCTAssertFalse(
+            MeasurementObjectOverlay(
+                displayOrientedImageSize: SIMD2<Float>(3, 4),
+                outline: fullImageOutline
+            ).isFullyVisible(in: viewport, protectedInsetFraction: 0.02),
+            "an image-edge-safe contour can still be clipped by the visible aspect-fill crop"
+        )
+        XCTAssertTrue(
+            MeasurementObjectOverlay(
+                displayOrientedImageSize: SIMD2<Float>(3, 4),
+                outline: safelyFramedOutline
+            ).isFullyVisible(in: viewport, protectedInsetFraction: 0.02)
+        )
+    }
+
+    func testObjectOverlayRequiresVisibleSpaceAroundEveryContourEdge() throws {
+        let bottomEdgeOutline = MeasurementObjectOutline(
+            loops: [[
+                SIMD2<Float>(0.3, 0.45),
+                SIMD2<Float>(0.7, 0.45),
+                SIMD2<Float>(0.7, 0.87),
+                SIMD2<Float>(0.3, 0.87),
+            ]]
+        )
+        let overlay = MeasurementObjectOverlay(
+            displayOrientedImageSize: SIMD2<Float>(3, 4),
+            outline: bottomEdgeOutline
+        )
+
+        XCTAssertFalse(
+            overlay.isFullyVisible(
+                in: SIMD2<Float>(300, 300),
+                protectedInsetFraction: 0.02
+            )
+        )
+    }
+
+    func testObjectOverlayThatFitsLivePreviewCanFailCanonicalResultPreview() throws {
+        let outline = MeasurementObjectOutline(
+            loops: [[
+                SIMD2<Float>(0.25, 0.2),
+                SIMD2<Float>(0.75, 0.2),
+                SIMD2<Float>(0.75, 0.81),
+                SIMD2<Float>(0.25, 0.81),
+            ]]
+        )
+        let overlay = MeasurementObjectOverlay(
+            displayOrientedImageSize: SIMD2<Float>(3, 4),
+            outline: outline
+        )
+
+        XCTAssertTrue(
+            overlay.isFullyVisible(
+                in: SIMD2<Float>(300, 400),
+                protectedInsetFraction: 0.02
+            ),
+            "the outline is visibly inset in the tall live aiming preview"
+        )
+        XCTAssertFalse(
+            overlay.isFullyVisible(
+                in: SIMD2<Float>(360, 300),
+                protectedInsetFraction: 0.02
+            ),
+            "the same outline would be cropped after the result preview becomes shorter"
+        )
+    }
+
+    func testObjectOverlayWithResultMarginFitsBothPreviewLayouts() throws {
+        let outline = MeasurementObjectOutline(
+            loops: [[
+                SIMD2<Float>(0.25, 0.21),
+                SIMD2<Float>(0.75, 0.21),
+                SIMD2<Float>(0.75, 0.79),
+                SIMD2<Float>(0.25, 0.79),
+            ]]
+        )
+        let overlay = MeasurementObjectOverlay(
+            displayOrientedImageSize: SIMD2<Float>(3, 4),
+            outline: outline
+        )
+
+        for viewport in [SIMD2<Float>(300, 400), SIMD2<Float>(360, 300)] {
+            XCTAssertTrue(
+                overlay.isFullyVisible(
+                    in: viewport,
+                    protectedInsetFraction: 0.02
+                )
+            )
+        }
+    }
+
     func testBuildsWorldPointCloudForBoxEllipseAndLShapeMasks() throws {
         let masks = [
             try boxMask(width: 12, height: 12, x: 3...8, y: 3...8),

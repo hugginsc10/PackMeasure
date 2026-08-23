@@ -321,6 +321,37 @@ struct MeasurementObjectOverlay: Equatable, Sendable {
         let origin = (viewportSize - displayedSize) / 2
         return (origin + point * displayedSize) / viewportSize
     }
+
+    /// Verifies the measured contour remains inside the portion of the camera
+    /// image the user could actually see. The source mask can be clear of the
+    /// captured-image edge while a short, wide SwiftUI preview aspect-fills and
+    /// crops it. Accepting that capture would draw a contour closed against the
+    /// preview boundary and can hide a missing endpoint from the measurement.
+    func isFullyVisible(
+        in viewportSize: SIMD2<Float>,
+        protectedInsetFraction: Float = 0
+    ) -> Bool {
+        guard isRenderable,
+              protectedInsetFraction.isFinite,
+              protectedInsetFraction >= 0,
+              protectedInsetFraction < 0.5 else {
+            return false
+        }
+
+        let maximum = 1 - protectedInsetFraction
+        return outline.loops.flatMap { $0 }.allSatisfy { point in
+            guard let mapped = normalizedPreviewPoint(
+                point,
+                viewportSize: viewportSize
+            ) else {
+                return false
+            }
+            return mapped.x >= protectedInsetFraction
+                && mapped.x <= maximum
+                && mapped.y >= protectedInsetFraction
+                && mapped.y <= maximum
+        }
+    }
 }
 
 struct PhotoMaskQuality: Equatable, Sendable {

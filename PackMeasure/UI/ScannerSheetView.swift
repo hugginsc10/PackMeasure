@@ -1,5 +1,12 @@
 import SwiftUI
 
+enum ScannerPreviewLayout {
+    /// Keeps the paused camera result stable while result forms appear below it.
+    /// The live aiming view can remain taller, but a saved outline must also fit
+    /// this canonical result viewport without being cropped by aspect fill.
+    static let resultAspectRatio: CGFloat = 6.0 / 5.0
+}
+
 enum ScannerCameraZoomPresentation: Equatable, Sendable {
     case hidden
     case checking
@@ -214,39 +221,7 @@ struct ScannerSheetView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 16) {
-                MeasurementARView(scannerState: scannerState)
-                .frame(maxWidth: .infinity)
-                .frame(minHeight: 260, idealHeight: 360, maxHeight: 420)
-                .clipShape(RoundedRectangle(cornerRadius: 24))
-                .overlay {
-                    if showsCameraGuide, scannerState.objectOverlay == nil {
-                        CameraObjectFrame()
-                    }
-                }
-                .overlay(alignment: .top) {
-                    Text(statusText)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(.white)
-                        .background(.black.opacity(0.55), in: Capsule())
-                        .padding()
-                }
-                .overlay(alignment: .topTrailing) {
-                    cameraZoomOverlay
-                        .padding()
-                }
-                .overlay(alignment: .bottom) {
-                    if showsCameraGuide, !scannerState.phase.isCapturing {
-                        Text(previewGuidanceText)
-                            .font(.caption.weight(.medium))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 7)
-                            .background(.black.opacity(0.55), in: Capsule())
-                            .padding()
-                    }
-                }
+                cameraPreview
 
                 if let estimate = scannerState.estimate {
                     Form {
@@ -333,6 +308,53 @@ struct ScannerSheetView: View {
                 }
             }
         }
+    }
+
+    @ViewBuilder
+    private var cameraPreview: some View {
+        if scannerState.objectOverlay == nil {
+            cameraPreviewSurface
+                .frame(maxWidth: .infinity)
+                .frame(minHeight: 260, idealHeight: 360, maxHeight: 420)
+        } else {
+            cameraPreviewSurface
+                .frame(maxWidth: .infinity)
+                .aspectRatio(ScannerPreviewLayout.resultAspectRatio, contentMode: .fit)
+        }
+    }
+
+    private var cameraPreviewSurface: some View {
+        MeasurementARView(scannerState: scannerState)
+            .clipShape(RoundedRectangle(cornerRadius: 24))
+            .overlay {
+                if showsCameraGuide, scannerState.objectOverlay == nil {
+                    CameraObjectFrame()
+                }
+            }
+            .overlay(alignment: .top) {
+                Text(statusText)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .background(.black.opacity(0.55), in: Capsule())
+                    .padding()
+            }
+            .overlay(alignment: .topTrailing) {
+                cameraZoomOverlay
+                    .padding()
+            }
+            .overlay(alignment: .bottom) {
+                if showsCameraGuide, !scannerState.phase.isCapturing {
+                    Text(previewGuidanceText)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 7)
+                        .background(.black.opacity(0.55), in: Capsule())
+                        .padding()
+                }
+            }
     }
 
     @ViewBuilder
@@ -804,7 +826,7 @@ enum ScannerPhotoFailureCopy {
         case let .maskAreaTooLarge(actual, maximum):
             "The isolated object covered \(percent(actual, rounded: .up))% of the photo; this build allows at most \(percent(maximum, rounded: .down))%. Step back so the whole object has visible space around it."
         case .maskTouchesImageEdge:
-            "The isolated object reached the edge of the photo. Keep it fully visible with space around every side and retake it."
+            "The isolated object reached the edge of the camera view. Keep it fully visible with space around every side and retake it."
         case let .insufficientDepthSamples(actual, minimum):
             "LiDAR found \(actual) usable depth points on the object; this build needs \(minimum). Hold steady at a three-quarter angle and retake it."
         case let .insufficientDepthCoverage(actual, minimum):
@@ -833,7 +855,7 @@ enum ScannerPhotoFailureCopy {
     ) -> String {
         switch category {
         case .framing:
-            "The object reached the edge of the photo. Keep it fully visible with space around it and retake it."
+            "The object reached the edge of the camera view. Keep it fully visible with space around it and retake it."
         case .isolation:
             "PackMeasure couldn't isolate one clear object from the background. Center one object against a contrasting background and retake it."
         case .depth:
