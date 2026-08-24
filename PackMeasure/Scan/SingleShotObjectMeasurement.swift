@@ -207,7 +207,9 @@ extension PhotoObjectMeasurementError {
         case .insufficientDepthSamples,
              .insufficientDepthCoverage,
              .insufficientHorizontalDepthSupport,
-             .insufficientVerticalDepthSupport:
+             .insufficientVerticalDepthSupport,
+             .insufficientHorizontalDepthEndpointCoverage,
+             .insufficientVerticalDepthEndpointCoverage:
             .depth
         case .invalidLabelMaskDimensions,
              .invalidDepthMaskDimensions,
@@ -244,6 +246,10 @@ extension PhotoObjectMeasurementError {
             "D03"
         case .insufficientVerticalDepthSupport:
             "D04"
+        case .insufficientHorizontalDepthEndpointCoverage:
+            "D05"
+        case .insufficientVerticalDepthEndpointCoverage:
+            "D06"
         case .invalidLabelMaskDimensions:
             "P01"
         case .invalidDepthMaskDimensions:
@@ -301,6 +307,10 @@ extension PhotoObjectMeasurementError {
             "insufficient_horizontal_depth_support,actual=\(Self.metric(actual)),minimum=\(Self.metric(minimum))"
         case let .insufficientVerticalDepthSupport(actual, minimum):
             "insufficient_vertical_depth_support,actual=\(Self.metric(actual)),minimum=\(Self.metric(minimum))"
+        case let .insufficientHorizontalDepthEndpointCoverage(actual, minimum):
+            "insufficient_horizontal_depth_endpoint_coverage,actual=\(Self.metric(actual)),minimum=\(Self.metric(minimum))"
+        case let .insufficientVerticalDepthEndpointCoverage(actual, minimum):
+            "insufficient_vertical_depth_endpoint_coverage,actual=\(Self.metric(actual)),minimum=\(Self.metric(minimum))"
         case .invalidCameraCalibration:
             "invalid_camera_calibration"
         case .invalidWorldPoint:
@@ -359,7 +369,9 @@ enum SingleShotObjectMeasurement {
              .insufficientDepthSamples,
              .insufficientDepthCoverage,
              .insufficientHorizontalDepthSupport,
-             .insufficientVerticalDepthSupport:
+             .insufficientVerticalDepthSupport,
+             .insufficientHorizontalDepthEndpointCoverage,
+             .insufficientVerticalDepthEndpointCoverage:
             return .targetRejected(.insufficientSurfaceEvidence)
         }
     }

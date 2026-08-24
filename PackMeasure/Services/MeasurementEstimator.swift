@@ -436,9 +436,47 @@ struct MeasurementViewpointPolicy: Equatable, Sendable {
     }
 }
 
+/// Requires the final capture set to include a meaningfully different camera
+/// height. Horizontal orbit alone can repeat the same occluded endpoints from
+/// several headings, producing measurements that agree but are all too small.
+/// ARKit camera positions share one gravity-aligned world coordinate system for
+/// the measurement series, so their Y delta is independent of bounding-box fit
+/// center drift.
+struct MeasurementElevationDiversityPolicy: Equatable, Sendable {
+    var minimumVerticalBaselineMeters: Float = 0.20
+
+    func addsDiversity(
+        _ candidate: MeasurementAngleCapture,
+        comparedTo references: [MeasurementAngleCapture]
+    ) -> Bool {
+        guard minimumVerticalBaselineMeters.isFinite,
+              minimumVerticalBaselineMeters > 0,
+              candidate.viewpoint.position.y.isFinite else {
+            return false
+        }
+
+        return references.contains { reference in
+            reference.viewpoint.position.y.isFinite
+                && abs(candidate.viewpoint.position.y - reference.viewpoint.position.y)
+                    >= minimumVerticalBaselineMeters
+        }
+    }
+
+    func hasDiversity(in captures: [MeasurementAngleCapture]) -> Bool {
+        captures.indices.contains { candidateIndex in
+            addsDiversity(
+                captures[candidateIndex],
+                comparedTo: Array(captures[..<candidateIndex])
+            )
+        }
+    }
+}
+
 enum MeasurementAdditionalAngleReason: Equatable, Sendable {
     case firstAngleCaptured
     case viewpointTooSimilar
+    case thirdAngleRequired
+    case elevationTooSimilar
     case dimensionsDisagree
 }
 
@@ -461,6 +499,10 @@ enum MultiAngleMeasurementProgress: Equatable, Sendable {
             "needs_second_angle,accepted_count=\(count)"
         case .needsAnotherAngle(.viewpointTooSimilar, let count):
             "viewpoint_too_similar,accepted_count=\(count)"
+        case .needsAnotherAngle(.thirdAngleRequired, let count):
+            "third_angle_required,accepted_count=\(count)"
+        case .needsAnotherAngle(.elevationTooSimilar, let count):
+            "elevation_too_similar,accepted_count=\(count)"
         case .needsAnotherAngle(.dimensionsDisagree, let count):
             "dimensions_disagree,accepted_count=\(count)"
         case .accepted(let estimate):
@@ -568,6 +610,7 @@ struct MultiAngleMeasurementWorkflow: Equatable, Sendable {
     private(set) var captures: [MeasurementAngleCapture] = []
     private(set) var progress = MultiAngleMeasurementProgress.awaitingFirstAngle
     var viewpointPolicy = MeasurementViewpointPolicy()
+    var elevationDiversityPolicy = MeasurementElevationDiversityPolicy()
     var consensusPolicy = MultiAngleMeasurementConsensusPolicy()
 
     @discardableResult
@@ -606,18 +649,48 @@ struct MultiAngleMeasurementWorkflow: Equatable, Sendable {
             }
         }
 
+        // Keep the first two horizontally independent views even when their
+        // heights match so the UI can show their measurements. The required
+        // third photo must introduce camera-height diversity; rejecting it
+        // before append leaves the workflow retryable instead of exhausting
+        // the three-capture consensus budget.
+        if captures.count == 2,
+           !elevationDiversityPolicy.addsDiversity(
+               capture,
+               comparedTo: captures
+           ) {
+            progress = .needsAnotherAngle(
+                reason: .elevationTooSimilar,
+                acceptedCount: captures.count
+            )
+            return progress
+        }
+
         captures.append(capture)
         switch captures.count {
         case 1:
             progress = .needsAnotherAngle(reason: .firstAngleCaptured, acceptedCount: 1)
         case 2:
-            if consensusPolicy.measurementsAgree(captures[0].evidence, captures[1].evidence),
-               let estimate = consensusPolicy.consensusEstimate(from: captures) {
-                progress = .accepted(estimate)
+            if consensusPolicy.measurementsAgree(captures[0].evidence, captures[1].evidence) {
+                progress = .needsAnotherAngle(
+                    reason: .thirdAngleRequired,
+                    acceptedCount: 2
+                )
             } else {
                 progress = .needsAnotherAngle(reason: .dimensionsDisagree, acceptedCount: 2)
             }
         case 3:
+            guard elevationDiversityPolicy.hasDiversity(in: captures) else {
+                // Defensive fail-closed check. The candidate gate above keeps
+                // this state unreachable through normal recording.
+                captures.removeLast()
+                progress = .needsAnotherAngle(
+                    reason: .elevationTooSimilar,
+                    acceptedCount: captures.count
+                )
+                return progress
+            }
+
             let agreeingPairs: [(indices: [Int], captures: [MeasurementAngleCapture])] = [
                 (indices: [0, 1], captures: [captures[0], captures[1]]),
                 (indices: [0, 2], captures: [captures[0], captures[2]]),

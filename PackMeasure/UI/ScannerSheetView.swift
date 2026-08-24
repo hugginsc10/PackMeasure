@@ -281,6 +281,22 @@ struct ScannerSheetView: View {
                                 .foregroundStyle(.secondary)
                         }
 
+                        if scannerState.capturedEstimates.count > 1 {
+                            Section(ScannerResultCopy.capturedAnglesSectionTitle) {
+                                ForEach(
+                                    Array(scannerState.capturedEstimates.enumerated()),
+                                    id: \.offset
+                                ) { index, capturedEstimate in
+                                    HStack {
+                                        Text("Angle \(index + 1)")
+                                        Spacer()
+                                        Text(dimensionString(capturedEstimate))
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                            }
+                        }
+
                         if case let .retryRequired(message) = reviewState {
                             Section("Try another photo") {
                                 Label(message, systemImage: "exclamationmark.triangle.fill")
@@ -742,7 +758,7 @@ enum ScannerCapturePolicy {
     static func reviewState(
         phase: ScannerPhase,
         estimate: MeasurementEstimate?,
-        measurementProgress: MultiAngleMeasurementProgress = .awaitingFirstAngle
+        measurementProgress: MultiAngleMeasurementProgress
     ) -> ScannerCaptureReviewState {
         switch phase {
         case .checkingSupport, .ready:
@@ -766,7 +782,9 @@ enum ScannerCapturePolicy {
                 return .retryRequired(
                     ScannerGuidanceCopy.consensusFailureMessage(for: failure)
                 )
-            case .awaitingFirstAngle, .accepted:
+            case .awaitingFirstAngle:
+                return .retryRequired(ScannerGuidanceCopy.missingEstimateRetry)
+            case .accepted:
                 break
             }
             guard let estimate else {
@@ -788,7 +806,7 @@ enum ScannerGuidanceCopy {
         "Keep the whole object visible, then take a photo."
 
     static let additionalAnglePreview =
-        "Keep the item still; move left or right for another angle"
+        "Keep the item still; move around it and change camera height"
 
     static let lowConfidenceRetry =
         "We couldn't get clear dimensions from this photo. Keep one object fully visible and try again."
@@ -804,8 +822,12 @@ enum ScannerGuidanceCopy {
             "First angle captured. Keep the item still, move around it, and take a second photo."
         case .viewpointTooSimilar:
             "That view was too similar. Move farther left or right without moving the item."
+        case .thirdAngleRequired:
+            "Good agreement so far. Take one final photo from another side with the phone higher or lower."
+        case .elevationTooSimilar:
+            "Change camera height for the final photo. Raise or lower the phone and move around the item."
         case .dimensionsDisagree:
-            "The first two angles differed. Take one final photo from another side."
+            "The first two angles differed. Take one final photo from another side with the phone higher or lower."
         }
     }
 
@@ -886,6 +908,10 @@ enum ScannerPhotoFailureCopy {
             "LiDAR covered \(percent(actual, rounded: .down))% of the isolated object's horizontal span in the photo; this build needs \(percent(minimum, rounded: .up))%. Hold steady at a three-quarter angle and retake it."
         case let .insufficientVerticalDepthSupport(actual, minimum):
             "LiDAR covered \(percent(actual, rounded: .down))% of the isolated object's vertical span in the photo; this build needs \(percent(minimum, rounded: .up))%. Hold steady at a three-quarter angle and retake it."
+        case let .insufficientHorizontalDepthEndpointCoverage(actual, minimum):
+            "LiDAR depth covered \(percent(actual, rounded: .down))% of the least-covered horizontal endpoint band in the photo; this build needs \(percent(minimum, rounded: .up))% at both horizontal ends. Hold steady at a three-quarter angle and retake it."
+        case let .insufficientVerticalDepthEndpointCoverage(actual, minimum):
+            "LiDAR depth covered \(percent(actual, rounded: .down))% of the least-covered vertical endpoint band in the photo; this build needs \(percent(minimum, rounded: .up))% at both vertical ends. Hold steady at a three-quarter angle and retake it."
         case .noForegroundInstance:
             "Foreground detection didn't recognize this object. Try a lower three-quarter angle or place it against a plain wall."
         case .invalidLabelMaskDimensions,

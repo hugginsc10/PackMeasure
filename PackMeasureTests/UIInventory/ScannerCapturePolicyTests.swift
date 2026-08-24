@@ -8,7 +8,8 @@ struct ScannerCapturePolicyTests {
     func lowConfidenceCaptureRequiresVisibleRetryAndCannotSave() {
         let state = ScannerCapturePolicy.reviewState(
             phase: .measured,
-            estimate: estimate(confidence: .low)
+            estimate: estimate(confidence: .low),
+            measurementProgress: .awaitingFirstAngle
         )
 
         #expect(
@@ -25,7 +26,8 @@ struct ScannerCapturePolicyTests {
             "The app could not isolate one clear object from this capture. Center one item in frame and retake the photo."
         let state = ScannerCapturePolicy.reviewState(
             phase: .failed(scannerDiagnostic),
-            estimate: estimate(confidence: .high)
+            estimate: estimate(confidence: .high),
+            measurementProgress: .awaitingFirstAngle
         )
 
         #expect(state == .retryRequired(scannerDiagnostic))
@@ -67,6 +69,21 @@ struct ScannerCapturePolicyTests {
     }
 
     @Test
+    func finalAngleGuidanceRequiresAHeightChange() {
+        let agreeingPairCopy = ScannerGuidanceCopy.additionalAngleMessage(
+            for: .thirdAngleRequired
+        )
+        let flatThirdViewCopy = ScannerGuidanceCopy.additionalAngleMessage(
+            for: .elevationTooSimilar
+        )
+
+        #expect(agreeingPairCopy.localizedCaseInsensitiveContains("final photo"))
+        #expect(agreeingPairCopy.localizedCaseInsensitiveContains("higher or lower"))
+        #expect(flatThirdViewCopy.localizedCaseInsensitiveContains("camera height"))
+        #expect(flatThirdViewCopy.localizedCaseInsensitiveContains("raise or lower"))
+    }
+
+    @Test
     func photoFailureCopyReportsExactDepthCoverageAndDiagnosticCode() {
         let copy = ScannerPhotoFailureCopy.message(
             for: .photo(.insufficientDepthCoverage(actual: 0.42, minimum: 0.60))
@@ -102,6 +119,31 @@ struct ScannerCapturePolicyTests {
         #expect(vertical.localizedCaseInsensitiveContains("vertical span in the photo"))
         #expect(!horizontal.localizedCaseInsensitiveContains("object's width"))
         #expect(!vertical.localizedCaseInsensitiveContains("object's height"))
+    }
+
+    @Test
+    func endpointCoverageCopyDescribesEndpointBandsNotSpan() {
+        let horizontal = ScannerPhotoFailureCopy.message(
+            for: .photo(
+                .insufficientHorizontalDepthEndpointCoverage(actual: 0.24, minimum: 0.50)
+            )
+        )
+        let vertical = ScannerPhotoFailureCopy.message(
+            for: .photo(
+                .insufficientVerticalDepthEndpointCoverage(actual: 0.31, minimum: 0.50)
+            )
+        )
+
+        #expect(horizontal.localizedCaseInsensitiveContains("horizontal endpoint band"))
+        #expect(horizontal.localizedCaseInsensitiveContains("both horizontal ends"))
+        #expect(horizontal.contains("24%"))
+        #expect(horizontal.contains("Diagnostic D05"))
+        #expect(!horizontal.localizedCaseInsensitiveContains("horizontal span"))
+        #expect(vertical.localizedCaseInsensitiveContains("vertical endpoint band"))
+        #expect(vertical.localizedCaseInsensitiveContains("both vertical ends"))
+        #expect(vertical.contains("31%"))
+        #expect(vertical.contains("Diagnostic D06"))
+        #expect(!vertical.localizedCaseInsensitiveContains("vertical span"))
     }
 
     @Test
@@ -396,7 +438,7 @@ struct ScannerCapturePolicyTests {
             position: SIMD3<Float>(0, 0, 1)
         )
         state.receiveMeasurement(first)
-        let progress = state.receiveMeasurement(
+        let secondProgress = state.receiveMeasurement(
             angleCapture(
                 length: meters(fromInches: 16),
                 width: meters(fromInches: 11),
@@ -405,12 +447,25 @@ struct ScannerCapturePolicyTests {
                 position: SIMD3<Float>(1, 0, 0)
             )
         )
+        #expect(
+            secondProgress
+                == .needsAnotherAngle(reason: .thirdAngleRequired, acceptedCount: 2)
+        )
+        let progress = state.receiveMeasurement(
+            angleCapture(
+                length: meters(fromInches: 16),
+                width: meters(fromInches: 11),
+                height: meters(fromInches: 5),
+                center: SIMD3<Float>(-3.0, 2.0, -2.5),
+                position: SIMD3<Float>(0, 0.21, -1)
+            )
+        )
 
         guard case .accepted(let consensus) = progress else {
             Issue.record("expected stationary box views to resolve without an alignment retry")
             return
         }
-        #expect(state.capturedEstimates.count == 2)
+        #expect(state.capturedEstimates.count == 3)
         #expect(state.estimate == consensus)
         #expect(consensus.lengthMeters == meters(fromInches: 16))
         #expect(consensus.widthMeters == meters(fromInches: 11))
@@ -458,7 +513,7 @@ struct ScannerCapturePolicyTests {
 
         state.phase = .ready
         state.startMeasurement()
-        let resolvedProgress = state.receiveMeasurement(
+        let secondProgress = state.receiveMeasurement(
             angleCapture(
                 length: 0.61,
                 width: 0.41,
@@ -466,16 +521,28 @@ struct ScannerCapturePolicyTests {
                 position: SIMD3<Float>(1, 0, 0)
             )
         )
+        #expect(
+            secondProgress
+                == .needsAnotherAngle(reason: .thirdAngleRequired, acceptedCount: 2)
+        )
+        let resolvedProgress = state.receiveMeasurement(
+            angleCapture(
+                length: 0.61,
+                width: 0.41,
+                height: 0.51,
+                position: SIMD3<Float>(0, 0.21, -1)
+            )
+        )
 
         guard case .accepted(let consensus) = resolvedProgress else {
-            Issue.record("expected a good retry from the distinct view to resolve")
+            Issue.record("expected distinct second and elevated third views to resolve")
             return
         }
         #expect(state.measurementSeriesID == seriesID)
-        #expect(state.capturedEstimates.count == 2)
+        #expect(state.capturedEstimates.count == 3)
         #expect(state.estimate == consensus)
-        #expect(consensus.comparisonAngleCount == 2)
-        #expect(consensus.comparisonAgreementCount == 2)
+        #expect(consensus.comparisonAngleCount == 3)
+        #expect(consensus.comparisonAgreementCount == 3)
     }
 
     @Test @MainActor
@@ -492,11 +559,20 @@ struct ScannerCapturePolicyTests {
                 position: SIMD3<Float>(1, 0, 0)
             )
         )
+        state.receiveMeasurement(
+            angleCapture(
+                length: 0.61,
+                width: 0.41,
+                height: 0.51,
+                position: SIMD3<Float>(0, 0.21, -1)
+            )
+        )
 
         guard case .accepted(let consensus) = state.measurementProgress else {
             Issue.record("expected accepted scanner consensus")
             return
         }
+        #expect(state.capturedEstimates.count == 3)
         #expect(state.estimate == consensus)
         let review = ScannerCapturePolicy.reviewState(
             phase: state.phase,
@@ -526,7 +602,7 @@ struct ScannerCapturePolicyTests {
                 length: 0.70,
                 width: 0.50,
                 height: 0.60,
-                position: SIMD3<Float>(0, 0, -1)
+                position: SIMD3<Float>(0, 0.21, -1)
             )
         )
         #expect(state.measurementProgress == .inconsistent(.dimensionsInconsistent))
@@ -582,10 +658,12 @@ struct ScannerCapturePolicyTests {
     }
 
     @Test
-    func usableCaptureCanSaveImmediatelyWhenEvidenceIsStrong() {
+    func acceptedConsensusCanSaveWhenEvidenceIsStrong() {
+        let consensus = estimate(confidence: .high)
         let state = ScannerCapturePolicy.reviewState(
             phase: .measured,
-            estimate: estimate(confidence: .high)
+            estimate: consensus,
+            measurementProgress: .accepted(consensus)
         )
 
         #expect(state == .accepted)
@@ -593,21 +671,23 @@ struct ScannerCapturePolicyTests {
     }
 
     @Test
-    func approximateSinglePhotoEstimateRemainsSaveable() {
+    func awaitingFirstAngleWithStaleEstimateCannotSave() {
         let state = ScannerCapturePolicy.reviewState(
             phase: .measured,
-            estimate: estimate(confidence: .medium, frameCount: 1)
+            estimate: estimate(confidence: .medium, frameCount: 1),
+            measurementProgress: .awaitingFirstAngle
         )
 
-        #expect(state == .accepted)
-        #expect(state.canSave)
+        #expect(state == .retryRequired(ScannerGuidanceCopy.missingEstimateRetry))
+        #expect(!state.canSave)
     }
 
     @Test
     func measuredPhaseWithoutEstimateRequiresRetry() {
         let state = ScannerCapturePolicy.reviewState(
             phase: .measured,
-            estimate: nil
+            estimate: nil,
+            measurementProgress: .awaitingFirstAngle
         )
 
         #expect(
