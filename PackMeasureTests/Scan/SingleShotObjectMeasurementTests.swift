@@ -90,6 +90,29 @@ struct SingleShotObjectMeasurementTests {
     }
 
     @Test
+    func diagnosticPreservesExactEndpointCoverageFailures() {
+        let horizontal = SingleShotCaptureFailure.photo(
+            .insufficientHorizontalDepthEndpointCoverage(actual: 0.24, minimum: 0.50)
+        )
+        let vertical = SingleShotCaptureFailure.photo(
+            .insufficientVerticalDepthEndpointCoverage(actual: 0.31, minimum: 0.50)
+        )
+
+        #expect(horizontal.retryCategory == .depth)
+        #expect(horizontal.diagnosticCode == "D05")
+        #expect(
+            horizontal.diagnosticDescription
+                == "insufficient_horizontal_depth_endpoint_coverage,actual=0.240000,minimum=0.500000"
+        )
+        #expect(vertical.retryCategory == .depth)
+        #expect(vertical.diagnosticCode == "D06")
+        #expect(
+            vertical.diagnosticDescription
+                == "insufficient_vertical_depth_endpoint_coverage,actual=0.310000,minimum=0.500000"
+        )
+    }
+
+    @Test
     func everyPhotoMeasurementErrorHasAStableDiagnosticCategoryAndCode() {
         let cases: [(PhotoObjectMeasurementError, ScannerPhotoRetryCategory, String)] = [
             (.noForegroundInstance, .isolation, "F01"),
@@ -102,6 +125,8 @@ struct SingleShotObjectMeasurementTests {
             (.insufficientDepthCoverage(actual: 0.42, minimum: 0.6), .depth, "D02"),
             (.insufficientHorizontalDepthSupport(actual: 0.51, minimum: 0.65), .depth, "D03"),
             (.insufficientVerticalDepthSupport(actual: 0.49, minimum: 0.65), .depth, "D04"),
+            (.insufficientHorizontalDepthEndpointCoverage(actual: 0.24, minimum: 0.5), .depth, "D05"),
+            (.insufficientVerticalDepthEndpointCoverage(actual: 0.31, minimum: 0.5), .depth, "D06"),
             (.invalidLabelMaskDimensions, .processing, "P01"),
             (.invalidDepthMaskDimensions, .processing, "P02"),
             (.invalidPolicy, .processing, "P03"),
@@ -199,6 +224,8 @@ struct SingleShotObjectMeasurementTests {
             .photo(.insufficientDepthCoverage(actual: 0.40, minimum: 0.60)),
             .photo(.insufficientHorizontalDepthSupport(actual: 0.50, minimum: 0.65)),
             .photo(.insufficientVerticalDepthSupport(actual: 0.50, minimum: 0.65)),
+            .photo(.insufficientHorizontalDepthEndpointCoverage(actual: 0.24, minimum: 0.50)),
+            .photo(.insufficientVerticalDepthEndpointCoverage(actual: 0.31, minimum: 0.50)),
             .photo(.invalidLabelMaskDimensions),
         ]
 

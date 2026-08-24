@@ -217,6 +217,11 @@ struct ScannerViewRequestTracker: Equatable, Sendable {
     private(set) var lastPreviewRequestID = 0
     private(set) var lastCaptureRequestID = 0
 
+    init(previewRequestID: Int = 0, captureRequestID: Int = 0) {
+        lastPreviewRequestID = previewRequestID
+        lastCaptureRequestID = captureRequestID
+    }
+
     mutating func commands(
         previewRequestID: Int,
         captureRequestID: Int
@@ -231,6 +236,33 @@ struct ScannerViewRequestTracker: Equatable, Sendable {
             commands.append(.startCapture)
         }
         return commands
+    }
+}
+
+enum ScannerPreviewReadinessPolicy {
+    static func isFrameFresh(
+        timestamp: TimeInterval,
+        after baselineTimestamp: TimeInterval?
+    ) -> Bool {
+        guard timestamp.isFinite else { return false }
+        guard let baselineTimestamp else { return true }
+        return baselineTimestamp.isFinite && timestamp > baselineTimestamp
+    }
+
+    static func isReady(
+        trackingIsNormal: Bool,
+        hasDepth: Bool,
+        viewportSize: SIMD2<Float>?
+    ) -> Bool {
+        guard trackingIsNormal,
+              hasDepth,
+              let viewportSize else {
+            return false
+        }
+        return viewportSize.x.isFinite
+            && viewportSize.y.isFinite
+            && viewportSize.x > 0
+            && viewportSize.y > 0
     }
 }
 
@@ -304,6 +336,8 @@ struct ScannerSessionEventGate: Equatable, Sendable {
 
 @MainActor
 final class MeasurementPreviewARView: ARView {
+    var viewportDidLayout: ((SIMD2<Float>) -> Void)?
+
     var objectOverlay: MeasurementObjectOverlay? {
         didSet {
             guard oldValue != objectOverlay else { return }
@@ -330,6 +364,10 @@ final class MeasurementPreviewARView: ARView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
+        let viewportSize = SIMD2<Float>(Float(bounds.width), Float(bounds.height))
+        if viewportSize.x > 0, viewportSize.y > 0 {
+            viewportDidLayout?(viewportSize)
+        }
         renderObjectOutline()
     }
 
@@ -423,6 +461,11 @@ struct MeasurementARView: UIViewRepresentable {
     func makeCoordinator() -> Coordinator {
         let coordinator = Coordinator()
         coordinator.scannerState = scannerState
+        coordinator.baselineRequests(
+            previewRequestID: scannerState.previewRequestID,
+            captureRequestID: scannerState.captureRequestID,
+            cameraZoomRequestID: scannerState.cameraZoomRequestID
+        )
         return coordinator
     }
 
@@ -581,10 +624,6 @@ struct MeasurementARView: UIViewRepresentable {
         private static let peripheralSampleTarget = 1_200
         private static let edgeMarginPixels = 2
         private static let protectedPreviewInsetFraction: Float = 0.02
-        private static let resultPreviewViewportSize = SIMD2<Float>(
-            Float(ScannerPreviewLayout.resultAspectRatio),
-            1
-        )
         private static let minimumTargetElevationForFloorFiltering: Float = 0.08
 
         private let processingQueue = DispatchQueue(
@@ -603,6 +642,10 @@ struct MeasurementARView: UIViewRepresentable {
         private let lifecycleLock = NSLock()
         private var lifecycleGeneration = 0
         private var lifecycleIsAttached = false
+        private var previewRunGeneration = 0
+        private var previewRunMinimumFrameTimestamp: TimeInterval?
+        private let previewViewportLock = NSLock()
+        private var previewViewportSize: SIMD2<Float>?
 
         // Accessed only on processingQueue.
         private var capture: CaptureAccumulator?
@@ -613,8 +656,9 @@ struct MeasurementARView: UIViewRepresentable {
         private var confirmedCameraNormalizedFocalLengths: [ScannerCameraZoom: Double] = [:]
         private var didPublishInitialCameraZoom = false
         private var sessionEventSequence = 0
+        private var previewReadinessNeeded = true
 
-        @MainActor private weak var arView: ARView?
+        @MainActor private weak var arView: MeasurementPreviewARView?
         @MainActor private var depthSupported = false
         @MainActor private var previewLifecycle = ScannerPreviewLifecycle()
         @MainActor private var sessionConfiguration: ARWorldTrackingConfiguration?
@@ -622,13 +666,30 @@ struct MeasurementARView: UIViewRepresentable {
         @MainActor private var requestTracker = ScannerViewRequestTracker()
         @MainActor private var lastCameraZoomRequestID = 0
         @MainActor private var isAttached = false
+        @MainActor private var latestPreviewViewportSize: SIMD2<Float>?
         @MainActor weak var scannerState: ScannerSheetView.ScannerStateModel?
 
         @MainActor
-        func attach(to view: ARView) {
+        func baselineRequests(
+            previewRequestID: Int,
+            captureRequestID: Int,
+            cameraZoomRequestID: Int
+        ) {
+            requestTracker = ScannerViewRequestTracker(
+                previewRequestID: previewRequestID,
+                captureRequestID: captureRequestID
+            )
+            lastCameraZoomRequestID = cameraZoomRequestID
+        }
+
+        @MainActor
+        func attach(to view: MeasurementPreviewARView) {
             beginLifecycle()
             isAttached = true
             arView = view
+            view.viewportDidLayout = { [weak self] viewportSize in
+                self?.previewDidLayout(viewportSize)
+            }
             view.automaticallyConfigureSession = false
             view.session.delegate = self
             view.session.delegateQueue = processingQueue
@@ -639,14 +700,49 @@ struct MeasurementARView: UIViewRepresentable {
         func stop() {
             endLifecycle()
             isAttached = false
+            arView?.viewportDidLayout = nil
             arView?.session.pause()
             arView?.session.delegate = nil
             processingQueue.async { [weak self] in
                 guard let self, activeLifecycleGeneration() == nil else { return }
                 capture = nil
                 pendingCameraZoom = nil
+                previewReadinessNeeded = false
             }
+            setCurrentPreviewViewportSize(nil)
+            latestPreviewViewportSize = nil
             arView = nil
+        }
+
+        @MainActor
+        private func previewDidLayout(_ viewportSize: SIMD2<Float>) {
+            guard viewportSize.x.isFinite,
+                  viewportSize.y.isFinite,
+                  viewportSize.x > 0,
+                  viewportSize.y > 0 else {
+                return
+            }
+            setCurrentPreviewViewportSize(viewportSize)
+            latestPreviewViewportSize = viewportSize
+            markPreviewNeedsReadiness()
+        }
+
+        private func setCurrentPreviewViewportSize(_ viewportSize: SIMD2<Float>?) {
+            previewViewportLock.lock()
+            self.previewViewportSize = viewportSize
+            previewViewportLock.unlock()
+        }
+
+        private func currentPreviewViewportSize() -> SIMD2<Float>? {
+            previewViewportLock.lock()
+            defer { previewViewportLock.unlock() }
+            return previewViewportSize
+        }
+
+        private func markPreviewNeedsReadiness() {
+            processingQueue.async { [weak self] in
+                self?.previewReadinessNeeded = true
+            }
         }
 
         private func beginLifecycle() {
@@ -673,6 +769,46 @@ struct MeasurementARView: UIViewRepresentable {
             lifecycleLock.lock()
             defer { lifecycleLock.unlock() }
             return lifecycleIsAttached && lifecycleGeneration == generation
+        }
+
+        private struct PreviewRunToken: Equatable, Sendable {
+            let lifecycleGeneration: Int
+            let previewRunGeneration: Int
+            let minimumFrameTimestamp: TimeInterval?
+        }
+
+        private func beginPreviewRun(after frameTimestamp: TimeInterval?) -> PreviewRunToken? {
+            lifecycleLock.lock()
+            defer { lifecycleLock.unlock() }
+            guard lifecycleIsAttached else { return nil }
+            previewRunGeneration += 1
+            previewRunMinimumFrameTimestamp = frameTimestamp?.isFinite == true
+                ? frameTimestamp
+                : nil
+            return PreviewRunToken(
+                lifecycleGeneration: lifecycleGeneration,
+                previewRunGeneration: previewRunGeneration,
+                minimumFrameTimestamp: previewRunMinimumFrameTimestamp
+            )
+        }
+
+        private func activePreviewRunToken() -> PreviewRunToken? {
+            lifecycleLock.lock()
+            defer { lifecycleLock.unlock() }
+            guard lifecycleIsAttached else { return nil }
+            return PreviewRunToken(
+                lifecycleGeneration: lifecycleGeneration,
+                previewRunGeneration: previewRunGeneration,
+                minimumFrameTimestamp: previewRunMinimumFrameTimestamp
+            )
+        }
+
+        private func isPreviewRunActive(_ token: PreviewRunToken) -> Bool {
+            lifecycleLock.lock()
+            defer { lifecycleLock.unlock() }
+            return lifecycleIsAttached
+                && lifecycleGeneration == token.lifecycleGeneration
+                && previewRunGeneration == token.previewRunGeneration
         }
 
         @MainActor
@@ -879,14 +1015,21 @@ struct MeasurementARView: UIViewRepresentable {
             }
 
             if previewLifecycle.scanRequested() == .resume {
+                markPreviewNeedsReadiness()
+                _ = beginPreviewRun(after: arView?.session.currentFrame?.timestamp)
                 arView?.session.run(sessionConfiguration)
                 _ = reapplyCameraZoomAfterSessionRun()
+            } else {
+                markPreviewNeedsReadiness()
             }
-            scannerState?.phase = .ready
         }
 
         @MainActor
         func startCapture() {
+            guard let state = scannerState,
+                  case .scanning = state.phase else {
+                return
+            }
             guard depthSupported else {
                 scannerState?.phase = .unsupported(
                     "LiDAR scene depth is not available on this device."
@@ -896,34 +1039,44 @@ struct MeasurementARView: UIViewRepresentable {
 
             if previewLifecycle.scanRequested() == .resume,
                let sessionConfiguration {
+                markPreviewNeedsReadiness()
+                _ = beginPreviewRun(after: arView?.session.currentFrame?.timestamp)
                 arView?.session.run(sessionConfiguration)
-                if reapplyCameraZoomAfterSessionRun() {
-                    scannerState?.phase = .ready
-                    return
-                }
+                _ = reapplyCameraZoomAfterSessionRun()
+                state.phase = .checkingSupport
+                return
             }
 
             let requestID = requestTracker.lastCaptureRequestID
             let measurementSeriesID = scannerState?.measurementSeriesID ?? 0
-            guard let arView else {
-                scannerState?.phase = .failed(
-                    "The camera preview is not ready. Try the photo again."
-                )
+            guard let previewViewportSize = latestPreviewViewportSize else {
+                state.phase = .checkingSupport
+                markPreviewNeedsReadiness()
                 return
             }
-            let previewViewportSize = SIMD2<Float>(
-                Float(arView.bounds.width),
-                Float(arView.bounds.height)
+
+            beginCapture(
+                requestID: requestID,
+                measurementSeriesID: measurementSeriesID,
+                previewViewportSize: previewViewportSize
             )
-            guard previewViewportSize.x > 0, previewViewportSize.y > 0 else {
-                scannerState?.phase = .failed(
-                    "The camera preview is not ready. Try the photo again."
-                )
+        }
+
+        @MainActor
+        private func beginCapture(
+            requestID: Int,
+            measurementSeriesID: Int,
+            previewViewportSize: SIMD2<Float>
+        ) {
+            guard let state = scannerState,
+                  case .scanning = state.phase,
+                  state.captureRequestID == requestID,
+                  state.measurementSeriesID == measurementSeriesID else {
                 return
             }
             let now = CACurrentMediaTime()
-            scannerState?.estimate = nil
-            scannerState?.phase = .scanning(progress: 0)
+            state.estimate = nil
+            state.phase = .scanning(progress: 0)
 
             processingQueue.async { [weak self] in
                 self?.capture = CaptureAccumulator(
@@ -962,10 +1115,14 @@ struct MeasurementARView: UIViewRepresentable {
             if depthSupported {
                 scannerState?.beginCameraZoomAvailabilityDiscovery()
             }
-            arView?.session.run(configuration)
             scannerState?.phase = depthSupported
-                ? .ready
+                ? .checkingSupport
                 : .unsupported("This app needs a LiDAR-capable iPhone or iPad.")
+            if depthSupported {
+                markPreviewNeedsReadiness()
+            }
+            _ = beginPreviewRun(after: arView?.session.currentFrame?.timestamp)
+            arView?.session.run(configuration)
             if depthSupported {
                 _ = reapplyCameraZoomAfterSessionRun()
             }
@@ -981,6 +1138,7 @@ struct MeasurementARView: UIViewRepresentable {
                 with: frame,
                 frameSequence: cameraFrameSequence
             )
+            publishPreviewReadyIfPossible(with: frame)
 
             guard var activeCapture = capture else { return }
             guard case .normal = frame.camera.trackingState else {
@@ -1018,22 +1176,26 @@ struct MeasurementARView: UIViewRepresentable {
             publishProgress(0.5, requestID: activeCapture.requestID)
             // Freeze the exact RGB/depth pair being measured before Vision runs.
             session.pause()
+            // The action bar can resize the live preview after the tap. Measure
+            // and render against the viewport visible for this settled frame,
+            // not the dimensions cached before SwiftUI finished that relayout.
+            let settledPreviewViewportSize = currentPreviewViewportSize()
+                ?? activeCapture.previewViewportSize
 
             switch sampleSingleShotFrame(from: frame) {
             case .accepted(let points, let diagnostics, let outline, let route):
                 let objectOverlay = outline.flatMap {
-                    measurementObjectOverlay(from: $0, frame: frame)
+                    measurementObjectOverlay(
+                        from: $0,
+                        frame: frame,
+                        previewViewportSize: settledPreviewViewportSize
+                    )
                 }
                 if let objectOverlay,
-                   ![
-                       activeCapture.previewViewportSize,
-                       Self.resultPreviewViewportSize,
-                   ].allSatisfy({ viewportSize in
-                       objectOverlay.isFullyVisible(
-                           in: viewportSize,
-                           protectedInsetFraction: Self.protectedPreviewInsetFraction
-                       )
-                   }) {
+                   !objectOverlay.isFullyVisible(
+                       in: settledPreviewViewportSize,
+                       protectedInsetFraction: Self.protectedPreviewInsetFraction
+                   ) {
                     let photoFailure = SingleShotCaptureFailure.photo(
                         .maskTouchesImageEdge
                     )
@@ -1744,7 +1906,8 @@ struct MeasurementARView: UIViewRepresentable {
         /// from cropping; the ARView applies its current aspect-fill crop later.
         private func measurementObjectOverlay(
             from outline: MeasurementObjectOutline,
-            frame: ARFrame
+            frame: ARFrame,
+            previewViewportSize: SIMD2<Float>
         ) -> MeasurementObjectOverlay? {
             let imageResolution = frame.camera.imageResolution
             let orientedSize = CGSize(
@@ -1780,9 +1943,60 @@ struct MeasurementARView: UIViewRepresentable {
                     Float(orientedSize.width),
                     Float(orientedSize.height)
                 ),
-                outline: displayOutline
+                outline: displayOutline,
+                capturedPreviewAspectRatio: previewViewportSize.x / previewViewportSize.y
             )
             return overlay.isRenderable ? overlay : nil
+        }
+
+        private func publishPreviewReadyIfPossible(with frame: ARFrame) {
+            guard previewReadinessNeeded,
+                  let previewRunToken = activePreviewRunToken() else {
+                return
+            }
+            guard ScannerPreviewReadinessPolicy.isFrameFresh(
+                timestamp: frame.timestamp,
+                after: previewRunToken.minimumFrameTimestamp
+            ) else {
+                return
+            }
+            let trackingIsNormal: Bool
+            if case .normal = frame.camera.trackingState {
+                trackingIsNormal = true
+            } else {
+                trackingIsNormal = false
+            }
+            let hasDepth = frame.smoothedSceneDepth != nil || frame.sceneDepth != nil
+            guard trackingIsNormal, hasDepth else { return }
+
+            previewReadinessNeeded = false
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                guard isPreviewRunActive(previewRunToken),
+                      isAttached,
+                      depthSupported,
+                      let state = scannerState,
+                      let arView else {
+                    markPreviewNeedsReadiness()
+                    return
+                }
+                let viewportSize = SIMD2<Float>(
+                    Float(arView.bounds.width),
+                    Float(arView.bounds.height)
+                )
+                guard
+                      ScannerPreviewReadinessPolicy.isReady(
+                          trackingIsNormal: trackingIsNormal,
+                          hasDepth: hasDepth,
+                          viewportSize: viewportSize
+                ) else {
+                    markPreviewNeedsReadiness()
+                    return
+                }
+                setCurrentPreviewViewportSize(viewportSize)
+                latestPreviewViewportSize = viewportSize
+                _ = state.previewBecameReady()
+            }
         }
 
         private func frameSample(
@@ -2404,10 +2618,12 @@ struct MeasurementARView: UIViewRepresentable {
                     return
                 }
                 _ = previewLifecycle.scanRequested()
-                arView?.session.run(sessionConfiguration)
                 state.resetMeasurementSeries()
                 state.estimate = nil
-                state.phase = .ready
+                state.phase = .checkingSupport
+                markPreviewNeedsReadiness()
+                _ = beginPreviewRun(after: arView?.session.currentFrame?.timestamp)
+                arView?.session.run(sessionConfiguration)
                 _ = reapplyCameraZoomAfterSessionRun()
             }
         }

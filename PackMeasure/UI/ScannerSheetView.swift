@@ -1,10 +1,42 @@
 import SwiftUI
 
-enum ScannerPreviewLayout {
-    /// Keeps the paused camera result stable while result forms appear below it.
-    /// The live aiming view can remain taller, but a saved outline must also fit
-    /// this canonical result viewport without being cropped by aspect fill.
-    static let resultAspectRatio: CGFloat = 6.0 / 5.0
+/// Keeps the AR representable at one stable SwiftUI identity while allowing a
+/// captured result to use the exact viewport aspect ratio from its live frame.
+/// The live preview retains its flexible 260...420 point height instead of
+/// passing a nil aspect ratio, which can collapse a UIViewRepresentable.
+private struct ScannerPreviewSizingLayout: Layout {
+    let capturedAspectRatio: CGFloat?
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) -> CGSize {
+        guard let subview = subviews.first else { return .zero }
+        guard let capturedAspectRatio,
+              capturedAspectRatio.isFinite,
+              capturedAspectRatio > 0,
+              let width = proposal.width,
+              width.isFinite,
+              width > 0 else {
+            return subview.sizeThatFits(proposal)
+        }
+        return CGSize(width: width, height: width / capturedAspectRatio)
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) {
+        guard let subview = subviews.first else { return }
+        subview.place(
+            at: CGPoint(x: bounds.midX, y: bounds.midY),
+            anchor: .center,
+            proposal: ProposedViewSize(width: bounds.width, height: bounds.height)
+        )
+    }
 }
 
 enum ScannerCameraZoomPresentation: Equatable, Sendable {
@@ -198,6 +230,19 @@ struct ScannerSheetView: View {
             previewRequestID += 1
         }
 
+        /// ARKit, not `session.run`, decides when the preview can safely accept
+        /// a photo. A normal-tracking frame with depth and a laid-out viewport
+        /// calls this after initial startup and every preview resume.
+        @discardableResult
+        func previewBecameReady() -> Bool {
+            guard phase == .checkingSupport || isPreparingForAiming else {
+                return false
+            }
+            isPreparingForAiming = false
+            phase = .ready
+            return true
+        }
+
         func startMeasurement() {
             guard canStartMeasurement else { return }
             estimate = nil
@@ -234,6 +279,22 @@ struct ScannerSheetView: View {
                             Text(ScannerResultCopy.qualitySummary(for: estimate))
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
+                        }
+
+                        if scannerState.capturedEstimates.count > 1 {
+                            Section(ScannerResultCopy.capturedAnglesSectionTitle) {
+                                ForEach(
+                                    Array(scannerState.capturedEstimates.enumerated()),
+                                    id: \.offset
+                                ) { index, capturedEstimate in
+                                    HStack {
+                                        Text("Angle \(index + 1)")
+                                        Spacer()
+                                        Text(dimensionString(capturedEstimate))
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                            }
                         }
 
                         if case let .retryRequired(message) = reviewState {
@@ -310,17 +371,23 @@ struct ScannerSheetView: View {
         }
     }
 
-    @ViewBuilder
     private var cameraPreview: some View {
-        if scannerState.objectOverlay == nil {
-            cameraPreviewSurface
-                .frame(maxWidth: .infinity)
-                .frame(minHeight: 260, idealHeight: 360, maxHeight: 420)
-        } else {
-            cameraPreviewSurface
-                .frame(maxWidth: .infinity)
-                .aspectRatio(ScannerPreviewLayout.resultAspectRatio, contentMode: .fit)
+        let isReviewingCapture = scannerState.objectOverlay != nil
+        let capturedAspectRatio = scannerState.objectOverlay.map {
+            CGFloat($0.capturedPreviewAspectRatio)
         }
+
+        return ScannerPreviewSizingLayout(
+            capturedAspectRatio: capturedAspectRatio
+        ) {
+            cameraPreviewSurface
+        }
+            .frame(maxWidth: .infinity)
+            .frame(
+                minHeight: isReviewingCapture ? nil : 260,
+                idealHeight: isReviewingCapture ? nil : 360,
+                maxHeight: isReviewingCapture ? nil : 420
+            )
     }
 
     private var cameraPreviewSurface: some View {
@@ -691,7 +758,7 @@ enum ScannerCapturePolicy {
     static func reviewState(
         phase: ScannerPhase,
         estimate: MeasurementEstimate?,
-        measurementProgress: MultiAngleMeasurementProgress = .awaitingFirstAngle
+        measurementProgress: MultiAngleMeasurementProgress
     ) -> ScannerCaptureReviewState {
         switch phase {
         case .checkingSupport, .ready:
@@ -715,7 +782,9 @@ enum ScannerCapturePolicy {
                 return .retryRequired(
                     ScannerGuidanceCopy.consensusFailureMessage(for: failure)
                 )
-            case .awaitingFirstAngle, .accepted:
+            case .awaitingFirstAngle:
+                return .retryRequired(ScannerGuidanceCopy.missingEstimateRetry)
+            case .accepted:
                 break
             }
             guard let estimate else {
@@ -737,7 +806,7 @@ enum ScannerGuidanceCopy {
         "Keep the whole object visible, then take a photo."
 
     static let additionalAnglePreview =
-        "Keep the item still; move left or right for another angle"
+        "Keep the item still; move around it and change camera height"
 
     static let lowConfidenceRetry =
         "We couldn't get clear dimensions from this photo. Keep one object fully visible and try again."
@@ -753,8 +822,12 @@ enum ScannerGuidanceCopy {
             "First angle captured. Keep the item still, move around it, and take a second photo."
         case .viewpointTooSimilar:
             "That view was too similar. Move farther left or right without moving the item."
+        case .thirdAngleRequired:
+            "Good agreement so far. Take one final photo from another side with the phone higher or lower."
+        case .elevationTooSimilar:
+            "Change camera height for the final photo. Raise or lower the phone and move around the item."
         case .dimensionsDisagree:
-            "The first two angles differed. Take one final photo from another side."
+            "The first two angles differed. Take one final photo from another side with the phone higher or lower."
         }
     }
 
@@ -835,6 +908,10 @@ enum ScannerPhotoFailureCopy {
             "LiDAR covered \(percent(actual, rounded: .down))% of the isolated object's horizontal span in the photo; this build needs \(percent(minimum, rounded: .up))%. Hold steady at a three-quarter angle and retake it."
         case let .insufficientVerticalDepthSupport(actual, minimum):
             "LiDAR covered \(percent(actual, rounded: .down))% of the isolated object's vertical span in the photo; this build needs \(percent(minimum, rounded: .up))%. Hold steady at a three-quarter angle and retake it."
+        case let .insufficientHorizontalDepthEndpointCoverage(actual, minimum):
+            "LiDAR depth covered \(percent(actual, rounded: .down))% of the least-covered horizontal endpoint band in the photo; this build needs \(percent(minimum, rounded: .up))% at both horizontal ends. Hold steady at a three-quarter angle and retake it."
+        case let .insufficientVerticalDepthEndpointCoverage(actual, minimum):
+            "LiDAR depth covered \(percent(actual, rounded: .down))% of the least-covered vertical endpoint band in the photo; this build needs \(percent(minimum, rounded: .up))% at both vertical ends. Hold steady at a three-quarter angle and retake it."
         case .noForegroundInstance:
             "Foreground detection didn't recognize this object. Try a lower three-quarter angle or place it against a plain wall."
         case .invalidLabelMaskDimensions,

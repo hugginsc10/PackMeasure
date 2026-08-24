@@ -20,6 +20,8 @@ enum PhotoObjectMeasurementError: Error, Equatable, Sendable {
     case insufficientDepthCoverage(actual: Float, minimum: Float)
     case insufficientHorizontalDepthSupport(actual: Float, minimum: Float)
     case insufficientVerticalDepthSupport(actual: Float, minimum: Float)
+    case insufficientHorizontalDepthEndpointCoverage(actual: Float, minimum: Float)
+    case insufficientVerticalDepthEndpointCoverage(actual: Float, minimum: Float)
     case invalidCameraCalibration
     case invalidWorldPoint
 }
@@ -122,6 +124,35 @@ struct MeasurementObjectOutline: Equatable, Sendable {
 
     var isEmpty: Bool { loops.isEmpty }
 
+    /// Returns the display silhouette of the selected measurement region.
+    ///
+    /// Marching squares intentionally retains every boundary so the measurement
+    /// outline remains an exact, auditable description of its support mask. For
+    /// presentation, however, an interior hole should not receive the same cyan
+    /// stroke as the object's exterior. Even-odd nesting removes only hole
+    /// boundaries while preserving each original exterior loop point-for-point,
+    /// including concavities and disconnected exterior islands.
+    var exteriorSilhouette: MeasurementObjectOutline {
+        guard loops.count > 1 else { return self }
+
+        let exteriorLoops: [[SIMD2<Float>]] = loops.indices.compactMap { index in
+            let loop = loops[index]
+            guard let probe = loop.first else { return nil }
+            let nestingDepth = loops.enumerated().reduce(into: 0) { depth, candidate in
+                guard candidate.offset != index else { return }
+                if Self.contains(probe, in: candidate.element) {
+                    depth += 1
+                }
+            }
+            return nestingDepth.isMultiple(of: 2) ? loop : nil
+        }
+
+        // Valid mask-derived outlines always have at least one exterior. Keep
+        // malformed manually supplied outlines visible rather than hiding them.
+        guard !exteriorLoops.isEmpty else { return self }
+        return MeasurementObjectOutline(loops: exteriorLoops)
+    }
+
     init(loops: [[SIMD2<Float>]]) {
         self.loops = loops.filter { $0.count >= 3 }
     }
@@ -162,6 +193,37 @@ struct MeasurementObjectOutline: Equatable, Sendable {
         _ transform: (SIMD2<Float>) -> SIMD2<Float>
     ) -> MeasurementObjectOutline {
         MeasurementObjectOutline(loops: loops.map { $0.map(transform) })
+    }
+
+    /// Even-odd polygon containment for nonintersecting marching-squares loops.
+    /// A vertex from a nested loop is strictly inside its parent boundary, so it
+    /// is a stable probe without inventing a centroid that may leave a concavity.
+    private static func contains(
+        _ point: SIMD2<Float>,
+        in polygon: [SIMD2<Float>]
+    ) -> Bool {
+        guard polygon.count >= 3,
+              point.x.isFinite,
+              point.y.isFinite,
+              polygon.allSatisfy({ $0.x.isFinite && $0.y.isFinite }) else {
+            return false
+        }
+
+        var isInside = false
+        var previous = polygon[polygon.count - 1]
+        for current in polygon {
+            let crossesRay = (current.y > point.y) != (previous.y > point.y)
+            if crossesRay {
+                let intersectionX = current.x
+                    + (point.y - current.y) * (previous.x - current.x)
+                        / (previous.y - current.y)
+                if point.x < intersectionX {
+                    isInside.toggle()
+                }
+            }
+            previous = current
+        }
+        return isInside
     }
 
     private struct LatticePoint: Hashable {
@@ -287,12 +349,31 @@ struct MeasurementObjectOutline: Equatable, Sendable {
 struct MeasurementObjectOverlay: Equatable, Sendable {
     let displayOrientedImageSize: SIMD2<Float>
     let outline: MeasurementObjectOutline
+    /// The live camera viewport aspect ratio used when this exact frame was
+    /// captured. The paused result must preserve it so the visible image and
+    /// measured contour cannot acquire a new aspect-fill crop during review.
+    let capturedPreviewAspectRatio: Float
+
+    init(
+        displayOrientedImageSize: SIMD2<Float>,
+        outline: MeasurementObjectOutline,
+        capturedPreviewAspectRatio: Float? = nil
+    ) {
+        self.displayOrientedImageSize = displayOrientedImageSize
+        // The measured support retains all contour loops. Only the presentation
+        // overlay suppresses hole boundaries to communicate one exterior trace.
+        self.outline = outline.exteriorSilhouette
+        self.capturedPreviewAspectRatio = capturedPreviewAspectRatio
+            ?? displayOrientedImageSize.x / displayOrientedImageSize.y
+    }
 
     var isRenderable: Bool {
         displayOrientedImageSize.x.isFinite
             && displayOrientedImageSize.y.isFinite
             && displayOrientedImageSize.x > 0
             && displayOrientedImageSize.y > 0
+            && capturedPreviewAspectRatio.isFinite
+            && capturedPreviewAspectRatio > 0
             && !outline.isEmpty
             && outline.loops.flatMap { $0 }.allSatisfy { point in
                 point.x.isFinite && point.y.isFinite
@@ -777,8 +858,13 @@ struct PhotoObjectMeasurementPolicy: Equatable, Sendable {
     var maximumDepthMeters: Float = 6
     var minimumDepthSamples: Int = 48
     var minimumDepthCoverage: Float = 0.6
-    var minimumHorizontalDepthSupport: Float = 0.65
-    var minimumVerticalDepthSupport: Float = 0.65
+    var minimumHorizontalDepthSupport: Float = 0.85
+    var minimumVerticalDepthSupport: Float = 0.85
+    /// Fraction of each end of the appearance-mask bounds that must contain
+    /// meaningful depth. An extent check alone can be defeated by one isolated
+    /// depth pixel at either edge while the actual object endpoint is missing.
+    var depthEndpointBandFraction: Float = 0.15
+    var minimumDepthEndpointCoverage: Float = 0.5
 
     init(
         minimumMaskAreaFraction: Float = 0.03,
@@ -789,8 +875,10 @@ struct PhotoObjectMeasurementPolicy: Equatable, Sendable {
         maximumDepthMeters: Float = 6,
         minimumDepthSamples: Int = 48,
         minimumDepthCoverage: Float = 0.6,
-        minimumHorizontalDepthSupport: Float = 0.65,
-        minimumVerticalDepthSupport: Float = 0.65
+        minimumHorizontalDepthSupport: Float = 0.85,
+        minimumVerticalDepthSupport: Float = 0.85,
+        depthEndpointBandFraction: Float = 0.15,
+        minimumDepthEndpointCoverage: Float = 0.5
     ) {
         self.minimumMaskAreaFraction = minimumMaskAreaFraction
         self.maximumMaskAreaFraction = maximumMaskAreaFraction
@@ -802,6 +890,8 @@ struct PhotoObjectMeasurementPolicy: Equatable, Sendable {
         self.minimumDepthCoverage = minimumDepthCoverage
         self.minimumHorizontalDepthSupport = minimumHorizontalDepthSupport
         self.minimumVerticalDepthSupport = minimumVerticalDepthSupport
+        self.depthEndpointBandFraction = depthEndpointBandFraction
+        self.minimumDepthEndpointCoverage = minimumDepthEndpointCoverage
     }
 
     func validate() throws {
@@ -818,7 +908,11 @@ struct PhotoObjectMeasurementPolicy: Equatable, Sendable {
               minimumDepthSamples > 0,
               isUnitFraction(minimumDepthCoverage),
               isUnitFraction(minimumHorizontalDepthSupport),
-              isUnitFraction(minimumVerticalDepthSupport) else {
+              isUnitFraction(minimumVerticalDepthSupport),
+              depthEndpointBandFraction.isFinite,
+              depthEndpointBandFraction > 0,
+              depthEndpointBandFraction <= 0.5,
+              isUnitFraction(minimumDepthEndpointCoverage) else {
             throw PhotoObjectMeasurementError.invalidPolicy
         }
     }
@@ -835,6 +929,8 @@ struct PhotoDepthSupport: Equatable, Sendable {
     let coverage: Float
     let horizontalSupport: Float
     let verticalSupport: Float
+    let horizontalEndpointCoverage: Float
+    let verticalEndpointCoverage: Float
 }
 
 struct PhotoDepthSupportAnalyzer: Sendable {
@@ -904,17 +1000,61 @@ struct PhotoDepthSupportAnalyzer: Sendable {
             )
         }
 
+        // Bounding-box span alone is not sufficient completeness evidence: a
+        // handful of isolated depth pixels can make the span appear complete
+        // even when the surface near an endpoint is almost entirely absent.
+        // Require dense support in bands at both ends of both image axes so a
+        // single photo cannot silently shorten the measured object.
+        let supportedIndexSet = Set(supportedIndices)
+        let horizontalEndpointCoverage = endpointCoverage(
+            maskIndices: maskIndices,
+            supportedIndices: supportedIndexSet,
+            gridWidth: mask.width,
+            lowerBound: maskBounds.minX,
+            upperBound: maskBounds.maxX,
+            horizontalAxis: true
+        )
+        guard horizontalEndpointCoverage >= policy.minimumDepthEndpointCoverage else {
+            throw PhotoObjectMeasurementError.insufficientHorizontalDepthEndpointCoverage(
+                actual: horizontalEndpointCoverage,
+                minimum: policy.minimumDepthEndpointCoverage
+            )
+        }
+        let verticalEndpointCoverage = endpointCoverage(
+            maskIndices: maskIndices,
+            supportedIndices: supportedIndexSet,
+            gridWidth: mask.width,
+            lowerBound: maskBounds.minY,
+            upperBound: maskBounds.maxY,
+            horizontalAxis: false
+        )
+        guard verticalEndpointCoverage >= policy.minimumDepthEndpointCoverage else {
+            throw PhotoObjectMeasurementError.insufficientVerticalDepthEndpointCoverage(
+                actual: verticalEndpointCoverage,
+                minimum: policy.minimumDepthEndpointCoverage
+            )
+        }
+
         return PhotoDepthSupport(
             indices: supportedIndices,
             selectedMaskSampleCount: maskIndices.count,
             supportedSampleCount: supportedIndices.count,
             coverage: coverage,
             horizontalSupport: horizontalSupport,
-            verticalSupport: verticalSupport
+            verticalSupport: verticalSupport,
+            horizontalEndpointCoverage: horizontalEndpointCoverage,
+            verticalEndpointCoverage: verticalEndpointCoverage
         )
     }
 
-    private func bounds(for indices: [Int], width: Int) -> (width: Int, height: Int) {
+    private func bounds(for indices: [Int], width: Int) -> (
+        minX: Int,
+        minY: Int,
+        maxX: Int,
+        maxY: Int,
+        width: Int,
+        height: Int
+    ) {
         var minX = Int.max
         var minY = Int.max
         var maxX = Int.min
@@ -927,7 +1067,44 @@ struct PhotoDepthSupportAnalyzer: Sendable {
             maxX = max(maxX, x)
             maxY = max(maxY, y)
         }
-        return (maxX - minX + 1, maxY - minY + 1)
+        return (minX, minY, maxX, maxY, maxX - minX + 1, maxY - minY + 1)
+    }
+
+    private func endpointCoverage(
+        maskIndices: [Int],
+        supportedIndices: Set<Int>,
+        gridWidth: Int,
+        lowerBound: Int,
+        upperBound: Int,
+        horizontalAxis: Bool
+    ) -> Float {
+        let axisLength = upperBound - lowerBound + 1
+        let bandLength = max(
+            1,
+            Int(ceil(Float(axisLength) * policy.depthEndpointBandFraction))
+        )
+        let lowerBandEnd = lowerBound + bandLength - 1
+        let upperBandStart = upperBound - bandLength + 1
+        var lowerMaskCount = 0
+        var lowerSupportedCount = 0
+        var upperMaskCount = 0
+        var upperSupportedCount = 0
+
+        for index in maskIndices {
+            let coordinate = horizontalAxis ? index % gridWidth : index / gridWidth
+            if coordinate <= lowerBandEnd {
+                lowerMaskCount += 1
+                if supportedIndices.contains(index) { lowerSupportedCount += 1 }
+            }
+            if coordinate >= upperBandStart {
+                upperMaskCount += 1
+                if supportedIndices.contains(index) { upperSupportedCount += 1 }
+            }
+        }
+
+        let lowerCoverage = Float(lowerSupportedCount) / Float(max(1, lowerMaskCount))
+        let upperCoverage = Float(upperSupportedCount) / Float(max(1, upperMaskCount))
+        return min(lowerCoverage, upperCoverage)
     }
 }
 

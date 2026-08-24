@@ -152,6 +152,108 @@ final class PhotoObjectMeasurementTests: XCTestCase {
         XCTAssertTrue(ring.loops.flatMap { $0 }.allSatisfy(isFiniteAndNormalized))
     }
 
+    func testObjectOverlaySuppressesRingHoleButMeasurementOutlineRetainsIt() throws {
+        let ringIndices = (0..<25).filter { index in
+            let x = index % 5
+            let y = index / 5
+            return x == 0 || x == 4 || y == 0 || y == 4
+        }
+        let measurementOutline = try XCTUnwrap(
+            MeasurementObjectOutline(width: 5, height: 5, selectedIndices: ringIndices)
+        )
+
+        let overlay = MeasurementObjectOverlay(
+            displayOrientedImageSize: SIMD2<Float>(5, 5),
+            outline: measurementOutline
+        )
+        let exteriorLoop = try XCTUnwrap(
+            measurementOutline.loops.max(by: { polygonArea($0) < polygonArea($1) })
+        )
+
+        XCTAssertEqual(measurementOutline.loops.count, 2)
+        XCTAssertEqual(overlay.outline.loops.count, 1)
+        XCTAssertEqual(overlay.outline.loops[0], exteriorLoop)
+    }
+
+    func testObjectOverlayPreservesDisconnectedExteriorIslands() throws {
+        let measurementOutline = try XCTUnwrap(
+            MeasurementObjectOutline(
+                width: 8,
+                height: 5,
+                selectedIndices: [9, 10, 17, 18, 13, 14, 21, 22]
+            )
+        )
+
+        let overlay = MeasurementObjectOverlay(
+            displayOrientedImageSize: SIMD2<Float>(8, 5),
+            outline: measurementOutline
+        )
+
+        XCTAssertEqual(measurementOutline.loops.count, 2)
+        XCTAssertEqual(overlay.outline, measurementOutline)
+    }
+
+    func testObjectOverlayPreservesConcaveExteriorPointForPoint() throws {
+        let measurementOutline = try XCTUnwrap(
+            MeasurementObjectOutline(
+                width: 4,
+                height: 4,
+                selectedIndices: [0, 4, 5]
+            )
+        )
+        let loop = try XCTUnwrap(measurementOutline.loops.first)
+        let xs = loop.map(\.x)
+        let ys = loop.map(\.y)
+        let minX = try XCTUnwrap(xs.min())
+        let maxX = try XCTUnwrap(xs.max())
+        let minY = try XCTUnwrap(ys.min())
+        let maxY = try XCTUnwrap(ys.max())
+        let boundingArea = (maxX - minX) * (maxY - minY)
+
+        let overlay = MeasurementObjectOverlay(
+            displayOrientedImageSize: SIMD2<Float>(4, 4),
+            outline: measurementOutline
+        )
+
+        XCTAssertEqual(overlay.outline, measurementOutline)
+        XCTAssertLessThan(polygonArea(overlay.outline.loops[0]), boundingArea * 0.9)
+    }
+
+    func testDisplaySilhouetteDoesNotChangeMeasurementSupport() throws {
+        let width = 9
+        let height = 9
+        let ringIndices = (0..<(width * height)).filter { index in
+            let x = index % width
+            let y = index / width
+            return ((2...6).contains(x) && (y == 2 || y == 6))
+                || ((2...6).contains(y) && (x == 2 || x == 6))
+        }
+        var labels = Array(repeating: UInt32.zero, count: width * height)
+        for index in ringIndices { labels[index] = 5 }
+        let result = try PhotoObjectMeasurement(policy: permissivePolicy).makePointCloud(
+            labelMask: try PhotoInstanceLabelMask(
+                width: width,
+                height: height,
+                labels: labels
+            ),
+            depthGrid: populatedDepthGrid(width: width, height: height),
+            calibration: calibration(imageWidth: width, imageHeight: height)
+        )
+        let measurementOutline = try XCTUnwrap(result.objectOutline)
+        let supportBeforeDisplay = result.depthSupport.indices
+
+        let overlay = MeasurementObjectOverlay(
+            displayOrientedImageSize: SIMD2<Float>(9, 9),
+            outline: measurementOutline
+        )
+
+        XCTAssertEqual(Set(supportBeforeDisplay), Set(ringIndices))
+        XCTAssertEqual(result.worldPoints.count, ringIndices.count)
+        XCTAssertEqual(result.depthSupport.indices, supportBeforeDisplay)
+        XCTAssertEqual(measurementOutline.loops.count, 2)
+        XCTAssertEqual(overlay.outline.loops.count, 1)
+    }
+
     func testPointCloudCarriesOutlineFromExactDepthSelection() throws {
         let labels = try lShapeMask(width: 12, height: 12)
         let result = try PhotoObjectMeasurement(policy: permissivePolicy).makePointCloud(
@@ -274,7 +376,7 @@ final class PhotoObjectMeasurementTests: XCTestCase {
         )
     }
 
-    func testObjectOverlayThatFitsLivePreviewCanFailCanonicalResultPreview() throws {
+    func testObjectOverlayPreservesCapturedPreviewAspectRatioForReview() throws {
         let outline = MeasurementObjectOutline(
             loops: [[
                 SIMD2<Float>(0.25, 0.2),
@@ -285,9 +387,11 @@ final class PhotoObjectMeasurementTests: XCTestCase {
         )
         let overlay = MeasurementObjectOverlay(
             displayOrientedImageSize: SIMD2<Float>(3, 4),
-            outline: outline
+            outline: outline,
+            capturedPreviewAspectRatio: 0.75
         )
 
+        XCTAssertEqual(overlay.capturedPreviewAspectRatio, 0.75, accuracy: 0.0001)
         XCTAssertTrue(
             overlay.isFullyVisible(
                 in: SIMD2<Float>(300, 400),
@@ -295,16 +399,9 @@ final class PhotoObjectMeasurementTests: XCTestCase {
             ),
             "the outline is visibly inset in the tall live aiming preview"
         )
-        XCTAssertFalse(
-            overlay.isFullyVisible(
-                in: SIMD2<Float>(360, 300),
-                protectedInsetFraction: 0.02
-            ),
-            "the same outline would be cropped after the result preview becomes shorter"
-        )
     }
 
-    func testObjectOverlayWithResultMarginFitsBothPreviewLayouts() throws {
+    func testObjectOverlayDefaultsToDisplayImageAspectRatioForLegacyCallers() throws {
         let outline = MeasurementObjectOutline(
             loops: [[
                 SIMD2<Float>(0.25, 0.21),
@@ -318,14 +415,7 @@ final class PhotoObjectMeasurementTests: XCTestCase {
             outline: outline
         )
 
-        for viewport in [SIMD2<Float>(300, 400), SIMD2<Float>(360, 300)] {
-            XCTAssertTrue(
-                overlay.isFullyVisible(
-                    in: viewport,
-                    protectedInsetFraction: 0.02
-                )
-            )
-        }
+        XCTAssertEqual(overlay.capturedPreviewAspectRatio, 0.75, accuracy: 0.0001)
     }
 
     func testBuildsWorldPointCloudForBoxEllipseAndLShapeMasks() throws {
@@ -620,6 +710,119 @@ final class PhotoObjectMeasurementTests: XCTestCase {
         }
     }
 
+    func testRejectsHorizontalExtentSupportedOnlyByEndpointOutliers() throws {
+        let width = 14
+        let height = 12
+        let mask = try selectionMask(width: width, height: height, x: 2...11, y: 1...10)
+        var confidences = Array(repeating: UInt8(0), count: width * height)
+        for y in 1...10 {
+            for x in 4...9 {
+                confidences[y * width + x] = 2
+            }
+        }
+        confidences[1 * width + 2] = 2
+        confidences[10 * width + 11] = 2
+        let depthGrid = DepthGrid(
+            width: width,
+            height: height,
+            depths: Array(repeating: 1, count: width * height),
+            confidences: confidences
+        )
+        let policy = PhotoObjectMeasurementPolicy()
+
+        XCTAssertThrowsError(
+            try PhotoDepthSupportAnalyzer(policy: policy).analyze(
+                mask: mask,
+                depthGrid: depthGrid
+            )
+        ) { error in
+            guard case let .insufficientHorizontalDepthEndpointCoverage(actual, minimum) =
+                    error as? PhotoObjectMeasurementError else {
+                return XCTFail("unexpected error: \(error)")
+            }
+            XCTAssertEqual(actual, 0.05, accuracy: 0.0001)
+            XCTAssertEqual(minimum, 0.5, accuracy: 0.0001)
+        }
+    }
+
+    func testRejectsVerticalExtentSupportedOnlyByEndpointOutliers() throws {
+        let width = 14
+        let height = 12
+        let mask = try selectionMask(width: width, height: height, x: 2...11, y: 1...10)
+        var confidences = Array(repeating: UInt8(0), count: width * height)
+        for y in 3...8 {
+            for x in 2...11 {
+                confidences[y * width + x] = 2
+            }
+        }
+        confidences[1 * width + 2] = 2
+        confidences[10 * width + 11] = 2
+        let depthGrid = DepthGrid(
+            width: width,
+            height: height,
+            depths: Array(repeating: 1, count: width * height),
+            confidences: confidences
+        )
+        let policy = PhotoObjectMeasurementPolicy()
+
+        XCTAssertThrowsError(
+            try PhotoDepthSupportAnalyzer(policy: policy).analyze(
+                mask: mask,
+                depthGrid: depthGrid
+            )
+        ) { error in
+            guard case let .insufficientVerticalDepthEndpointCoverage(actual, minimum) =
+                    error as? PhotoObjectMeasurementError else {
+                return XCTFail("unexpected error: \(error)")
+            }
+            XCTAssertEqual(actual, 0.05, accuracy: 0.0001)
+            XCTAssertEqual(minimum, 0.5, accuracy: 0.0001)
+        }
+    }
+
+    func testAcceptsDepthWithDenseSupportAtAllFourEndpoints() throws {
+        let width = 14
+        let height = 12
+        let mask = try selectionMask(width: width, height: height, x: 2...11, y: 1...10)
+        var confidences = Array(repeating: UInt8(2), count: width * height)
+        for y in 4...7 {
+            for x in 5...8 {
+                confidences[y * width + x] = 0
+            }
+        }
+        let depthGrid = DepthGrid(
+            width: width,
+            height: height,
+            depths: Array(repeating: 1, count: width * height),
+            confidences: confidences
+        )
+        let policy = PhotoObjectMeasurementPolicy()
+
+        let support = try PhotoDepthSupportAnalyzer(policy: policy).analyze(
+            mask: mask,
+            depthGrid: depthGrid
+        )
+
+        XCTAssertEqual(support.horizontalSupport, 1, accuracy: 0.0001)
+        XCTAssertEqual(support.verticalSupport, 1, accuracy: 0.0001)
+        XCTAssertEqual(support.horizontalEndpointCoverage, 1, accuracy: 0.0001)
+        XCTAssertEqual(support.verticalEndpointCoverage, 1, accuracy: 0.0001)
+    }
+
+    func testRejectsInvalidDepthEndpointBandFractionPolicy() throws {
+        var policy = permissivePolicy
+        policy.depthEndpointBandFraction = 0
+
+        XCTAssertThrowsError(try policy.validate()) { error in
+            XCTAssertEqual(error as? PhotoObjectMeasurementError, .invalidPolicy)
+        }
+
+        policy.depthEndpointBandFraction = 0.51
+        XCTAssertThrowsError(try policy.validate()) { error in
+            XCTAssertEqual(error as? PhotoObjectMeasurementError, .invalidPolicy)
+        }
+    }
+
     func testRejectsMaskAndCalibrationWithDifferentAspectRatios() throws {
         let labels = try boxMask(width: 8, height: 4, x: 2...5, y: 1...2)
         let depthGrid = populatedDepthGrid(width: 4, height: 2)
@@ -688,7 +891,8 @@ final class PhotoObjectMeasurementTests: XCTestCase {
             minimumDepthSamples: 4,
             minimumDepthCoverage: 0.5,
             minimumHorizontalDepthSupport: 0.6,
-            minimumVerticalDepthSupport: 0.6
+            minimumVerticalDepthSupport: 0.6,
+            minimumDepthEndpointCoverage: 0
         )
     }
 
@@ -728,6 +932,21 @@ final class PhotoObjectMeasurementTests: XCTestCase {
             }
         }
         return try PhotoInstanceLabelMask(width: width, height: height, labels: labels)
+    }
+
+    private func selectionMask(
+        width: Int,
+        height: Int,
+        x: ClosedRange<Int>,
+        y: ClosedRange<Int>
+    ) throws -> PhotoDepthSelectionMask {
+        var selected = Array(repeating: false, count: width * height)
+        for row in y {
+            for column in x {
+                selected[row * width + column] = true
+            }
+        }
+        return try PhotoDepthSelectionMask(width: width, height: height, selected: selected)
     }
 
     private func ellipseMask(

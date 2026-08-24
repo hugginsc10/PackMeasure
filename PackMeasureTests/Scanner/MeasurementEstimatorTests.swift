@@ -41,6 +41,94 @@ struct MeasurementEstimatorTests {
     }
 
     @Test
+    func recreatedViewBaselinesExistingRequestsWithoutReplayingThem() {
+        var tracker = ScannerViewRequestTracker(
+            previewRequestID: 7,
+            captureRequestID: 11
+        )
+
+        #expect(
+            tracker.commands(previewRequestID: 7, captureRequestID: 11).isEmpty
+        )
+        #expect(
+            tracker.commands(previewRequestID: 8, captureRequestID: 11)
+                == [.resumePreview]
+        )
+        #expect(
+            tracker.commands(previewRequestID: 8, captureRequestID: 12)
+                == [.startCapture]
+        )
+    }
+
+    @Test
+    func previewReadinessRequiresTrackingDepthAndLaidOutViewport() {
+        let validViewport = SIMD2<Float>(320, 420)
+
+        #expect(
+            !ScannerPreviewReadinessPolicy.isReady(
+                trackingIsNormal: false,
+                hasDepth: true,
+                viewportSize: validViewport
+            )
+        )
+        #expect(
+            !ScannerPreviewReadinessPolicy.isReady(
+                trackingIsNormal: true,
+                hasDepth: false,
+                viewportSize: validViewport
+            )
+        )
+        #expect(
+            !ScannerPreviewReadinessPolicy.isReady(
+                trackingIsNormal: true,
+                hasDepth: true,
+                viewportSize: SIMD2<Float>(320, 0)
+            )
+        )
+        #expect(
+            ScannerPreviewReadinessPolicy.isReady(
+                trackingIsNormal: true,
+                hasDepth: true,
+                viewportSize: validViewport
+            )
+        )
+    }
+
+    @Test
+    func previewReadinessRejectsFramesCapturedBeforeTheLatestSessionRun() {
+        #expect(
+            ScannerPreviewReadinessPolicy.isFrameFresh(
+                timestamp: 101,
+                after: 100
+            )
+        )
+        #expect(
+            !ScannerPreviewReadinessPolicy.isFrameFresh(
+                timestamp: 100,
+                after: 100
+            )
+        )
+        #expect(
+            !ScannerPreviewReadinessPolicy.isFrameFresh(
+                timestamp: 99,
+                after: 100
+            )
+        )
+        #expect(
+            ScannerPreviewReadinessPolicy.isFrameFresh(
+                timestamp: 1,
+                after: nil
+            )
+        )
+        #expect(
+            !ScannerPreviewReadinessPolicy.isFrameFresh(
+                timestamp: .nan,
+                after: nil
+            )
+        )
+    }
+
+    @Test
     func frameImmediatelyAfterTapIsIgnoredUntilCameraSettles() {
         let policy = SettledFrameCapturePolicy(settleInterval: 0.25)
 
@@ -719,7 +807,20 @@ struct MeasurementEstimatorTests {
     }
 
     @Test
-    func twoAgreeingViewsAcceptConservativeUpperAxisEnvelope() throws {
+    func elevationDiversityRequiresTwentyCentimeterVerticalBaseline() {
+        let policy = MeasurementElevationDiversityPolicy()
+        let references = [angleCapture(position: SIMD3<Float>(0, 1, 1))]
+        let belowThreshold = angleCapture(position: SIMD3<Float>(1, 1.199, 0))
+        let aboveThreshold = angleCapture(position: SIMD3<Float>(1, 1.201, 0))
+
+        #expect(!policy.addsDiversity(belowThreshold, comparedTo: references))
+        #expect(policy.addsDiversity(aboveThreshold, comparedTo: references))
+        #expect(!policy.hasDiversity(in: references + [belowThreshold]))
+        #expect(policy.hasDiversity(in: references + [aboveThreshold]))
+    }
+
+    @Test
+    func threeAgreeingViewsAcceptConservativeUpperAxisEnvelope() throws {
         var workflow = MultiAngleMeasurementWorkflow()
         let first = angleCapture(
             length: 0.60,
@@ -735,27 +836,82 @@ struct MeasurementEstimatorTests {
             sampleCount: 200,
             position: SIMD3<Float>(1, 0, 0)
         )
+        let elevatedThird = angleCapture(
+            length: 0.61,
+            width: 0.395,
+            height: 0.505,
+            sampleCount: 300,
+            position: SIMD3<Float>(0, 0.21, -1)
+        )
 
         #expect(
             workflow.record(first)
                 == .needsAnotherAngle(reason: .firstAngleCaptured, acceptedCount: 1)
         )
-        let progress = workflow.record(second)
+        #expect(
+            workflow.record(second)
+                == .needsAnotherAngle(reason: .thirdAngleRequired, acceptedCount: 2)
+        )
+        let progress = workflow.record(elevatedThird)
         guard case .accepted(let consensus) = progress else {
-            Issue.record("expected two-view consensus")
+            Issue.record("expected three-view consensus with camera-height diversity")
             return
         }
 
         #expect(consensus.lengthMeters == 0.62)
         #expect(consensus.widthMeters == 0.40)
         #expect(consensus.heightMeters == 0.51)
-        #expect(consensus.sampleCount == 300)
-        #expect(consensus.frameCount == 2)
-        #expect(consensus.comparisonAngleCount == 2)
-        #expect(consensus.comparisonAgreementCount == 2)
+        #expect(consensus.sampleCount == 600)
+        #expect(consensus.frameCount == 3)
+        #expect(consensus.comparisonAngleCount == 3)
+        #expect(consensus.comparisonAgreementCount == 3)
         #expect(consensus.confidence == .high)
         #expect(first.evidence.estimate.lengthMeters == 0.60)
         #expect(second.evidence.estimate.widthMeters == 0.39)
+    }
+
+    @Test
+    func agreeingFirstTwoAnglesNeverAcceptWithoutThirdAngle() {
+        var workflow = MultiAngleMeasurementWorkflow()
+        let first = angleCapture(position: SIMD3<Float>(0, 0, 1))
+        let second = angleCapture(
+            length: 0.61,
+            width: 0.41,
+            height: 0.51,
+            position: SIMD3<Float>(1, 0, 0)
+        )
+
+        _ = workflow.record(first)
+
+        #expect(
+            workflow.record(second)
+                == .needsAnotherAngle(reason: .thirdAngleRequired, acceptedCount: 2)
+        )
+        #expect(workflow.captures == [first, second])
+    }
+
+    @Test
+    func thirdAngleWithoutElevationDiversityIsRejectedWithoutAppend() {
+        var workflow = MultiAngleMeasurementWorkflow()
+        let first = angleCapture(position: SIMD3<Float>(0, 1, 1))
+        let second = angleCapture(position: SIMD3<Float>(1, 1.05, 0))
+        let sameHeightThird = angleCapture(position: SIMD3<Float>(0, 0.95, -1))
+        let elevatedRetry = angleCapture(position: SIMD3<Float>(0, 1.21, -1))
+
+        _ = workflow.record(first)
+        _ = workflow.record(second)
+
+        #expect(
+            workflow.record(sameHeightThird)
+                == .needsAnotherAngle(reason: .elevationTooSimilar, acceptedCount: 2)
+        )
+        #expect(workflow.captures == [first, second])
+
+        guard case .accepted = workflow.record(elevatedRetry) else {
+            Issue.record("expected an elevated retry to complete three-view consensus")
+            return
+        }
+        #expect(workflow.captures == [first, second, elevatedRetry])
     }
 
     @Test
@@ -803,7 +959,7 @@ struct MeasurementEstimatorTests {
     }
 
     @Test
-    func tooSimilarRetryIsNotAppendedAndLaterDistinctViewCanResolve() throws {
+    func tooSimilarRetryIsNotAppendedAndLaterDistinctViewsCanResolve() throws {
         var workflow = MultiAngleMeasurementWorkflow()
         let first = angleCapture(position: SIMD3<Float>(0, 0, 1))
         let tooSimilar = angleCapture(
@@ -818,6 +974,12 @@ struct MeasurementEstimatorTests {
             height: 0.51,
             position: SIMD3<Float>(1, 0, 0)
         )
+        let elevatedThird = angleCapture(
+            length: 0.61,
+            width: 0.41,
+            height: 0.51,
+            position: SIMD3<Float>(0, 0.21, -1)
+        )
 
         _ = workflow.record(first)
         #expect(
@@ -826,17 +988,21 @@ struct MeasurementEstimatorTests {
         )
         #expect(workflow.captures == [first])
 
-        guard case .accepted(let consensus) = workflow.record(laterDistinct) else {
-            Issue.record("expected a later distinct view to resolve the staged first capture")
+        #expect(
+            workflow.record(laterDistinct)
+                == .needsAnotherAngle(reason: .thirdAngleRequired, acceptedCount: 2)
+        )
+        guard case .accepted(let consensus) = workflow.record(elevatedThird) else {
+            Issue.record("expected distinct second and elevated third views to resolve")
             return
         }
-        #expect(workflow.captures == [first, laterDistinct])
-        #expect(consensus.comparisonAngleCount == 2)
-        #expect(consensus.comparisonAgreementCount == 2)
+        #expect(workflow.captures == [first, laterDistinct, elevatedThird])
+        #expect(consensus.comparisonAngleCount == 3)
+        #expect(consensus.comparisonAgreementCount == 3)
     }
 
     @Test
-    func largeFitCenterDriftAgreeingBoxViewResolvesWithoutRetryLoop() throws {
+    func largeFitCenterDriftAgreeingBoxViewsResolveWithoutRetryLoop() throws {
         var workflow = MultiAngleMeasurementWorkflow()
         let first = angleCapture(
             length: meters(fromInches: 16),
@@ -851,21 +1017,32 @@ struct MeasurementEstimatorTests {
             center: SIMD3<Float>(2.5, -1.5, 3.0),
             position: SIMD3<Float>(1, 0, 0)
         )
+        let elevatedThird = angleCapture(
+            length: meters(fromInches: 16),
+            width: meters(fromInches: 11),
+            height: meters(fromInches: 5),
+            center: SIMD3<Float>(-3.0, 2.0, -2.5),
+            position: SIMD3<Float>(0, 0.21, -1)
+        )
 
         #expect(
             workflow.record(first)
                 == .needsAnotherAngle(reason: .firstAngleCaptured, acceptedCount: 1)
         )
-        guard case .accepted(let consensus) = workflow.record(agreeingDistinctView) else {
-            Issue.record("expected agreeing dimensions to resolve despite fitted-center drift")
+        #expect(
+            workflow.record(agreeingDistinctView)
+                == .needsAnotherAngle(reason: .thirdAngleRequired, acceptedCount: 2)
+        )
+        guard case .accepted(let consensus) = workflow.record(elevatedThird) else {
+            Issue.record("expected three agreeing views to resolve despite fitted-center drift")
             return
         }
-        #expect(workflow.captures == [first, agreeingDistinctView])
+        #expect(workflow.captures == [first, agreeingDistinctView, elevatedThird])
         #expect(consensus.lengthMeters == meters(fromInches: 16))
         #expect(consensus.widthMeters == meters(fromInches: 11))
         #expect(consensus.heightMeters == meters(fromInches: 5))
-        #expect(consensus.comparisonAngleCount == 2)
-        #expect(consensus.comparisonAgreementCount == 2)
+        #expect(consensus.comparisonAngleCount == 3)
+        #expect(consensus.comparisonAgreementCount == 3)
     }
 
     @Test
@@ -884,12 +1061,20 @@ struct MeasurementEstimatorTests {
                 position: firstViewPosition
             )
         )
-        let badFirstProgress = badFirstCenterWorkflow.record(
+        _ = badFirstCenterWorkflow.record(
             angleCapture(
                 length: meters(fromInches: 16),
                 width: meters(fromInches: 11),
                 height: meters(fromInches: 5),
                 position: secondViewPosition
+            )
+        )
+        let badFirstProgress = badFirstCenterWorkflow.record(
+            angleCapture(
+                length: meters(fromInches: 16),
+                width: meters(fromInches: 11),
+                height: meters(fromInches: 5),
+                position: SIMD3<Float>(0, 0.21, -1)
             )
         )
 
@@ -902,13 +1087,21 @@ struct MeasurementEstimatorTests {
                 position: firstViewPosition
             )
         )
-        let badSecondProgress = badSecondCenterWorkflow.record(
+        _ = badSecondCenterWorkflow.record(
             angleCapture(
                 length: meters(fromInches: 16),
                 width: meters(fromInches: 11),
                 height: meters(fromInches: 5),
                 center: badFitCenter,
                 position: secondViewPosition
+            )
+        )
+        let badSecondProgress = badSecondCenterWorkflow.record(
+            angleCapture(
+                length: meters(fromInches: 16),
+                width: meters(fromInches: 11),
+                height: meters(fromInches: 5),
+                position: SIMD3<Float>(0, 0.21, -1)
             )
         )
 
@@ -943,7 +1136,7 @@ struct MeasurementEstimatorTests {
             width: meters(fromInches: 12),
             height: meters(fromInches: 5),
             center: SIMD3<Float>(-3.0, 2.0, -2.5),
-            position: SIMD3<Float>(0, 0, -1),
+            position: SIMD3<Float>(0, 0.21, -1),
             horizontalForward: SIMD2<Float>(0, 1)
         )
 
@@ -1095,7 +1288,7 @@ struct MeasurementEstimatorTests {
             length: meters(fromInches: 14),
             width: meters(fromInches: 10),
             height: meters(fromInches: 18),
-            position: SIMD3<Float>(0, 0, -1)
+            position: SIMD3<Float>(0, 0.21, -1)
         )
 
         _ = workflow.record(smallerFirst)
@@ -1128,7 +1321,7 @@ struct MeasurementEstimatorTests {
             length: meters(fromInches: 14),
             width: meters(fromInches: 10),
             height: meters(fromInches: 18),
-            position: SIMD3<Float>(0, 0, -1)
+            position: SIMD3<Float>(0, 0.21, -1)
         )
 
         _ = workflow.record(largerFirst)
@@ -1163,7 +1356,7 @@ struct MeasurementEstimatorTests {
             width: meters(fromInches: 10),
             height: meters(fromInches: 22),
             center: SIMD3<Float>(0, 0.0508, 0),
-            position: SIMD3<Float>(0, 0, -1)
+            position: SIMD3<Float>(0, 0.21, -1)
         )
 
         _ = workflow.record(smallerFirst)
@@ -1194,7 +1387,7 @@ struct MeasurementEstimatorTests {
             length: meters(fromInches: 16),
             width: meters(fromInches: 10),
             height: meters(fromInches: 22),
-            position: SIMD3<Float>(0, 0, -1)
+            position: SIMD3<Float>(0, 0.21, -1)
         )
 
         _ = workflow.record(largerFirst)
@@ -1228,7 +1421,7 @@ struct MeasurementEstimatorTests {
             width: 0.41,
             height: 0.51,
             sampleCount: 300,
-            position: SIMD3<Float>(0, 0, -1)
+            position: SIMD3<Float>(0, 0.21, -1)
         )
 
         _ = workflow.record(first)
@@ -1265,7 +1458,7 @@ struct MeasurementEstimatorTests {
             length: 0.61,
             width: 0.41,
             height: 0.51,
-            position: SIMD3<Float>(0, 0, -1)
+            position: SIMD3<Float>(0, 0.21, -1)
         )
 
         _ = workflow.record(first)
@@ -1296,7 +1489,7 @@ struct MeasurementEstimatorTests {
             length: 0.70,
             width: 0.50,
             height: 0.60,
-            position: SIMD3<Float>(0, 0, -1)
+            position: SIMD3<Float>(0, 0.21, -1)
         )
 
         _ = workflow.record(first)
@@ -1318,9 +1511,18 @@ struct MeasurementEstimatorTests {
             width: 0.60,
             position: SIMD3<Float>(1, 0, 0)
         )
+        let elevatedThird = angleCapture(
+            length: 0.60,
+            width: 0.40,
+            position: SIMD3<Float>(0, 0.21, -1)
+        )
 
         _ = workflow.record(first)
-        let progress = workflow.record(swapped)
+        #expect(
+            workflow.record(swapped)
+                == .needsAnotherAngle(reason: .thirdAngleRequired, acceptedCount: 2)
+        )
+        let progress = workflow.record(elevatedThird)
         guard case .accepted(let consensus) = progress else {
             Issue.record("expected swapped base axes to agree")
             return
@@ -1345,9 +1547,17 @@ struct MeasurementEstimatorTests {
             pointCloudConfidence: .high,
             position: SIMD3<Float>(1, 0, 0)
         )
+        let elevatedThird = angleCapture(
+            length: 0.60,
+            width: 0.40,
+            height: 0.50,
+            pointCloudConfidence: .high,
+            position: SIMD3<Float>(0, 0.21, -1)
+        )
 
         _ = workflow.record(first)
-        let progress = workflow.record(second)
+        _ = workflow.record(second)
+        let progress = workflow.record(elevatedThird)
         guard case .accepted(let consensus) = progress else {
             Issue.record("expected agreeing medium-quality views to resolve")
             return

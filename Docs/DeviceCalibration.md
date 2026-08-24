@@ -3,11 +3,11 @@
 Use a tape measure and three rectangular objects with clearly different sizes.
 Keep each object stationary while capturing the requested independent angles.
 
-| Object | Actual L × W × H | Scan 1 | Scan 2 | Best absolute error | Confidence |
-|---|---|---|---|---|---|
-| Small box |  |  |  |  |  |
-| Medium box |  |  |  |  |  |
-| Large box or tote |  |  |  |  |  |
+| Object | Actual L × W × H | Angle 1 | Angle 2 | Angle 3 | Final estimate | Best absolute error | Confidence |
+|---|---|---|---|---|---|---|---|
+| Small box |  |  |  |  |  |  |  |
+| Medium box |  |  |  |  |  |  |  |
+| Large box or tote |  |  |  |  |  |  |  |
 
 For each dimension:
 
@@ -21,9 +21,15 @@ percent error = absolute error / actual × 100
 - Camera permission appears once and the live preview opens.
 - Each known box returns all three dimensions after the multi-angle workflow.
 - A same-position second photo is rejected as too similar.
-- Two agreeing angles resolve; a discordant pair requests a third angle.
+- Two captures never resolve by themselves, even when their dimensions agree.
+- The third capture must come from a distinct side and change camera height by
+  roughly 8 inches (20 cm); a flat third view is rejected without clearing the
+  first two angles.
 - A materially larger discordant third result blocks saving instead of being
   silently discarded.
+- The accepted result keeps all contributing angle measurements visible.
+- Missing LiDAR support near an isolated silhouette endpoint asks for a retake
+  instead of accepting a shortened dimension.
 - A poor angle or weak point cloud is labeled low-confidence or asks for a
   retake instead of silently saving a false measurement.
 - Saving, force-quitting, and reopening preserves the inventory.

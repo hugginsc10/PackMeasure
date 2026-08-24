@@ -16,8 +16,10 @@ loading decisions.
 
 ## App preview
 
-These real-device scans show PackMeasure tracing the item after the first
-viewpoint, then converging on an accepted estimate after two angles agree.
+These real-device scans show PackMeasure tracing the isolated item after the
+first viewpoint and presenting an accepted estimate. The screenshots are from
+an earlier two-angle development build; the current scanner requires a third,
+height-diverse viewpoint before it will enable saving.
 
 | Trace the item | Review the estimate |
 | --- | --- |
@@ -28,24 +30,27 @@ viewpoint, then converging on an accepted estimate after two angles agree.
 1. Put one item in view with visible separation from the background.
 2. Stand at a three-quarter angle so the front, side, and top are visible.
 3. Keep the whole item inside the guide and tap **Take photo**.
-4. Keep the item still, move at least 25 degrees around it, and capture the
-   requested second angle. PackMeasure verifies the camera movement from the
-   same AR session instead of counting another photo from the same spot.
-5. If the raw dimensions disagree, capture one final distinct angle. The app
-   accepts a result only when one whole pair agrees across long side, short
-   side, and gravity-aligned height.
-6. Review the approximate multi-angle dimensions. For a two-photo agreement,
-   the larger supported value on each axis is retained; a materially larger
-   discordant third result blocks saving instead of being discarded.
+4. Keep the item still, move around it, and capture the requested second angle.
+   PackMeasure verifies camera movement from the same AR session instead of
+   counting another photo from the same spot.
+5. Capture the required third angle from another side with the phone at least
+   about 8 inches (20 cm) higher or lower than an earlier viewpoint. A third
+   photo without enough height change is rejected without discarding the first
+   two captures.
+6. Review the approximate three-view result and its contributing angle rows.
+   PackMeasure retains the larger supported value on each agreeing axis, while
+   a materially larger discordant result blocks saving instead of being
+   discarded.
 7. Set quantity, stacking, and whether the item may safely turn on its side,
    then save it.
 
 PackMeasure compares raw meter values, not the rounded inches shown in the UI.
-Agreement improves repeatability but does not prove ground-truth accuracy;
-verify tight clearances separately. Clear, matte boxes with visible edges
-produce the best first-pass measurements. Glass, mirrors, shiny metal, thin
-objects, heavy occlusion, and items touching a similarly deep background can
-be harder for LiDAR to isolate.
+Agreement improves repeatability but does not prove ground-truth accuracy. The
+scanner also requires broad LiDAR support across the isolated silhouette and
+at both image-axis endpoints, but tight clearances still need an independent
+check. Clear, matte boxes with visible edges produce the best first-pass
+measurements. Glass, mirrors, shiny metal, thin objects, heavy occlusion, and
+items touching a similarly deep background can be harder for LiDAR to isolate.
 
 ## Understand the plan
 
