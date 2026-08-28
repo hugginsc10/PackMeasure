@@ -8,7 +8,9 @@
 
 /* Begin PBXBuildFile section */
 		0141497F0D32BC05C8BB0091 /* GuidedBoxMeasurementTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE9A446CAB13BE0B780048E1 /* GuidedBoxMeasurementTests.swift */; };
+		0998BB49CF34380BDAAFF37E /* TargetLock.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1FD36B27E413AA99055CB3E /* TargetLock.swift */; };
 		09B7FEF948AAD6D288F89342 /* MeasurementEstimatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BEC26224D7E1CD00B41CDF5 /* MeasurementEstimatorTests.swift */; };
+		0A2EDE96AA8A58C7E6E2F0A0 /* TargetLockFrameValidation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69219302EBBBE2A09187AD59 /* TargetLockFrameValidation.swift */; };
 		0C12718BED3478DDF2846719 /* ManualEntryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D4A5310F76E7632DEA4C529 /* ManualEntryView.swift */; };
 		30BBD6FD335F3F0136F0B5BE /* GravityAlignedBoundingBoxEstimatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01DA76636D28E2A195DBE9FC /* GravityAlignedBoundingBoxEstimatorTests.swift */; };
 		36DBA15AB0F050325DAEABCF /* DepthRegionSegmenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFE446F73A1491E55F2738CE /* DepthRegionSegmenter.swift */; };
@@ -75,6 +77,7 @@
 		5E7680F43D417158C818E786 /* GeometryModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GeometryModels.swift; sourceTree = "<group>"; };
 		5ED8ABA37AF0157830862257 /* PackMeasureTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = PackMeasureTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		5EF900F501945DF4F2CBD830 /* ScannerCameraZoomTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScannerCameraZoomTests.swift; sourceTree = "<group>"; };
+		69219302EBBBE2A09187AD59 /* TargetLockFrameValidation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TargetLockFrameValidation.swift; sourceTree = "<group>"; };
 		6C32970059157769F21557D7 /* GuidedBoxWorkflow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuidedBoxWorkflow.swift; sourceTree = "<group>"; };
 		6E12DBF221D2E3F67479FE70 /* PackingModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PackingModels.swift; sourceTree = "<group>"; };
 		720B306F033EEFA5D3D7BADE /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
@@ -93,6 +96,7 @@
 		C14B613C8CDA24C77CB2EDC9 /* DepthRegionSegmenterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DepthRegionSegmenterTests.swift; sourceTree = "<group>"; };
 		CB57A76391FA481635F4749F /* TargetLockTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TargetLockTests.swift; sourceTree = "<group>"; };
 		CED5108414CFCAEB40DF57B3 /* MeasuredItem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeasuredItem.swift; sourceTree = "<group>"; };
+		D1FD36B27E413AA99055CB3E /* TargetLock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TargetLock.swift; sourceTree = "<group>"; };
 		D1FDBE8DEE3F3C0C88A2B2D8 /* MeasurementEstimator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeasurementEstimator.swift; sourceTree = "<group>"; };
 		D6C55F1052A5849E765D593B /* GuidedBoxMeasurement.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuidedBoxMeasurement.swift; sourceTree = "<group>"; };
 		DA64797949F43B846C4EDD69 /* SingleShotObjectMeasurement.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SingleShotObjectMeasurement.swift; sourceTree = "<group>"; };
@@ -108,6 +112,8 @@
 				6C32970059157769F21557D7 /* GuidedBoxWorkflow.swift */,
 				790431810A5597537D5F330C /* PhotoObjectMeasurement.swift */,
 				DA64797949F43B846C4EDD69 /* SingleShotObjectMeasurement.swift */,
+				D1FD36B27E413AA99055CB3E /* TargetLock.swift */,
+				69219302EBBBE2A09187AD59 /* TargetLockFrameValidation.swift */,
 			);
 			path = Scan;
 			sourceTree = "<group>";
@@ -387,6 +393,8 @@
 				C65D41867508C7250DFFCF99 /* RootPlaceholderView.swift in Sources */,
 				505B39CB31D0CC5449424178 /* ScannerSheetView.swift in Sources */,
 				AFA54B21D376DF7B453E6AA6 /* SingleShotObjectMeasurement.swift in Sources */,
+				0998BB49CF34380BDAAFF37E /* TargetLock.swift in Sources */,
+				0A2EDE96AA8A58C7E6E2F0A0 /* TargetLockFrameValidation.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
