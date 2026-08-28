@@ -5,6 +5,105 @@ import Testing
 @Suite("Build 33 scanner presentation")
 struct Build33ScannerPresentationTests {
     @Test
+    func automaticCaptureRequiresASelectedTargetAndExplainsReacquisition() {
+        let needsSelection = ScannerBuild33RuntimePolicy.automaticCapture(
+            hasTarget: false,
+            ownsAcceptedEvidence: false,
+            canCapture: false,
+            validationMessage: nil
+        )
+        #expect(needsSelection.actionTitle == "Select item")
+        #expect(needsSelection.guidance == "Tap the item you want to measure.")
+        #expect(!needsSelection.canCapture)
+
+        let selected = ScannerBuild33RuntimePolicy.automaticCapture(
+            hasTarget: true,
+            ownsAcceptedEvidence: false,
+            canCapture: true,
+            validationMessage: nil
+        )
+        #expect(selected.actionTitle == "Take photo")
+        #expect(selected.targetStatus == "Item selected")
+        #expect(selected.canCapture)
+
+        let reacquiring = ScannerBuild33RuntimePolicy.automaticCapture(
+            hasTarget: true,
+            ownsAcceptedEvidence: true,
+            canCapture: false,
+            validationMessage: "Move until the same selected item is clearly visible."
+        )
+        #expect(reacquiring.actionTitle == "Take photo")
+        #expect(reacquiring.targetStatus == "Same selected item locked")
+        #expect(
+            reacquiring.guidance
+                == "Move until the same selected item is clearly visible."
+        )
+        #expect(!reacquiring.canCapture)
+    }
+
+    @Test
+    func guidedEntryCopyReflectsWhetherPhotoEvidenceWillBeReplaced() {
+        #expect(
+            ScannerBuild33RuntimePolicy.guidedEntrySituation(
+                automaticAngleCount: 0,
+                automaticCaptureFailed: false
+            ) == .setup
+        )
+        #expect(
+            ScannerBuild33RuntimePolicy.guidedEntrySituation(
+                automaticAngleCount: 0,
+                automaticCaptureFailed: true
+            ) == .automaticFailure
+        )
+        #expect(
+            ScannerBuild33RuntimePolicy.guidedEntrySituation(
+                automaticAngleCount: 1,
+                automaticCaptureFailed: true
+            ) == .replaceAcceptedPhotoAngles
+        )
+    }
+
+    @Test
+    func guidedMeasurementUsesGuidedEvidenceReviewInsteadOfPhotoConsensus() {
+        let estimate = MeasurementEstimate(
+            lengthMeters: 0.6,
+            widthMeters: 0.4,
+            heightMeters: 0.3,
+            confidence: .medium,
+            sampleCount: 4,
+            frameCount: 4
+        )
+
+        let guidedReview = ScannerBuild33RuntimePolicy.reviewState(
+            phase: .measured,
+            estimate: estimate,
+            measurementProgress: .awaitingFirstAngle,
+            subject: .box,
+            mode: .guidedCorners
+        )
+        #expect(guidedReview == .accepted)
+        #expect(guidedReview.canSave)
+
+        let automaticReview = ScannerBuild33RuntimePolicy.reviewState(
+            phase: .measured,
+            estimate: estimate,
+            measurementProgress: .awaitingFirstAngle,
+            subject: .box,
+            mode: .automaticPhotos
+        )
+        #expect(!automaticReview.canSave)
+
+        let invalidGuidedGeneralItem = ScannerBuild33RuntimePolicy.reviewState(
+            phase: .measured,
+            estimate: estimate,
+            measurementProgress: .awaitingFirstAngle,
+            subject: .generalItem,
+            mode: .guidedCorners
+        )
+        #expect(!invalidGuidedGeneralItem.canSave)
+    }
+
+    @Test
     func modeSelectionDefaultsToBoxPhotosAndRejectsGuidedGeneralItems() {
         var selection = ScannerModeSelection()
 
