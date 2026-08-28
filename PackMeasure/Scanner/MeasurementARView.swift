@@ -427,6 +427,19 @@ struct ScannerSessionEventGate: Equatable, Sendable {
 @MainActor
 final class MeasurementPreviewARView: ARView {
     var viewportDidLayout: ((SIMD2<Float>) -> Void)?
+    var previewTapHandler: ((SIMD2<Float>) -> Void)?
+    var targetMarkerPoint: SIMD2<Float>? {
+        didSet {
+            guard oldValue != targetMarkerPoint else { return }
+            setNeedsLayout()
+        }
+    }
+    var projectedGuidedOverlay = ScannerProjectedGuidedOverlay.empty {
+        didSet {
+            guard oldValue != projectedGuidedOverlay else { return }
+            setNeedsLayout()
+        }
+    }
 
     var objectOverlay: MeasurementObjectOverlay? {
         didSet {
@@ -441,6 +454,10 @@ final class MeasurementPreviewARView: ARView {
     private let fillLayer = CAShapeLayer()
     private let haloLayer = CAShapeLayer()
     private let strokeLayer = CAShapeLayer()
+    private let targetMarkerLayer = CAShapeLayer()
+    private let guidedLineLayer = CAShapeLayer()
+    private let guidedMarkerLayer = CAShapeLayer()
+    private var guidedNumberLayers: [CATextLayer] = []
 
     required init(frame frameRect: CGRect) {
         super.init(frame: frameRect)
@@ -459,12 +476,20 @@ final class MeasurementPreviewARView: ARView {
             viewportDidLayout?(viewportSize)
         }
         renderObjectOutline()
+        renderCaptureGuides()
     }
 
     private func configureOutlineLayers() {
         isAccessibilityElement = true
         accessibilityLabel = "Measurement camera preview"
         accessibilityValue = "Live camera preview"
+        isUserInteractionEnabled = true
+        addGestureRecognizer(
+            UITapGestureRecognizer(
+                target: self,
+                action: #selector(previewWasTapped(_:))
+            )
+        )
 
         fillLayer.fillRule = .evenOdd
         haloLayer.fillColor = nil
@@ -476,7 +501,19 @@ final class MeasurementPreviewARView: ARView {
         layer.addSublayer(fillLayer)
         layer.addSublayer(haloLayer)
         layer.addSublayer(strokeLayer)
+        layer.addSublayer(guidedLineLayer)
+        layer.addSublayer(targetMarkerLayer)
+        layer.addSublayer(guidedMarkerLayer)
         configureColorsAndWidths()
+    }
+
+    @objc
+    private func previewWasTapped(_ recognizer: UITapGestureRecognizer) {
+        guard recognizer.state == .ended else { return }
+        let point = recognizer.location(in: self)
+        previewTapHandler?(
+            SIMD2<Float>(Float(point.x), Float(point.y))
+        )
     }
 
     private func configureColorsAndWidths() {
@@ -487,6 +524,17 @@ final class MeasurementPreviewARView: ARView {
         haloLayer.lineWidth = highContrast ? 8 : 6
         strokeLayer.strokeColor = UIColor.systemCyan.cgColor
         strokeLayer.lineWidth = highContrast ? 4 : 3
+        targetMarkerLayer.fillColor = UIColor.systemCyan.cgColor
+        targetMarkerLayer.strokeColor = UIColor.black.withAlphaComponent(0.82).cgColor
+        targetMarkerLayer.lineWidth = highContrast ? 4 : 3
+        guidedLineLayer.fillColor = nil
+        guidedLineLayer.strokeColor = UIColor.systemBlue.cgColor
+        guidedLineLayer.lineCap = .round
+        guidedLineLayer.lineJoin = .round
+        guidedLineLayer.lineWidth = highContrast ? 5 : 4
+        guidedMarkerLayer.fillColor = UIColor.systemBlue.cgColor
+        guidedMarkerLayer.strokeColor = UIColor.white.cgColor
+        guidedMarkerLayer.lineWidth = highContrast ? 3 : 2
     }
 
     private func renderObjectOutline() {
@@ -543,6 +591,81 @@ final class MeasurementPreviewARView: ARView {
         strokeLayer.path = path
         CATransaction.commit()
     }
+
+    private func renderCaptureGuides() {
+        configureColorsAndWidths()
+        [targetMarkerLayer, guidedLineLayer, guidedMarkerLayer].forEach {
+            $0.frame = bounds
+        }
+
+        let targetPath = targetMarkerPoint.flatMap(viewPoint)
+            .map { point -> CGPath in
+                UIBezierPath(
+                    ovalIn: CGRect(
+                        x: point.x - 13,
+                        y: point.y - 13,
+                        width: 26,
+                        height: 26
+                    )
+                ).cgPath
+            }
+        targetMarkerLayer.path = targetPath
+
+        let linePath = CGMutablePath()
+        for line in projectedGuidedOverlay.lines {
+            guard let start = viewPoint(line.normalizedReferencePoint),
+                  let end = viewPoint(line.normalizedEndpointPoint) else {
+                continue
+            }
+            linePath.move(to: start)
+            linePath.addLine(to: end)
+        }
+        guidedLineLayer.path = linePath.isEmpty ? nil : linePath
+
+        let markerPath = CGMutablePath()
+        guidedNumberLayers.forEach { $0.removeFromSuperlayer() }
+        guidedNumberLayers.removeAll(keepingCapacity: true)
+        for marker in projectedGuidedOverlay.markers {
+            guard let point = viewPoint(marker.normalizedPreviewPoint) else { continue }
+            markerPath.addEllipse(
+                in: CGRect(
+                    x: point.x - 13,
+                    y: point.y - 13,
+                    width: 26,
+                    height: 26
+                )
+            )
+            let numberLayer = CATextLayer()
+            numberLayer.string = String(marker.number)
+            numberLayer.alignmentMode = .center
+            numberLayer.contentsScale = window?.screen.scale ?? UIScreen.main.scale
+            numberLayer.foregroundColor = UIColor.white.cgColor
+            numberLayer.fontSize = 16
+            numberLayer.frame = CGRect(
+                x: point.x - 13,
+                y: point.y - 10,
+                width: 26,
+                height: 22
+            )
+            layer.addSublayer(numberLayer)
+            guidedNumberLayers.append(numberLayer)
+        }
+        guidedMarkerLayer.path = markerPath.isEmpty ? nil : markerPath
+    }
+
+    private func viewPoint(_ normalizedPoint: SIMD2<Float>) -> CGPoint? {
+        guard normalizedPoint.x.isFinite,
+              normalizedPoint.y.isFinite,
+              (0...1).contains(normalizedPoint.x),
+              (0...1).contains(normalizedPoint.y),
+              !bounds.isEmpty else {
+            return nil
+        }
+        return CGPoint(
+            x: CGFloat(normalizedPoint.x) * bounds.width,
+            y: CGFloat(normalizedPoint.y) * bounds.height
+        )
+    }
 }
 
 struct MeasurementARView: UIViewRepresentable {
@@ -554,7 +677,8 @@ struct MeasurementARView: UIViewRepresentable {
         coordinator.baselineRequests(
             previewRequestID: scannerState.previewRequestID,
             captureRequestID: scannerState.captureRequestID,
-            cameraZoomRequestID: scannerState.cameraZoomRequestID
+            cameraZoomRequestID: scannerState.cameraZoomRequestID,
+            guidedCaptureIntentID: scannerState.guidedPointCaptureIntentID
         )
         return coordinator
     }
@@ -569,11 +693,21 @@ struct MeasurementARView: UIViewRepresentable {
     func updateUIView(_ uiView: MeasurementPreviewARView, context: Context) {
         context.coordinator.scannerState = scannerState
         uiView.objectOverlay = scannerState.objectOverlay
+        context.coordinator.synchronizeCaptureState(
+            targetLock: scannerState.automaticTargetValidationLockSnapshot,
+            targetPrompt: scannerState.automaticTargetPrompt,
+            targetSubject: scannerState.measurementSubject,
+            cameraEvidenceReacquisitionID:
+                scannerState.cameraEvidenceReacquisitionID,
+            guidedRequest: scannerState.guidedCaptureSession?.pendingRequest,
+            guidedOverlay: scannerState.guidedCaptureSession?.overlay ?? .empty
+        )
         context.coordinator.handleRequests(
             previewRequestID: scannerState.previewRequestID,
             captureRequestID: scannerState.captureRequestID,
             cameraZoomRequestID: scannerState.cameraZoomRequestID,
-            cameraZoom: scannerState.cameraZoom
+            cameraZoom: scannerState.cameraZoom,
+            guidedCaptureIntentID: scannerState.guidedPointCaptureIntentID
         )
     }
 
@@ -585,6 +719,32 @@ struct MeasurementARView: UIViewRepresentable {
     /// conformance is constrained by keeping AR/capture mutations on that serial
     /// queue and isolating all view-model/ARView access to `MainActor`.
     final class Coordinator: NSObject, ARSessionDelegate, @unchecked Sendable {
+        private typealias AutomaticCaptureAuthority =
+            ScannerSheetView.ScannerStateModel.AutomaticPhotoCaptureAuthority
+
+        private struct TargetTrackingSnapshot: Equatable, Sendable {
+            let lock: TargetLock
+            let subject: TargetLockSubject
+            let cameraEvidenceReacquisitionID: Int
+        }
+
+        private struct CaptureVisualSnapshot: Equatable, Sendable {
+            let targetLock: TargetLock?
+            let targetPrompt: PhotoTargetSelectionPrompt?
+            let guidedOverlay: GuidedBoxOverlay
+        }
+
+        private struct PendingGuidedCapture: Sendable {
+            let request: GuidedBoxCaptureRequest
+            var attemptGate: ScannerGuidedFrameAttemptGate
+            var settledFrameGate: SettledFrameCaptureGate
+        }
+
+        private struct ExactTargetFrameSample: Sendable {
+            let evidence: TargetLockFrameEvidence
+            let rawImagePoint: SIMD2<Float>?
+        }
+
         private struct PendingCameraZoom: Sendable {
             let applicationID: Int
             let lifecycleGeneration: Int
@@ -622,6 +782,10 @@ struct MeasurementARView: UIViewRepresentable {
             let measurementSeriesID: Int
             let previewViewportSize: SIMD2<Float>
             let cameraZoom: ScannerCameraZoom
+            let automaticAuthority: AutomaticCaptureAuthority?
+            let targetLock: TargetLock?
+            let targetSubject: TargetLockSubject
+            let photoMeasurement: PhotoObjectMeasurement
             var settledFrameGate: SettledFrameCaptureGate
             var cameraViewpoint: MeasurementCameraViewpoint?
             var cameraProvenance: ScannerCameraCaptureProvenance?
@@ -708,6 +872,8 @@ struct MeasurementARView: UIViewRepresentable {
         private static let settledFramePolicy = SettledFrameCapturePolicy()
         private static let maximumTrackingWait: TimeInterval = 2
         private static let maximumCameraZoomWait: TimeInterval = 2.5
+        private static let maximumGuidedCaptureWait: TimeInterval = 2.5
+        private static let maximumGuidedFailedSamples = 3
         private static let cameraZoomConfirmationTolerance = 0.02
         private static let maximumPointsPerFrame = 3_500
         private static let maximumAccumulatedPoints = 42_000
@@ -730,6 +896,12 @@ struct MeasurementARView: UIViewRepresentable {
         private let targetCapturePolicy = CenteredTargetCapturePolicy()
         private let peripheralFloorEstimator = PeripheralFloorEstimator()
         private let objectRegionFilter = ReticleSeededObjectRegionFilter()
+        private let targetFrameValidator = TargetLockFrameValidator()
+        private let targetFrameEvidenceAdapter = ScannerTargetFrameEvidenceAdapter()
+        private let guidedFrameSampler = ScannerGuidedFrameSampler()
+        private let singleShotFrameRoutePolicy = ScannerSingleShotFrameRoutePolicy()
+        private let automaticCaptureAuthorityTerminator =
+            ScannerAutomaticCaptureAuthorityTerminator()
 
         private let lifecycleLock = NSLock()
         private var lifecycleGeneration = 0
@@ -742,6 +914,16 @@ struct MeasurementARView: UIViewRepresentable {
         // Accessed only on processingQueue.
         private var capture: CaptureAccumulator?
         private var pendingCameraZoom: PendingCameraZoom?
+        private var targetTrackingSnapshot: TargetTrackingSnapshot?
+        private var captureVisualSnapshot = CaptureVisualSnapshot(
+            targetLock: nil,
+            targetPrompt: nil,
+            guidedOverlay: .empty
+        )
+        private var targetFrameAuthorityTracker =
+            ScannerTargetFrameAuthorityTracker()
+        private var pendingGuidedCapture: PendingGuidedCapture?
+        private var guidedFrameRequestTracker = ScannerGuidedFrameRequestTracker()
         private var cameraZoomApplicationSequence = 0
         private var cameraFrameSequence: UInt64 = 0
         private var latestCameraNormalizedFocalLength: Double?
@@ -757,6 +939,7 @@ struct MeasurementARView: UIViewRepresentable {
         @MainActor private var sessionEventGate = ScannerSessionEventGate()
         @MainActor private var requestTracker = ScannerViewRequestTracker()
         @MainActor private var lastCameraZoomRequestID = 0
+        @MainActor private var lastGuidedCaptureIntentID = 0
         @MainActor private var isAttached = false
         @MainActor private var latestPreviewViewportSize: SIMD2<Float>?
         @MainActor weak var scannerState: ScannerSheetView.ScannerStateModel?
@@ -765,13 +948,15 @@ struct MeasurementARView: UIViewRepresentable {
         func baselineRequests(
             previewRequestID: Int,
             captureRequestID: Int,
-            cameraZoomRequestID: Int
+            cameraZoomRequestID: Int,
+            guidedCaptureIntentID: Int
         ) {
             requestTracker = ScannerViewRequestTracker(
                 previewRequestID: previewRequestID,
                 captureRequestID: captureRequestID
             )
             lastCameraZoomRequestID = cameraZoomRequestID
+            lastGuidedCaptureIntentID = guidedCaptureIntentID
         }
 
         @MainActor
@@ -781,6 +966,9 @@ struct MeasurementARView: UIViewRepresentable {
             arView = view
             view.viewportDidLayout = { [weak self] viewportSize in
                 self?.previewDidLayout(viewportSize)
+            }
+            view.previewTapHandler = { [weak self] previewPoint in
+                self?.selectAutomaticTarget(at: previewPoint)
             }
             view.automaticallyConfigureSession = false
             view.session.delegate = self
@@ -793,17 +981,98 @@ struct MeasurementARView: UIViewRepresentable {
             endLifecycle()
             isAttached = false
             arView?.viewportDidLayout = nil
+            arView?.previewTapHandler = nil
+            arView?.targetMarkerPoint = nil
+            arView?.projectedGuidedOverlay = .empty
             arView?.session.pause()
             arView?.session.delegate = nil
             processingQueue.async { [weak self] in
                 guard let self, activeLifecycleGeneration() == nil else { return }
                 capture = nil
                 pendingCameraZoom = nil
+                targetTrackingSnapshot = nil
+                captureVisualSnapshot = CaptureVisualSnapshot(
+                    targetLock: nil,
+                    targetPrompt: nil,
+                    guidedOverlay: .empty
+                )
+                targetFrameAuthorityTracker.reset()
+                pendingGuidedCapture = nil
+                guidedFrameRequestTracker.synchronize(nil)
                 previewReadinessNeeded = false
             }
+            scannerState?.clearGuidedCapture(for: .teardown)
             setCurrentPreviewViewportSize(nil)
             latestPreviewViewportSize = nil
             arView = nil
+        }
+
+        @MainActor
+        func synchronizeCaptureState(
+            targetLock: TargetLock?,
+            targetPrompt: PhotoTargetSelectionPrompt?,
+            targetSubject: TargetLockSubject,
+            cameraEvidenceReacquisitionID: Int,
+            guidedRequest: GuidedBoxCaptureRequest?,
+            guidedOverlay: GuidedBoxOverlay
+        ) {
+            let targetSnapshot = targetLock.flatMap { lock in
+                lock.captureContext.map { _ in
+                    TargetTrackingSnapshot(
+                        lock: lock,
+                        subject: targetSubject,
+                        cameraEvidenceReacquisitionID:
+                            cameraEvidenceReacquisitionID
+                    )
+                }
+            }
+            processingQueue.async { [weak self] in
+                guard let self else { return }
+                captureVisualSnapshot = CaptureVisualSnapshot(
+                    targetLock: targetLock,
+                    targetPrompt: targetPrompt,
+                    guidedOverlay: guidedOverlay
+                )
+                if targetTrackingSnapshot != targetSnapshot {
+                    targetTrackingSnapshot = targetSnapshot
+                    if let targetSnapshot {
+                        targetFrameAuthorityTracker.synchronize(
+                            identity: targetSnapshot.lock.identity,
+                            cameraEvidenceReacquisitionID:
+                                targetSnapshot.cameraEvidenceReacquisitionID
+                        )
+                    } else {
+                        targetFrameAuthorityTracker.reset()
+                    }
+                    if let activeCapture = capture,
+                       let authority = activeCapture.automaticAuthority,
+                       authority.cameraEvidenceReacquisitionID
+                            != cameraEvidenceReacquisitionID {
+                        capture = nil
+                    }
+                }
+
+                let previousGuidedRequest =
+                    guidedFrameRequestTracker.pendingRequest
+                guidedFrameRequestTracker.synchronize(guidedRequest)
+                guard previousGuidedRequest != guidedRequest else { return }
+                pendingGuidedCapture = guidedRequest.map { request in
+                    let now = CACurrentMediaTime()
+                    return PendingGuidedCapture(
+                        request: request,
+                        attemptGate: ScannerGuidedFrameAttemptGate(
+                            startedAt: now,
+                            maximumWait: Self.maximumGuidedCaptureWait,
+                            maximumFailedSamples:
+                                Self.maximumGuidedFailedSamples
+                        ),
+                        settledFrameGate: SettledFrameCaptureGate(
+                            requestedAt: now,
+                            policy: Self.settledFramePolicy
+                        )
+                    )
+                }
+            }
         }
 
         @MainActor
@@ -817,6 +1086,39 @@ struct MeasurementARView: UIViewRepresentable {
             setCurrentPreviewViewportSize(viewportSize)
             latestPreviewViewportSize = viewportSize
             markPreviewNeedsReadiness()
+        }
+
+        @MainActor
+        private func selectAutomaticTarget(at previewPoint: SIMD2<Float>) {
+            guard let state = scannerState,
+                  state.measurementMode == .automaticPhotos,
+                  let arView,
+                  let frame = arView.session.currentFrame else {
+                return
+            }
+            let viewportSize = SIMD2<Float>(
+                Float(arView.bounds.width),
+                Float(arView.bounds.height)
+            )
+            guard viewportSize.x > 0,
+                  viewportSize.y > 0 else {
+                return
+            }
+            let displayTransform = frame.displayTransform(
+                for: .portrait,
+                viewportSize: arView.bounds.size
+            )
+            guard let rawImagePoint =
+                    ScannerTargetProjection.normalizedImagePoint(
+                        previewPoint: previewPoint,
+                        viewportSize: viewportSize,
+                        displayTransform: displayTransform
+                    ) else {
+                return
+            }
+            _ = state.selectAutomaticTarget(
+                rawCameraNormalizedPoint: rawImagePoint
+            )
         }
 
         private func setCurrentPreviewViewportSize(_ viewportSize: SIMD2<Float>?) {
@@ -908,7 +1210,8 @@ struct MeasurementARView: UIViewRepresentable {
             previewRequestID: Int,
             captureRequestID: Int,
             cameraZoomRequestID: Int,
-            cameraZoom: ScannerCameraZoom
+            cameraZoom: ScannerCameraZoom,
+            guidedCaptureIntentID: Int
         ) {
             let commands = requestTracker.commands(
                 previewRequestID: previewRequestID,
@@ -929,6 +1232,45 @@ struct MeasurementARView: UIViewRepresentable {
                     cameraZoom,
                     requestID: cameraZoomRequestID,
                     measurementSeriesID: scannerState?.measurementSeriesID ?? 0
+                )
+            }
+
+            if guidedCaptureIntentID != lastGuidedCaptureIntentID {
+                lastGuidedCaptureIntentID = guidedCaptureIntentID
+                beginGuidedCaptureFromCurrentPose()
+            }
+        }
+
+        @MainActor
+        private func beginGuidedCaptureFromCurrentPose() {
+            guard let state = scannerState,
+                  state.measurementMode == .guidedCorners,
+                  let frame = arView?.session.currentFrame,
+                  case .normal = frame.camera.trackingState,
+                  let pose = guidedFrameSampler.capturePose(
+                      from: frame.camera.transform
+                  ),
+                  let request = state.beginGuidedCapture(
+                      requestedPose: pose
+                  ) else {
+                return
+            }
+
+            processingQueue.async { [weak self] in
+                guard let self else { return }
+                guidedFrameRequestTracker.synchronize(request)
+                let now = CACurrentMediaTime()
+                pendingGuidedCapture = PendingGuidedCapture(
+                    request: request,
+                    attemptGate: ScannerGuidedFrameAttemptGate(
+                        startedAt: now,
+                        maximumWait: Self.maximumGuidedCaptureWait,
+                        maximumFailedSamples: Self.maximumGuidedFailedSamples
+                    ),
+                    settledFrameGate: SettledFrameCaptureGate(
+                        requestedAt: now,
+                        policy: Self.settledFramePolicy
+                    )
                 )
             }
         }
@@ -1125,6 +1467,7 @@ struct MeasurementARView: UIViewRepresentable {
                 return
             }
             guard depthSupported else {
+                automaticCaptureAuthorityTerminator.terminatePending(in: state)
                 scannerState?.phase = .unsupported(
                     "LiDAR scene depth is not available on this device."
                 )
@@ -1133,6 +1476,7 @@ struct MeasurementARView: UIViewRepresentable {
 
             if previewLifecycle.scanRequested() == .resume,
                let sessionConfiguration {
+                automaticCaptureAuthorityTerminator.terminatePending(in: state)
                 markPreviewNeedsReadiness()
                 _ = beginPreviewRun(after: arView?.session.currentFrame?.timestamp)
                 arView?.session.run(sessionConfiguration)
@@ -1144,6 +1488,7 @@ struct MeasurementARView: UIViewRepresentable {
             let requestID = requestTracker.lastCaptureRequestID
             let measurementSeriesID = scannerState?.measurementSeriesID ?? 0
             guard let previewViewportSize = latestPreviewViewportSize else {
+                automaticCaptureAuthorityTerminator.terminatePending(in: state)
                 state.phase = .checkingSupport
                 markPreviewNeedsReadiness()
                 return
@@ -1170,6 +1515,14 @@ struct MeasurementARView: UIViewRepresentable {
             }
             let now = CACurrentMediaTime()
             let cameraZoom = state.cameraZoom
+            let automaticAuthority = state.pendingAutomaticCaptureAuthority
+            let targetLock = automaticAuthority.flatMap { authority in
+                state.activeTargetLock.flatMap { lock in
+                    lock.identity == authority.identity ? lock : nil
+                }
+            }
+            let targetSubject = state.measurementSubject
+            let photoMeasurement = state.automaticPhotoMeasurement
             state.estimate = nil
             state.phase = .scanning(progress: 0)
 
@@ -1179,6 +1532,10 @@ struct MeasurementARView: UIViewRepresentable {
                     measurementSeriesID: measurementSeriesID,
                     previewViewportSize: previewViewportSize,
                     cameraZoom: cameraZoom,
+                    automaticAuthority: automaticAuthority,
+                    targetLock: targetLock,
+                    targetSubject: targetSubject,
+                    photoMeasurement: photoMeasurement,
                     settledFrameGate: SettledFrameCaptureGate(
                         requestedAt: now,
                         policy: Self.settledFramePolicy
@@ -1235,6 +1592,11 @@ struct MeasurementARView: UIViewRepresentable {
                 frameSequence: cameraFrameSequence
             )
             publishPreviewReadyIfPossible(with: frame)
+            publishProjectedCaptureGuides(with: frame)
+            observeLiveTargetFrameIfNeeded(with: frame)
+            if processPendingGuidedCaptureIfNeeded(with: frame) {
+                return
+            }
 
             guard var activeCapture = capture else { return }
             guard case .normal = frame.camera.trackingState else {
@@ -1245,7 +1607,8 @@ struct MeasurementARView: UIViewRepresentable {
                     publishFailure(
                         "Camera tracking wasn't ready. Hold steady and try the photo again.",
                         requestID: activeCapture.requestID,
-                        measurementSeriesID: activeCapture.measurementSeriesID
+                        measurementSeriesID: activeCapture.measurementSeriesID,
+                        automaticAuthority: activeCapture.automaticAuthority
                     )
                     return
                 }
@@ -1276,21 +1639,83 @@ struct MeasurementARView: UIViewRepresentable {
                 publishFailure(
                     "The camera calibration changed before the photo. Hold steady and retake it.",
                     requestID: activeCapture.requestID,
-                    measurementSeriesID: activeCapture.measurementSeriesID
+                    measurementSeriesID: activeCapture.measurementSeriesID,
+                    automaticAuthority: activeCapture.automaticAuthority
                 )
                 return
             }
             activeCapture.cameraProvenance = cameraProvenance
             publishProgress(0.5, requestID: activeCapture.requestID)
-            // Freeze the exact RGB/depth pair being measured before Vision runs.
-            session.pause()
             // The action bar can resize the live preview after the tap. Measure
             // and render against the viewport visible for this settled frame,
             // not the dimensions cached before SwiftUI finished that relayout.
             let settledPreviewViewportSize = currentPreviewViewportSize()
                 ?? activeCapture.previewViewportSize
 
-            switch sampleSingleShotFrame(from: frame) {
+            var exactPrompt = activeCapture.automaticAuthority?.prompt
+            if let authority = activeCapture.automaticAuthority,
+               let lockedContext = authority.lockedContext {
+                guard let targetLock = activeCapture.targetLock,
+                      targetLock.captureContext == lockedContext else {
+                    let failure = TargetLockFrameValidationFailure
+                        .invalidTargetEvidence
+                    rejectAutomaticTargetFrame(
+                        failure,
+                        capture: activeCapture,
+                        authority: authority
+                    )
+                    return
+                }
+                let exactSample = exactTargetFrameSample(
+                    from: frame,
+                    lock: targetLock,
+                    viewportSize: settledPreviewViewportSize
+                )
+                let validation = targetFrameValidator.validate(
+                    lock: targetLock,
+                    subject: activeCapture.targetSubject,
+                    evidence: exactSample.evidence
+                )
+                let authoritativeValidation =
+                    targetFrameAuthorityTracker.exactFrameValidation(
+                        validation,
+                        identity: authority.identity,
+                        cameraEvidenceReacquisitionID:
+                            authority.cameraEvidenceReacquisitionID
+                    )
+                guard case .valid = authoritativeValidation,
+                      let rawImagePoint = exactSample.rawImagePoint else {
+                    let failure: TargetLockFrameValidationFailure =
+                        if case .rejected(let reason) = authoritativeValidation {
+                            reason
+                        } else {
+                            .projectionUnavailable
+                        }
+                    rejectAutomaticTargetFrame(
+                        failure,
+                        capture: activeCapture,
+                        authority: authority
+                    )
+                    return
+                }
+                // The anchor projection on this exact settled frame becomes the
+                // immutable prompt shared by both Vision passes below.
+                exactPrompt = .target(normalizedImagePoint: rawImagePoint)
+            }
+
+            let photoProcessor = exactPrompt.map {
+                ScannerAutomaticPhotoFrameProcessor(
+                    prompt: $0,
+                    measurement: activeCapture.photoMeasurement
+                )
+            }
+            // Freeze the exact RGB/depth pair being measured before Vision runs.
+            session.pause()
+
+            switch sampleSingleShotFrame(
+                from: frame,
+                processor: photoProcessor
+            ) {
             case .accepted(let points, let diagnostics, let outline, let route):
                 let objectOverlay = outline.flatMap {
                     measurementObjectOverlay(
@@ -1322,7 +1747,8 @@ struct MeasurementARView: UIViewRepresentable {
                             fallbackResult: route.fallbackResult
                         ),
                         requestID: activeCapture.requestID,
-                        measurementSeriesID: activeCapture.measurementSeriesID
+                        measurementSeriesID: activeCapture.measurementSeriesID,
+                        automaticAuthority: activeCapture.automaticAuthority
                     )
                     return
                 }
@@ -1370,7 +1796,450 @@ struct MeasurementARView: UIViewRepresentable {
                         fallbackResult: route.fallbackResult
                     ),
                     requestID: activeCapture.requestID,
-                    measurementSeriesID: activeCapture.measurementSeriesID
+                    measurementSeriesID: activeCapture.measurementSeriesID,
+                    automaticAuthority: activeCapture.automaticAuthority
+                )
+            }
+        }
+
+        private func observeLiveTargetFrameIfNeeded(with frame: ARFrame) {
+            guard capture == nil,
+                  pendingCameraZoom == nil,
+                  let snapshot = targetTrackingSnapshot else {
+                return
+            }
+
+            let validation: TargetLockFrameValidation
+            let evidence: TargetLockFrameEvidence?
+            if case .normal = frame.camera.trackingState,
+               let viewportSize = currentPreviewViewportSize() {
+                let sample = exactTargetFrameSample(
+                    from: frame,
+                    lock: snapshot.lock,
+                    viewportSize: viewportSize
+                )
+                evidence = sample.evidence
+                validation = targetFrameValidator.validate(
+                    lock: snapshot.lock,
+                    subject: snapshot.subject,
+                    evidence: sample.evidence
+                )
+            } else {
+                evidence = nil
+                validation = .rejected(.cameraPoseUnavailable)
+            }
+
+            _ = targetFrameAuthorityTracker.observe(
+                validation,
+                identity: snapshot.lock.identity,
+                cameraEvidenceReacquisitionID:
+                    snapshot.cameraEvidenceReacquisitionID
+            )
+            publishLiveTargetValidation(
+                validation,
+                evidence: evidence,
+                snapshot: snapshot
+            )
+        }
+
+        private func publishProjectedCaptureGuides(with frame: ARFrame) {
+            guard let viewportSize = currentPreviewViewportSize(),
+                  viewportSize.x > 0,
+                  viewportSize.y > 0 else {
+                return
+            }
+            let snapshot = captureVisualSnapshot
+            let targetMarkerPoint: SIMD2<Float>?
+            if let worldAnchor = snapshot.targetLock?.worldAnchor {
+                targetMarkerPoint = normalizedPreviewPoint(
+                    worldPoint: worldAnchor,
+                    frame: frame,
+                    viewportSize: viewportSize
+                )
+            } else if case .target(let rawImagePoint) = snapshot.targetPrompt {
+                let transform = frame.displayTransform(
+                    for: .portrait,
+                    viewportSize: CGSize(
+                        width: CGFloat(viewportSize.x),
+                        height: CGFloat(viewportSize.y)
+                    )
+                )
+                let mapped = CGPoint(
+                    x: CGFloat(rawImagePoint.x),
+                    y: CGFloat(rawImagePoint.y)
+                ).applying(transform)
+                let point = SIMD2<Float>(Float(mapped.x), Float(mapped.y))
+                targetMarkerPoint = point.x.isFinite && point.y.isFinite
+                    ? point
+                    : nil
+            } else {
+                targetMarkerPoint = nil
+            }
+
+            let markers = snapshot.guidedOverlay.markers.compactMap { marker in
+                normalizedPreviewPoint(
+                    worldPoint: marker.worldPosition,
+                    frame: frame,
+                    viewportSize: viewportSize
+                ).map {
+                    ScannerProjectedGuidedMarker(
+                        number: marker.number,
+                        point: marker.point,
+                        normalizedPreviewPoint: $0
+                    )
+                }
+            }
+            let lines: [ScannerProjectedGuidedLine] =
+                snapshot.guidedOverlay.lines.compactMap { line in
+                guard let reference = normalizedPreviewPoint(
+                    worldPoint: line.referenceWorldPosition,
+                    frame: frame,
+                    viewportSize: viewportSize
+                ), let endpoint = normalizedPreviewPoint(
+                    worldPoint: line.endpointWorldPosition,
+                    frame: frame,
+                    viewportSize: viewportSize
+                ) else {
+                    return nil
+                }
+                return ScannerProjectedGuidedLine(
+                    reference: line.reference,
+                    endpoint: line.endpoint,
+                    normalizedReferencePoint: reference,
+                    normalizedEndpointPoint: endpoint
+                )
+            }
+            let guidedOverlay = ScannerProjectedGuidedOverlay(
+                markers: markers,
+                lines: lines
+            )
+
+            Task { @MainActor [weak self] in
+                guard let self, isAttached, let arView else { return }
+                arView.targetMarkerPoint = targetMarkerPoint
+                arView.projectedGuidedOverlay = guidedOverlay
+            }
+        }
+
+        private func normalizedPreviewPoint(
+            worldPoint: SIMD3<Float>,
+            frame: ARFrame,
+            viewportSize: SIMD2<Float>
+        ) -> SIMD2<Float>? {
+            guard worldPoint.x.isFinite,
+                  worldPoint.y.isFinite,
+                  worldPoint.z.isFinite else {
+                return nil
+            }
+            let point = frame.camera.projectPoint(
+                worldPoint,
+                orientation: .portrait,
+                viewportSize: CGSize(
+                    width: CGFloat(viewportSize.x),
+                    height: CGFloat(viewportSize.y)
+                )
+            )
+            let normalized = SIMD2<Float>(
+                Float(point.x) / viewportSize.x,
+                Float(point.y) / viewportSize.y
+            )
+            guard normalized.x.isFinite, normalized.y.isFinite else { return nil }
+            return normalized
+        }
+
+        /// Isolated handoff for state-owned T03 ambiguity and live revalidation.
+        private func rejectAutomaticTargetFrame(
+            _ failure: TargetLockFrameValidationFailure,
+            capture: CaptureAccumulator,
+            authority: AutomaticCaptureAuthority
+        ) {
+            targetFrameAuthorityTracker.invalidate()
+            publishAutomaticTargetFrameRejection(
+                failure,
+                requestID: capture.requestID,
+                measurementSeriesID: capture.measurementSeriesID,
+                authority: authority
+            )
+        }
+
+        private func publishAutomaticTargetFrameRejection(
+            _ failure: TargetLockFrameValidationFailure,
+            requestID: Int,
+            measurementSeriesID: Int,
+            authority: AutomaticCaptureAuthority
+        ) {
+            let diagnosticCopy = ScannerPhotoFailureCopy.message(
+                for: .targetLock(failure)
+            )
+            Task { @MainActor [weak self] in
+                guard let self,
+                      let state = scannerState,
+                      state.captureRequestID == requestID,
+                      state.measurementSeriesID == measurementSeriesID,
+                      state.rejectAutomaticCapture(
+                          authority: authority,
+                          failure: failure
+                      ) else {
+                    return
+                }
+                Self.calibrationLogger.notice(
+                    "automatic_target_rejected request_id=\(requestID, privacy: .public) measurement_series_id=\(measurementSeriesID, privacy: .public) failure=\(String(describing: failure), privacy: .public) copy=\(diagnosticCopy, privacy: .public)"
+                )
+            }
+        }
+
+        private func exactTargetFrameSample(
+            from frame: ARFrame,
+            lock: TargetLock,
+            viewportSize: SIMD2<Float>
+        ) -> ExactTargetFrameSample {
+            guard let context = lock.captureContext,
+                  viewportSize.x.isFinite,
+                  viewportSize.y.isFinite,
+                  viewportSize.x > 0,
+                  viewportSize.y > 0 else {
+                return ExactTargetFrameSample(
+                    evidence: TargetLockFrameEvidence(
+                        identity: lock.identity,
+                        projectedPreviewPoint: nil,
+                        cameraWorldPosition: nil,
+                        observedSurface: nil
+                    ),
+                    rawImagePoint: nil
+                )
+            }
+
+            let viewportCGSize = CGSize(
+                width: CGFloat(viewportSize.x),
+                height: CGFloat(viewportSize.y)
+            )
+            let projectedPoint = frame.camera.projectPoint(
+                context.worldAnchor,
+                orientation: .portrait,
+                viewportSize: viewportCGSize
+            )
+            let projectedPreviewPoint = SIMD2<Float>(
+                Float(projectedPoint.x),
+                Float(projectedPoint.y)
+            )
+            let displayTransform = frame.displayTransform(
+                for: .portrait,
+                viewportSize: viewportCGSize
+            )
+            let rawImagePoint =
+                ScannerTargetProjection.normalizedImagePoint(
+                    previewPoint: projectedPreviewPoint,
+                    viewportSize: viewportSize,
+                    displayTransform: displayTransform
+                )
+            let depthGrid = (frame.smoothedSceneDepth ?? frame.sceneDepth)
+                .flatMap(depthGrid(from:))
+            let imageResolution = frame.camera.imageResolution
+            let evidence = targetFrameEvidenceAdapter.makeEvidence(
+                identity: context.identity,
+                projectedPreviewPointPixels: projectedPreviewPoint,
+                viewportSizePixels: viewportSize,
+                rawImagePoint: rawImagePoint,
+                grid: depthGrid,
+                cameraImageResolutionPixels: SIMD2<Int>(
+                    Int(imageResolution.width.rounded()),
+                    Int(imageResolution.height.rounded())
+                ),
+                cameraIntrinsics: frame.camera.intrinsics,
+                cameraTransform: frame.camera.transform
+            )
+            return ExactTargetFrameSample(
+                evidence: evidence,
+                rawImagePoint: rawImagePoint
+            )
+        }
+
+        private func publishLiveTargetValidation(
+            _ validation: TargetLockFrameValidation,
+            evidence: TargetLockFrameEvidence?,
+            snapshot: TargetTrackingSnapshot
+        ) {
+            Task { @MainActor [weak self] in
+                guard let state = self?.scannerState,
+                      state.activeTargetIdentity == snapshot.lock.identity,
+                      state.cameraEvidenceReacquisitionID
+                        == snapshot.cameraEvidenceReacquisitionID else {
+                    return
+                }
+                if let evidence {
+                    _ = state.receiveAutomaticTargetFrameEvidence(evidence)
+                } else {
+                    _ = state.observeAutomaticTargetValidation(
+                        validation,
+                        identity: snapshot.lock.identity
+                    )
+                }
+            }
+        }
+
+        /// Returns true while a guided request owns the exact-frame path, even
+        /// if the current frame still needs to settle or regain usable depth.
+        private func processPendingGuidedCaptureIfNeeded(
+            with frame: ARFrame
+        ) -> Bool {
+            guard var pendingGuidedCapture else { return false }
+            guard capture == nil, pendingCameraZoom == nil else { return true }
+            let now = CACurrentMediaTime()
+            if pendingGuidedCapture.attemptGate.hasExpired(at: now) {
+                finishGuidedCaptureFailure(
+                    .depthUnavailable,
+                    pending: pendingGuidedCapture
+                )
+                return true
+            }
+            guard case .normal = frame.camera.trackingState else {
+                pendingGuidedCapture.settledFrameGate.trackingWasNotNormal()
+                self.pendingGuidedCapture = pendingGuidedCapture
+                return true
+            }
+
+            switch pendingGuidedCapture.settledFrameGate.frameArrived(
+                at: now
+            ) {
+            case .wait:
+                self.pendingGuidedCapture = pendingGuidedCapture
+                return true
+            case .completed:
+                self.pendingGuidedCapture = nil
+                return true
+            case .capture:
+                break
+            }
+
+            guard let viewportSize = currentPreviewViewportSize() else {
+                handleGuidedSamplingFailure(
+                    .projectionUnavailable,
+                    pending: pendingGuidedCapture
+                )
+                return true
+            }
+            let previewCenter = viewportSize / 2
+            let displayTransform = frame.displayTransform(
+                for: .portrait,
+                viewportSize: CGSize(
+                    width: CGFloat(viewportSize.x),
+                    height: CGFloat(viewportSize.y)
+                )
+            )
+            guard let rawImagePoint =
+                    ScannerTargetProjection.normalizedImagePoint(
+                        previewPoint: previewCenter,
+                        viewportSize: viewportSize,
+                        displayTransform: displayTransform
+                    ) else {
+                handleGuidedSamplingFailure(
+                    .projectionUnavailable,
+                    pending: pendingGuidedCapture
+                )
+                return true
+            }
+            let grid = (frame.smoothedSceneDepth ?? frame.sceneDepth)
+                .flatMap(depthGrid(from:))
+            let imageResolution = frame.camera.imageResolution
+            let result = guidedFrameSampler.sample(
+                request: pendingGuidedCapture.request,
+                normalizedImagePoint: rawImagePoint,
+                grid: grid,
+                cameraImageResolutionPixels: SIMD2<Int>(
+                    Int(imageResolution.width.rounded()),
+                    Int(imageResolution.height.rounded())
+                ),
+                cameraIntrinsics: frame.camera.intrinsics,
+                cameraTransform: frame.camera.transform,
+                gravity: SIMD3<Float>(0, -1, 0)
+            )
+            guard case .success(let sample) = result else {
+                let failure: ScannerGuidedFrameSamplingFailure =
+                    if case .failure(let reason) = result {
+                        reason
+                    } else {
+                        .depthUnavailable
+                    }
+                handleGuidedSamplingFailure(
+                    failure,
+                    pending: pendingGuidedCapture
+                )
+                return true
+            }
+            guard guidedFrameRequestTracker.consumeCompletion(
+                for: pendingGuidedCapture.request
+            ) else {
+                self.pendingGuidedCapture = nil
+                return true
+            }
+            self.pendingGuidedCapture = nil
+            publishGuidedFrameSample(
+                sample,
+                request: pendingGuidedCapture.request
+            )
+            return true
+        }
+
+        private func handleGuidedSamplingFailure(
+            _ failure: ScannerGuidedFrameSamplingFailure,
+            pending: PendingGuidedCapture
+        ) {
+            var next = pending
+            let now = CACurrentMediaTime()
+            guard next.attemptGate.recordFailure(at: now) == .retry else {
+                finishGuidedCaptureFailure(failure, pending: pending)
+                return
+            }
+            next.settledFrameGate = SettledFrameCaptureGate(
+                requestedAt: now,
+                policy: Self.settledFramePolicy
+            )
+            pendingGuidedCapture = next
+        }
+
+        private func finishGuidedCaptureFailure(
+            _ failure: ScannerGuidedFrameSamplingFailure,
+            pending: PendingGuidedCapture
+        ) {
+            guard guidedFrameRequestTracker.consumeCompletion(
+                for: pending.request
+            ) else {
+                pendingGuidedCapture = nil
+                return
+            }
+            pendingGuidedCapture = nil
+            publishGuidedFrameFailure(
+                failure,
+                request: pending.request
+            )
+        }
+
+        private func publishGuidedFrameSample(
+            _ sample: GuidedBoxPointSample,
+            request: GuidedBoxCaptureRequest
+        ) {
+            Task { @MainActor [weak self] in
+                guard let state = self?.scannerState,
+                      state.guidedCaptureSession?.pendingRequest == request else {
+                    return
+                }
+                _ = state.consumeGuidedCapture(sample)
+            }
+        }
+
+        private func publishGuidedFrameFailure(
+            _ failure: ScannerGuidedFrameSamplingFailure,
+            request: GuidedBoxCaptureRequest
+        ) {
+            Task { @MainActor [weak self] in
+                guard let self,
+                      let state = scannerState,
+                      state.guidedCaptureSession?.pendingRequest == request else {
+                    return
+                }
+                _ = state.guidedCaptureFailed(
+                    request: request,
+                    failure: failure.captureFailure
                 )
             }
         }
@@ -1676,8 +2545,11 @@ struct MeasurementARView: UIViewRepresentable {
 
         func session(_ session: ARSession, didFailWithError error: any Error) {
             let requestID = capture?.requestID
+            let automaticAuthority = capture?.automaticAuthority
             capture = nil
             pendingCameraZoom = nil
+            pendingGuidedCapture = nil
+            guidedFrameRequestTracker.synchronize(nil)
             sessionEventSequence += 1
 
             let message: String
@@ -1691,20 +2563,27 @@ struct MeasurementARView: UIViewRepresentable {
                 message,
                 requestID: requestID,
                 sessionEventSequence: sessionEventSequence,
-                resetMeasurementSeries: true
+                resetMeasurementSeries: true,
+                automaticAuthority: automaticAuthority,
+                guidedLifecycleBoundary: .sessionReset
             )
         }
 
         func sessionWasInterrupted(_ session: ARSession) {
             let requestID = capture?.requestID
+            let automaticAuthority = capture?.automaticAuthority
             capture = nil
             pendingCameraZoom = nil
+            pendingGuidedCapture = nil
+            guidedFrameRequestTracker.synchronize(nil)
             sessionEventSequence += 1
             publishFailure(
                 "The camera was interrupted. Wait for it to return, then scan the item again.",
                 requestID: requestID,
                 sessionEventSequence: sessionEventSequence,
-                resetMeasurementSeries: true
+                resetMeasurementSeries: false,
+                automaticAuthority: automaticAuthority,
+                guidedLifecycleBoundary: .interruption
             )
         }
 
@@ -1738,7 +2617,8 @@ struct MeasurementARView: UIViewRepresentable {
                 publishFailure(
                     Self.failureMessage(for: failure),
                     requestID: capture.requestID,
-                    measurementSeriesID: capture.measurementSeriesID
+                    measurementSeriesID: capture.measurementSeriesID,
+                    automaticAuthority: capture.automaticAuthority
                 )
                 return
             }
@@ -1753,7 +2633,8 @@ struct MeasurementARView: UIViewRepresentable {
                 publishFailure(
                     "PackMeasure couldn't verify the camera angle. Try a lower three-quarter view.",
                     requestID: capture.requestID,
-                    measurementSeriesID: capture.measurementSeriesID
+                    measurementSeriesID: capture.measurementSeriesID,
+                    automaticAuthority: capture.automaticAuthority
                 )
                 return
             }
@@ -1762,7 +2643,8 @@ struct MeasurementARView: UIViewRepresentable {
                 publishFailure(
                     "The camera calibration was unavailable for this photo. Hold steady and retake it.",
                     requestID: capture.requestID,
-                    measurementSeriesID: capture.measurementSeriesID
+                    measurementSeriesID: capture.measurementSeriesID,
+                    automaticAuthority: capture.automaticAuthority
                 )
                 return
             }
@@ -1780,7 +2662,8 @@ struct MeasurementARView: UIViewRepresentable {
             publishMeasurementCapture(
                 angleCapture,
                 requestID: capture.requestID,
-                measurementSeriesID: capture.measurementSeriesID
+                measurementSeriesID: capture.measurementSeriesID,
+                automaticAuthority: capture.automaticAuthority
             )
         }
 
@@ -1977,7 +2860,10 @@ struct MeasurementARView: UIViewRepresentable {
                 )
         }
 
-        private func sampleSingleShotFrame(from frame: ARFrame) -> SingleShotFrameSample {
+        private func sampleSingleShotFrame(
+            from frame: ARFrame,
+            processor: ScannerAutomaticPhotoFrameProcessor?
+        ) -> SingleShotFrameSample {
             guard let depthData = frame.smoothedSceneDepth ?? frame.sceneDepth else {
                 return .failed(.sceneDepthUnavailable, nil, .visionMask)
             }
@@ -1987,12 +2873,18 @@ struct MeasurementARView: UIViewRepresentable {
 
             let labelMask: PhotoInstanceLabelMask
             do {
-                labelMask = try foregroundInstanceLabelMask(from: frame.capturedImage)
+                labelMask = try foregroundInstanceLabelMask(
+                    from: frame.capturedImage,
+                    processor: processor
+                )
+            } catch let error as PhotoTargetSelectionError {
+                return .failed(.targetSelection(error), nil, .visionMask)
             } catch let error as ForegroundMaskAdapterError {
                 return frameSample(
                     after: .foreground(error),
                     from: frame,
-                    grid: grid
+                    grid: grid,
+                    hasExplicitTarget: processor != nil
                 )
             } catch {
                 let error = error as NSError
@@ -2016,11 +2908,23 @@ struct MeasurementARView: UIViewRepresentable {
                     1,
                     min(labelMask.width, labelMask.height) / 50
                 )
-                let pointCloud = try PhotoObjectMeasurement(policy: policy).makePointCloud(
-                    labelMask: labelMask,
-                    depthGrid: grid,
-                    calibration: calibration
-                )
+                let pointCloud: PhotoObjectPointCloud
+                if let processor {
+                    pointCloud = try processor.makePointCloud(
+                        labelMask: labelMask,
+                        depthGrid: grid,
+                        calibration: calibration,
+                        protectedEdgeMarginPixels:
+                            policy.protectedEdgeMarginPixels
+                    )
+                } else {
+                    pointCloud = try PhotoObjectMeasurement(policy: policy)
+                        .makePointCloud(
+                            labelMask: labelMask,
+                            depthGrid: grid,
+                            calibration: calibration
+                        )
+                }
                 let diagnostics = FrameCalibrationDiagnostics(
                     rawRegionPixelCount: pointCloud.maskQuality.selectedPixelCount,
                     retainedRegionPixelCount: pointCloud.depthSupport.supportedSampleCount,
@@ -2035,11 +2939,14 @@ struct MeasurementARView: UIViewRepresentable {
                     pointCloud.objectOutline,
                     .visionMask
                 )
+            } catch let error as PhotoTargetSelectionError {
+                return .failed(.targetSelection(error), nil, .visionMask)
             } catch let error as PhotoObjectMeasurementError {
                 return frameSample(
                     after: .photo(error),
                     from: frame,
-                    grid: grid
+                    grid: grid,
+                    hasExplicitTarget: processor != nil
                 )
             } catch {
                 let error = error as NSError
@@ -2144,9 +3051,13 @@ struct MeasurementARView: UIViewRepresentable {
         private func frameSample(
             after failure: SingleShotCaptureFailure,
             from frame: ARFrame,
-            grid: DepthGrid
+            grid: DepthGrid,
+            hasExplicitTarget: Bool = false
         ) -> SingleShotFrameSample {
-            guard failure.shouldAttemptReticleDepthFallback else {
+            guard singleShotFrameRoutePolicy.shouldAttemptReticleDepthFallback(
+                after: failure,
+                hasExplicitTarget: hasExplicitTarget
+            ) else {
                 return .failed(failure, nil, .visionMask)
             }
 
@@ -2208,7 +3119,8 @@ struct MeasurementARView: UIViewRepresentable {
         }
 
         private func foregroundInstanceLabelMask(
-            from pixelBuffer: CVPixelBuffer
+            from pixelBuffer: CVPixelBuffer,
+            processor: ScannerAutomaticPhotoFrameProcessor?
         ) throws -> PhotoInstanceLabelMask {
             try autoreleasepool {
                 let request = VNGenerateForegroundInstanceMaskRequest()
@@ -2252,9 +3164,17 @@ struct MeasurementARView: UIViewRepresentable {
 
                 let selected: PhotoSelectedInstanceMask
                 do {
-                    selected = try PhotoForegroundInstanceSelector().select(
-                        in: lowResolutionMask
-                    )
+                    if let processor {
+                        selected = try processor.selectForeground(
+                            in: lowResolutionMask
+                        )
+                    } else {
+                        selected = try PhotoForegroundInstanceSelector().select(
+                            in: lowResolutionMask
+                        )
+                    }
+                } catch let error as PhotoTargetSelectionError {
+                    throw error
                 } catch let error as PhotoObjectMeasurementError {
                     throw ForegroundMaskAdapterError.photo(
                         stage: .instanceSelection,
@@ -2746,7 +3666,9 @@ struct MeasurementARView: UIViewRepresentable {
             requestID: Int?,
             measurementSeriesID: Int? = nil,
             sessionEventSequence: Int? = nil,
-            resetMeasurementSeries: Bool = false
+            resetMeasurementSeries: Bool = false,
+            automaticAuthority: AutomaticCaptureAuthority? = nil,
+            guidedLifecycleBoundary: GuidedBoxLifecycleBoundary? = nil
         ) {
             Task { @MainActor [weak self] in
                 guard let self, let state = scannerState else {
@@ -2761,8 +3683,17 @@ struct MeasurementARView: UIViewRepresentable {
                    state.measurementSeriesID != measurementSeriesID {
                     return
                 }
+                if let automaticAuthority {
+                    let cleared = state.automaticCaptureFailed(
+                        authority: automaticAuthority
+                    )
+                    if !cleared, !resetMeasurementSeries { return }
+                }
                 if previewLifecycle.measurementFinalized() == .pause {
                     arView?.session.pause()
+                }
+                if let guidedLifecycleBoundary {
+                    state.clearGuidedCapture(for: guidedLifecycleBoundary)
                 }
                 if resetMeasurementSeries {
                     state.resetMeasurementSeries()
@@ -2796,7 +3727,8 @@ struct MeasurementARView: UIViewRepresentable {
         private func publishMeasurementCapture(
             _ capture: ScannerRecordedAngleCapture,
             requestID: Int,
-            measurementSeriesID: Int
+            measurementSeriesID: Int,
+            automaticAuthority: AutomaticCaptureAuthority?
         ) {
             Task { @MainActor [weak self] in
                 guard let self,
@@ -2810,7 +3742,19 @@ struct MeasurementARView: UIViewRepresentable {
                     // here is an idempotent fallback if ARKit races a final frame.
                     arView?.session.pause()
                 }
-                let progress = state.receiveMeasurement(capture)
+                let progress: MultiAngleMeasurementProgress
+                if let automaticAuthority {
+                    guard let automaticProgress =
+                            state.receiveAutomaticMeasurement(
+                                capture,
+                                authority: automaticAuthority
+                            ) else {
+                        return
+                    }
+                    progress = automaticProgress
+                } else {
+                    progress = state.receiveMeasurement(capture)
+                }
                 Self.calibrationLogger.notice(
                     "multi_angle measurement_series_id=\(measurementSeriesID, privacy: .public) request_id=\(requestID, privacy: .public) decision=\(progress.diagnosticDescription, privacy: .public)"
                 )

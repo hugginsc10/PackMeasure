@@ -5,6 +5,28 @@ import simd
 
 @Suite("Measurement AR exact-frame adapters")
 struct MeasurementARFrameIntegrationTests {
+    @Test @MainActor
+    func captureStartAbortClearsOnlyThePendingAutomaticAuthority() throws {
+        let state = ScannerSheetView.ScannerStateModel()
+        state.phase = .ready
+        _ = try #require(
+            state.selectAutomaticTarget(
+                rawCameraNormalizedPoint: SIMD2<Float>(0.5, 0.5)
+            )
+        )
+        state.startMeasurement()
+        let authority = try #require(state.pendingAutomaticCaptureAuthority)
+
+        #expect(
+            ScannerAutomaticCaptureAuthorityTerminator().terminatePending(
+                in: state
+            )
+        )
+        #expect(state.pendingAutomaticCaptureAuthority == nil)
+        #expect(state.phase == .ready)
+        #expect(!state.automaticCaptureFailed(authority: authority))
+    }
+
     @Test
     func immutablePromptDrivesBothForegroundSelectionAndPointCloud() throws {
         let width = 12
@@ -57,6 +79,57 @@ struct MeasurementARFrameIntegrationTests {
         #expect(throws: PhotoTargetSelectionError.staleTargetSelectionPrompt) {
             try processor.selectForeground(in: mask)
         }
+    }
+
+    @Test
+    func explicitProcessorPreservesSettledMaskEdgeMargin() throws {
+        let width = 12
+        let height = 12
+        var labels = Array(repeating: UInt32.zero, count: width * height)
+        for y in 3...8 {
+            for x in 1...4 { labels[y * width + x] = 7 }
+        }
+        var measurement = PhotoObjectMeasurement(policy: permissivePolicy)
+        measurement.rigidItemMultiplicityGuard = nil
+        let processor = ScannerAutomaticPhotoFrameProcessor(
+            prompt: .target(normalizedImagePoint: SIMD2<Float>(0.25, 0.5)),
+            measurement: measurement
+        )
+
+        #expect(throws: PhotoObjectMeasurementError.maskTouchesImageEdge) {
+            try processor.makePointCloud(
+                labelMask: PhotoInstanceLabelMask(
+                    width: width,
+                    height: height,
+                    labels: labels
+                ),
+                depthGrid: populatedDepthGrid(width: width, height: height),
+                calibration: calibration(width: width, height: height),
+                protectedEdgeMarginPixels: 1
+            )
+        }
+    }
+
+    @Test
+    func explicitTargetNeverFallsBackToLegacyCenterDepth() {
+        let otherwiseEligibleFailure = SingleShotCaptureFailure.foreground(
+            .photo(stage: .instanceSelection, error: .noForegroundInstance)
+        )
+        let policy = ScannerSingleShotFrameRoutePolicy()
+
+        #expect(otherwiseEligibleFailure.shouldAttemptReticleDepthFallback)
+        #expect(
+            !policy.shouldAttemptReticleDepthFallback(
+                after: otherwiseEligibleFailure,
+                hasExplicitTarget: true
+            )
+        )
+        #expect(
+            policy.shouldAttemptReticleDepthFallback(
+                after: otherwiseEligibleFailure,
+                hasExplicitTarget: false
+            )
+        )
     }
 
     @Test
@@ -176,6 +249,28 @@ struct MeasurementARFrameIntegrationTests {
                 cameraEvidenceReacquisitionID: 8
             ) == .ignoredStaleIdentity
         )
+
+        tracker.synchronize(identity: identity, cameraEvidenceReacquisitionID: 9)
+        _ = tracker.observe(
+            .valid,
+            identity: identity,
+            cameraEvidenceReacquisitionID: 9
+        )
+        _ = tracker.observe(
+            .valid,
+            identity: identity,
+            cameraEvidenceReacquisitionID: 9
+        )
+        tracker.invalidate()
+        #expect(!tracker.isReady)
+    }
+
+    @Test
+    func exactTargetRejectionRetainsDiagnosticCopy() {
+        let failure = TargetLockFrameValidationFailure.surfaceOutsideBounds
+        let message = ScannerPhotoFailureCopy.message(for: .targetLock(failure))
+
+        #expect(message == "\(failure.actionMessage) Diagnostic T03.")
     }
 
     @Test
@@ -248,10 +343,58 @@ struct MeasurementARFrameIntegrationTests {
         tracker.synchronize(first)
         tracker.synchronize(replacement)
 
-        #expect(!tracker.consumeCompletion(for: first))
+        let staleWasConsumed = tracker.consumeCompletion(for: first)
+        #expect(!staleWasConsumed)
         #expect(tracker.pendingRequest == replacement)
-        #expect(tracker.consumeCompletion(for: replacement))
+        let replacementWasConsumed = tracker.consumeCompletion(for: replacement)
+        #expect(replacementWasConsumed)
         #expect(tracker.pendingRequest == nil)
+    }
+
+    @Test
+    func guidedSamplingAttemptsTerminateByCountOrDeadline() {
+        var attempts = ScannerGuidedFrameAttemptGate(
+            startedAt: 10,
+            maximumWait: 2.5,
+            maximumFailedSamples: 3
+        )
+
+        #expect(attempts.recordFailure(at: 10.5) == .retry)
+        #expect(attempts.recordFailure(at: 11) == .retry)
+        #expect(attempts.recordFailure(at: 11.5) == .terminate)
+
+        var timedOut = ScannerGuidedFrameAttemptGate(
+            startedAt: 20,
+            maximumWait: 2.5,
+            maximumFailedSamples: 3
+        )
+        #expect(!timedOut.hasExpired(at: 22.49))
+        #expect(timedOut.hasExpired(at: 22.5))
+        #expect(timedOut.recordFailure(at: 22.5) == .terminate)
+    }
+
+    @Test
+    func guidedSamplingFailureMapsToTypedStateTermination() {
+        #expect(
+            ScannerGuidedFrameSamplingFailure.depthUnavailable.captureFailure
+                == .depthTimeout
+        )
+        #expect(
+            ScannerGuidedFrameSamplingFailure.insufficientDepthConfidence
+                .captureFailure == .depthTimeout
+        )
+        #expect(
+            ScannerGuidedFrameSamplingFailure.invalidCameraPose.captureFailure
+                == .trackingTimeout
+        )
+        #expect(
+            ScannerGuidedFrameSamplingFailure.invalidGravity.captureFailure
+                == .trackingTimeout
+        )
+        #expect(
+            ScannerGuidedFrameSamplingFailure.projectionUnavailable.captureFailure
+                == .trackingTimeout
+        )
     }
 
     private var permissivePolicy: PhotoObjectMeasurementPolicy {
