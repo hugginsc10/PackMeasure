@@ -67,7 +67,7 @@ final class PhotoObjectMeasurementTests: XCTestCase {
             )
         ) { error in
             XCTAssertEqual(
-                error as? PhotoObjectMeasurementError,
+                error as? PhotoTargetSelectionError,
                 .noForegroundAtTargetPoint
             )
         }
@@ -90,7 +90,7 @@ final class PhotoObjectMeasurementTests: XCTestCase {
                 )
             ) { error in
                 XCTAssertEqual(
-                    error as? PhotoObjectMeasurementError,
+                    error as? PhotoTargetSelectionError,
                     .invalidTargetSelectionPoint
                 )
             }
@@ -104,7 +104,7 @@ final class PhotoObjectMeasurementTests: XCTestCase {
             try PhotoForegroundInstanceSelector().select(in: labels, prompt: .stale)
         ) { error in
             XCTAssertEqual(
-                error as? PhotoObjectMeasurementError,
+                error as? PhotoTargetSelectionError,
                 .staleTargetSelectionPrompt
             )
         }

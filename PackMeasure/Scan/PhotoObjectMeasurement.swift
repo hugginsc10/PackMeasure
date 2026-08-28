@@ -26,6 +26,22 @@ enum PhotoObjectMeasurementError: Error, Equatable, Sendable {
     case invalidWorldPoint
 }
 
+/// Immutable selection intent captured with the settled camera frame.
+///
+/// A missing prompt preserves the legacy automatic-center path. `.stale`
+/// deliberately remains distinct from no prompt so a superseded explicit tap
+/// cannot silently fall back to whatever happens to occupy image center.
+enum PhotoTargetSelectionPrompt: Equatable, Sendable {
+    case target(normalizedImagePoint: SIMD2<Float>)
+    case stale
+}
+
+enum PhotoTargetSelectionError: Error, Equatable, Sendable {
+    case invalidTargetSelectionPoint
+    case staleTargetSelectionPrompt
+    case noForegroundAtTargetPoint
+}
+
 /// Integer instance labels produced by a foreground segmentation adapter.
 /// Label zero is treated as background by default; this type is independent of
 /// Vision so the selection and registration rules remain deterministic.
@@ -519,12 +535,38 @@ struct PhotoSelectedInstanceMask: Equatable, Sendable {
 struct PhotoForegroundInstanceSelector: Sendable {
     var backgroundLabel: UInt32 = 0
 
-    func select(in mask: PhotoInstanceLabelMask) throws -> PhotoSelectedInstanceMask {
+    func select(
+        in mask: PhotoInstanceLabelMask,
+        prompt: PhotoTargetSelectionPrompt? = nil
+    ) throws -> PhotoSelectedInstanceMask {
+        let explicitTargetPixel: (x: Int, y: Int)?
+        switch prompt {
+        case .none:
+            explicitTargetPixel = nil
+        case .stale:
+            throw PhotoTargetSelectionError.staleTargetSelectionPrompt
+        case .target(let normalizedImagePoint):
+            explicitTargetPixel = try pixel(
+                at: normalizedImagePoint,
+                width: mask.width,
+                height: mask.height
+            )
+        }
+
         let centerLabel = mask.labelAt(x: mask.width / 2, y: mask.height / 2)
         let foregroundLabels = Set(mask.labels.filter { $0 != backgroundLabel }).sorted()
 
         let selectedLabel: UInt32
-        if centerLabel != backgroundLabel {
+        if let explicitTargetPixel {
+            let targetLabel = mask.labelAt(
+                x: explicitTargetPixel.x,
+                y: explicitTargetPixel.y
+            )
+            guard targetLabel != backgroundLabel else {
+                throw PhotoTargetSelectionError.noForegroundAtTargetPoint
+            }
+            selectedLabel = targetLabel
+        } else if centerLabel != backgroundLabel {
             selectedLabel = centerLabel
         } else if foregroundLabels.count == 1, let soleLabel = foregroundLabels.first {
             selectedLabel = soleLabel
@@ -537,11 +579,21 @@ struct PhotoForegroundInstanceSelector: Sendable {
         }
 
         let matchingSelection = mask.labels.map { $0 == selectedLabel }
-        let selectedComponent = componentNearestImageCenter(
-            in: matchingSelection,
-            width: mask.width,
-            height: mask.height
-        )
+        let selectedComponent: [Int]
+        if let explicitTargetPixel {
+            selectedComponent = component(
+                containing: explicitTargetPixel.y * mask.width + explicitTargetPixel.x,
+                in: matchingSelection,
+                width: mask.width,
+                height: mask.height
+            )
+        } else {
+            selectedComponent = componentNearestImageCenter(
+                in: matchingSelection,
+                width: mask.width,
+                height: mask.height
+            )
+        }
         var isolatedSelection = Array(repeating: false, count: matchingSelection.count)
         for index in selectedComponent {
             isolatedSelection[index] = true
@@ -553,6 +605,61 @@ struct PhotoForegroundInstanceSelector: Sendable {
             label: selectedLabel,
             selected: isolatedSelection
         )
+    }
+
+    private func pixel(
+        at normalizedImagePoint: SIMD2<Float>,
+        width: Int,
+        height: Int
+    ) throws -> (x: Int, y: Int) {
+        guard normalizedImagePoint.x.isFinite,
+              normalizedImagePoint.y.isFinite,
+              (0...1).contains(normalizedImagePoint.x),
+              (0...1).contains(normalizedImagePoint.y) else {
+            throw PhotoTargetSelectionError.invalidTargetSelectionPoint
+        }
+
+        return (
+            min(width - 1, Int(normalizedImagePoint.x * Float(width))),
+            min(height - 1, Int(normalizedImagePoint.y * Float(height)))
+        )
+    }
+
+    private func component(
+        containing seed: Int,
+        in selected: [Bool],
+        width: Int,
+        height: Int
+    ) -> [Int] {
+        guard selected.indices.contains(seed), selected[seed] else { return [] }
+
+        var visited = Array(repeating: false, count: selected.count)
+        visited[seed] = true
+        var component = [seed]
+        var readIndex = 0
+        while readIndex < component.count {
+            let index = component[readIndex]
+            readIndex += 1
+            let x = index % width
+            let y = index / width
+            for offsetY in -1...1 {
+                for offsetX in -1...1 where offsetX != 0 || offsetY != 0 {
+                    let neighborX = x + offsetX
+                    let neighborY = y + offsetY
+                    guard neighborX >= 0,
+                          neighborX < width,
+                          neighborY >= 0,
+                          neighborY < height else {
+                        continue
+                    }
+                    let neighbor = neighborY * width + neighborX
+                    guard selected[neighbor], !visited[neighbor] else { continue }
+                    visited[neighbor] = true
+                    component.append(neighbor)
+                }
+            }
+        }
+        return component
     }
 
     /// Vision can occasionally assign one instance label to multiple disconnected
@@ -664,8 +771,9 @@ struct PhotoDepthSelectionMask: Equatable, Sendable {
 }
 
 /// Refines Vision's appearance mask with the LiDAR surface connected to the
-/// center reticle. This prevents a visually merged but depth-separated neighbor
-/// from contributing either outline pixels or measurement points.
+/// explicit target point, or to the center reticle when no prompt exists. This
+/// prevents a visually merged but depth-separated neighbor from contributing
+/// either outline pixels or measurement points.
 struct PhotoReticleDepthMaskFilter: Sendable {
     private struct SurfaceComponent {
         let indices: [Int]
@@ -677,7 +785,8 @@ struct PhotoReticleDepthMaskFilter: Sendable {
 
     func filter(
         mask: PhotoDepthSelectionMask,
-        depthGrid: DepthGrid
+        depthGrid: DepthGrid,
+        normalizedImagePoint: SIMD2<Float>? = nil
     ) throws -> PhotoDepthSelectionMask {
         guard mask.width == depthGrid.width,
               mask.height == depthGrid.height else {
@@ -695,10 +804,19 @@ struct PhotoReticleDepthMaskFilter: Sendable {
             }
         }
 
-        guard let region = segmenter.segment(constrainedGrid) else {
+        let retainedSurface: [Int]?
+        if let normalizedImagePoint {
+            retainedSurface = targetSurfaceIndices(
+                in: constrainedGrid,
+                normalizedImagePoint: normalizedImagePoint
+            )
+        } else {
+            retainedSurface = segmenter.segment(constrainedGrid)?.indices
+        }
+        guard let retainedSurface, !retainedSurface.isEmpty else {
             throw PhotoObjectMeasurementError.noReticleDepthSurface
         }
-        var retained = Set(region.indices)
+        var retained = Set(retainedSurface)
         var remaining = depthComponents(
             in: constrainedGrid,
             excluding: retained
@@ -730,6 +848,86 @@ struct PhotoReticleDepthMaskFilter: Sendable {
             height: mask.height,
             selected: filteredSelection
         )
+    }
+
+    private func targetSurfaceIndices(
+        in grid: DepthGrid,
+        normalizedImagePoint: SIMD2<Float>
+    ) -> [Int]? {
+        let targetX = min(
+            grid.width - 1,
+            Int(normalizedImagePoint.x * Float(grid.width))
+        )
+        let targetY = min(
+            grid.height - 1,
+            Int(normalizedImagePoint.y * Float(grid.height))
+        )
+
+        var seed: Int?
+        for radius in 0...segmenter.seedSearchRadius {
+            var candidates: [(index: Int, distanceSquared: Int, depth: Float)] = []
+            let minX = max(0, targetX - radius)
+            let maxX = min(grid.width - 1, targetX + radius)
+            let minY = max(0, targetY - radius)
+            let maxY = min(grid.height - 1, targetY + radius)
+
+            for y in minY...maxY {
+                for x in minX...maxX {
+                    guard radius == 0 || x == minX || x == maxX || y == minY || y == maxY else {
+                        continue
+                    }
+                    let index = y * grid.width + x
+                    guard isUsable(index, in: grid) else { continue }
+                    let deltaX = x - targetX
+                    let deltaY = y - targetY
+                    candidates.append((
+                        index,
+                        deltaX * deltaX + deltaY * deltaY,
+                        grid.depths[index]
+                    ))
+                }
+            }
+
+            if let best = candidates.min(by: {
+                if $0.distanceSquared == $1.distanceSquared { return $0.depth < $1.depth }
+                return $0.distanceSquared < $1.distanceSquared
+            }) {
+                seed = best.index
+                break
+            }
+        }
+        guard let seed else { return nil }
+
+        let seedDepth = grid.depths[seed]
+        let maximumSeedDelta = max(
+            segmenter.maximumSeedDeltaMeters,
+            seedDepth * segmenter.maximumSeedDeltaFraction
+        )
+        var visited = Array(repeating: false, count: grid.depths.count)
+        visited[seed] = true
+        var accepted = [seed]
+        var readIndex = 0
+        while readIndex < accepted.count {
+            let current = accepted[readIndex]
+            readIndex += 1
+            let currentDepth = grid.depths[current]
+            for neighbor in neighbors(of: current, width: grid.width, height: grid.height) {
+                guard !visited[neighbor] else { continue }
+                visited[neighbor] = true
+                guard isUsable(neighbor, in: grid) else { continue }
+                let candidateDepth = grid.depths[neighbor]
+                let localLimit = max(
+                    segmenter.localJumpMeters,
+                    currentDepth * segmenter.localJumpFraction
+                )
+                guard abs(candidateDepth - seedDepth) <= maximumSeedDelta,
+                      abs(candidateDepth - currentDepth) <= localLimit else {
+                    continue
+                }
+                accepted.append(neighbor)
+            }
+        }
+        return accepted
     }
 
     private func depthComponents(
@@ -1201,14 +1399,15 @@ struct PhotoObjectMeasurement: Sendable {
     func makePointCloud(
         labelMask: PhotoInstanceLabelMask,
         depthGrid: DepthGrid,
-        calibration: PhotoCameraCalibration
+        calibration: PhotoCameraCalibration,
+        prompt: PhotoTargetSelectionPrompt? = nil
     ) throws -> PhotoObjectPointCloud {
         try policy.validate()
         guard hasMatchingAspectRatio(labelMask, calibration) else {
             throw PhotoObjectMeasurementError.maskCalibrationAspectRatioMismatch
         }
 
-        let selected = try instanceSelector.select(in: labelMask)
+        let selected = try instanceSelector.select(in: labelMask, prompt: prompt)
         let quality = selected.quality(edgeMarginPixels: policy.protectedEdgeMarginPixels)
         guard quality.areaFraction >= policy.minimumMaskAreaFraction else {
             throw PhotoObjectMeasurementError.maskAreaTooSmall(
@@ -1234,9 +1433,16 @@ struct PhotoObjectMeasurement: Sendable {
         configuredDepthMaskFilter.segmenter.minimumConfidence = policy.minimumDepthConfidence
         configuredDepthMaskFilter.segmenter.minimumDepthMeters = policy.minimumDepthMeters
         configuredDepthMaskFilter.segmenter.maximumDepthMeters = policy.maximumDepthMeters
+        let explicitTargetPoint: SIMD2<Float>?
+        if case .target(let normalizedImagePoint) = prompt {
+            explicitTargetPoint = normalizedImagePoint
+        } else {
+            explicitTargetPoint = nil
+        }
         let depthMask = try configuredDepthMaskFilter.filter(
             mask: candidateDepthMask,
-            depthGrid: depthGrid
+            depthGrid: depthGrid,
+            normalizedImagePoint: explicitTargetPoint
         )
         let support = try PhotoDepthSupportAnalyzer(policy: policy).analyze(
             mask: candidateDepthMask,
