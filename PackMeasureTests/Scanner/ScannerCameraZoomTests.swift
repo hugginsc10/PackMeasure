@@ -512,11 +512,14 @@ struct ScannerCameraZoomTests {
 
         let previewRequestID = state.previewRequestID
         let zoomRequestID = state.cameraZoomRequestID
+        let reacquisitionID = state.cameraEvidenceReacquisitionID
         #expect(state.selectCameraZoom(.half))
 
         #expect(state.cameraZoom == .half)
         #expect(state.cameraZoomRequestID == zoomRequestID + 1)
         #expect(state.previewRequestID == previewRequestID + 1)
+        #expect(state.cameraEvidenceReacquisitionID == reacquisitionID + 1)
+        #expect(state.requiresFreshCameraEvidence)
         #expect(state.capturedEstimates.count == 1)
         #expect(state.capturedAngleRecords == acceptedAngles)
         #expect(state.measurementSeriesID == measurementSeriesID)
@@ -533,8 +536,10 @@ struct ScannerCameraZoomTests {
 
         #expect(state.phase == .checkingSupport)
         #expect(!state.canStartMeasurement)
+        #expect(state.requiresFreshCameraEvidence)
         #expect(state.previewBecameReady())
         #expect(state.phase == .ready)
+        #expect(!state.requiresFreshCameraEvidence)
         #expect(state.canStartMeasurement)
     }
 
