@@ -695,11 +695,11 @@ struct MeasurementARView: UIViewRepresentable {
         private static func failureMessage(for failure: MeasurementEstimationFailure) -> String {
             switch failure {
             case .targetRejected(.floorSurface):
-                "The photo appears to target the floor. Keep one whole object centered and retake it."
+                "The photo appears to target the floor. Point the marker at a solid face of the selected box and retake it."
             case .targetRejected(.insufficientSurfaceEvidence), .insufficientFrames:
-                "The photo did not contain enough object depth. Keep one whole object in frame and retake it."
+                "The photo did not contain enough box depth. Tap a solid face, hold steady, and retake it."
             case .geometry(.groundPlaneContamination):
-                "Too much floor or background entered the photo. Keep the whole object centered with space around its edges."
+                "Too much floor entered the photo. Show less floor and keep every box edge inside the camera view."
             case .geometry:
                 "The object could not be measured reliably from this photo. Try a clearer three-quarter angle."
             }

@@ -916,7 +916,7 @@ enum ScannerPhotoFailureCopy {
             "PackMeasure couldn't read the LiDAR depth frame. Retake the photo; if this repeats, close and reopen the scanner."
         case .foreground(.noObservation),
              .foreground(.photo(_, .noForegroundInstance)):
-            "Foreground detection didn't recognize this object. Try a lower three-quarter angle or place it against a plain wall."
+            "Foreground detection didn't recognize the selected box. Tap a solid face, show less floor, or use 4 points."
         case .targetSelection(.noForegroundAtTargetPoint):
             "PackMeasure couldn't match the selected item in this frame. Retap the same item, or use 4 points if it cannot be isolated."
         case .targetSelection(.staleTargetSelectionPrompt):
@@ -939,11 +939,11 @@ enum ScannerPhotoFailureCopy {
         case .noReticleDepthSurface:
             "PackMeasure couldn't isolate a depth-connected object under the center of the frame. Center the item and retake the photo."
         case let .maskAreaTooSmall(actual, minimum):
-            "The isolated object covered only \(percent(actual, rounded: .down))% of the photo; this build needs at least \(percent(minimum, rounded: .up))%. Move closer or use a more contrasting background."
+            "The selected box covered only \(percent(actual, rounded: .down))% of the photo; this build needs at least \(percent(minimum, rounded: .up))%. Move closer and keep a solid face under the marker."
         case let .maskAreaTooLarge(actual, maximum):
-            "The isolated object covered \(percent(actual, rounded: .up))% of the photo; this build allows at most \(percent(maximum, rounded: .down))%. Step back so the whole object has visible space around it."
+            "The selected box covered \(percent(actual, rounded: .up))% of the photo; this build allows at most \(percent(maximum, rounded: .down))%. Step back until every box edge is visible."
         case .maskTouchesImageEdge:
-            "The isolated object reached the edge of the camera view. Keep it fully visible with space around every side and retake it."
+            "The selected box reached the edge of the camera view. Keep every box edge inside the view and retake it."
         case let .insufficientDepthSamples(actual, minimum):
             "LiDAR found \(actual) usable depth points on the object; this build needs \(minimum). Hold steady at a three-quarter angle and retake it."
         case let .insufficientDepthCoverage(actual, minimum):
@@ -959,7 +959,7 @@ enum ScannerPhotoFailureCopy {
         case .multipleRigidItemsDetected:
             "The selected outline appears to include more than one box. Retap a solid face of the one box you want, or use 4 points if the boxes cannot be separated."
         case .noForegroundInstance:
-            "Foreground detection didn't recognize this object. Try a lower three-quarter angle or place it against a plain wall."
+            "Foreground detection didn't recognize the selected box. Tap a solid face, show less floor, or use 4 points."
         case .invalidLabelMaskDimensions,
              .invalidDepthMaskDimensions,
              .invalidPolicy,
@@ -978,9 +978,9 @@ enum ScannerPhotoFailureCopy {
     ) -> String {
         switch category {
         case .framing:
-            "The object reached the edge of the camera view. Keep it fully visible with space around it and retake it."
+            "The selected box reached the edge of the camera view. Keep every box edge inside the view and retake it."
         case .isolation:
-            "PackMeasure couldn't isolate one clear object from the background. Center one object against a contrasting background and retake it."
+            "PackMeasure couldn't isolate the selected box. Tap a solid face, retake it, or use 4 points."
         case .depth:
             "PackMeasure couldn't get enough depth across the object. Hold steady at a three-quarter angle and retake it."
         case .processing:
@@ -997,6 +997,18 @@ enum ScannerPhotoFailureCopy {
             return String(tenths / 10)
         }
         return "\(tenths / 10).\(abs(tenths % 10))"
+    }
+}
+
+enum ScannerCrowdedSceneCopy {
+    static let setupNote = "No clear space needed; nearby items may touch the box."
+    static let enterGuidedAction = "Crowded box? Measure with 4 points"
+    static let retryWithGuidedAction = "Use 4 points instead"
+    static let restartWithGuidedAction = "Restart with 4 points"
+    static let restartReplacementNote = "Replaces saved photo angles. No clear space needed."
+
+    static func targetStatus(ownsAcceptedEvidence: Bool) -> String {
+        ownsAcceptedEvidence ? "Same selected item locked" : "Item selected"
     }
 }
 
