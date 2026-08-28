@@ -589,6 +589,37 @@ struct MeasurementEstimatorTests {
     }
 
     @Test
+    func captureEvidenceCarriesYawOrientedBoundsFromTheAcceptedGeometry() throws {
+        let points = boxSurfacePoints(
+            length: 0.8,
+            width: 0.5,
+            height: 0.6,
+            yaw: .pi / 10
+        )
+        let geometry = try GravityAlignedBoundingBoxEstimator().estimate(points: points)
+
+        guard case .success(let evidence) = MeasurementEstimator.captureEvidenceOutcome(
+            from: points,
+            frameCount: 1
+        ) else {
+            Issue.record("expected capture evidence with target-lock bounds")
+            return
+        }
+        let bounds = try #require(evidence.targetLockBounds)
+
+        #expect(bounds.center == geometry.center)
+        #expect(bounds.yawRadians == geometry.yawRadians)
+        #expect(
+            bounds.halfExtents == SIMD3<Float>(
+                Float(geometry.dimensions.lengthMeters / 2),
+                Float(geometry.dimensions.heightMeters / 2),
+                Float(geometry.dimensions.widthMeters / 2)
+            )
+        )
+        #expect(bounds.hasValidEvidence)
+    }
+
+    @Test
     func viewpointRequiresMinimumHorizontalBaseline() {
         let policy = MeasurementViewpointPolicy()
         let reference = angleCapture(position: SIMD3<Float>(-0.074, 0, 0))
