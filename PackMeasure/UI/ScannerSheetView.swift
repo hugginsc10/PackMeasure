@@ -89,9 +89,12 @@ struct ScannerSheetView: View {
         private(set) var targetLockLifecycle = TargetLockLifecycle()
         private(set) var targetFrameValidationGate: TargetLockFrameValidationGate?
         private(set) var targetFrameValidationMessage: String?
+        private(set) var lastAutomaticCaptureRejection: TargetLockFrameValidationFailure?
         private(set) var pendingAutomaticCaptureAuthority: AutomaticPhotoCaptureAuthority?
         private(set) var guidedCaptureSession: GuidedBoxCaptureSession?
         private(set) var guidedCaptureRequestID = 0
+        private(set) var guidedPointCaptureIntentID = 0
+        private(set) var guidedCaptureFeedback: GuidedBoxCaptureFeedback?
 
         var measurementProgress: MultiAngleMeasurementProgress {
             measurementWorkflow.progress
@@ -107,6 +110,26 @@ struct ScannerSheetView: View {
 
         var activeTargetLock: TargetLock? {
             targetLockLifecycle.current
+        }
+
+        /// The public lock remains ambiguous after a T03 rejection. AR may use
+        /// this restored copy to validate live frames against the accepted
+        /// bounds without prematurely restoring capture authority.
+        var automaticTargetValidationLockSnapshot: TargetLock? {
+            guard measurementMode == .automaticPhotos,
+                  var target = targetLockLifecycle.current,
+                  target.identity.measurementSeriesID == measurementSeriesID,
+                  target.ownsAcceptedEvidence else {
+                return nil
+            }
+            if target.captureContext != nil {
+                return target
+            }
+            guard target.state == .ambiguous,
+                  target.restoreLocked() else {
+                return nil
+            }
+            return target
         }
 
         var automaticPhotoMeasurement: PhotoObjectMeasurement {
@@ -139,6 +162,18 @@ struct ScannerSheetView: View {
             baseCanStartMeasurement
                 && automaticTargetIsReady
                 && pendingAutomaticCaptureAuthority == nil
+        }
+
+        var canRequestGuidedPointCapture: Bool {
+            guard measurementMode == .guidedCorners,
+                  phase == .ready,
+                  let session = guidedCaptureSession,
+                  session.isActive,
+                  session.pendingRequest == nil,
+                  session.step.point != nil else {
+                return false
+            }
+            return true
         }
 
         var canChangeCameraZoom: Bool {
@@ -246,6 +281,7 @@ struct ScannerSheetView: View {
                 identity: identity
             )
             targetFrameValidationMessage = nil
+            lastAutomaticCaptureRejection = nil
             pendingAutomaticCaptureAuthority = nil
             return identity
         }
@@ -305,6 +341,45 @@ struct ScannerSheetView: View {
             return true
         }
 
+        /// Consumes an exact locked-target capture rejected by the T03 frame
+        /// validator. Accepted angles and bounds remain owned by the target,
+        /// but capture authority stays disabled until two new live frames pass.
+        @discardableResult
+        func rejectAutomaticCapture(
+            authority: AutomaticPhotoCaptureAuthority,
+            failure: TargetLockFrameValidationFailure
+        ) -> Bool {
+            guard measurementMode == .automaticPhotos,
+                  pendingAutomaticCaptureAuthority == authority,
+                  authority.captureRequestID == captureRequestID,
+                  authority.cameraEvidenceReacquisitionID
+                    == cameraEvidenceReacquisitionID,
+                  authority.identity.measurementSeriesID == measurementSeriesID,
+                  automaticTargetPrompt == authority.prompt else {
+                return false
+            }
+
+            var candidateLifecycle = targetLockLifecycle
+            guard let target = candidateLifecycle.current,
+                  target.identity == authority.identity,
+                  target.ownsAcceptedEvidence,
+                  let lockedContext = candidateLifecycle.currentCaptureContext,
+                  authority.lockedContext == lockedContext,
+                  candidateLifecycle.markAmbiguous(identity: authority.identity) else {
+                return false
+            }
+
+            pendingAutomaticCaptureAuthority = nil
+            targetLockLifecycle = candidateLifecycle
+            if phase.isCapturing {
+                phase = .ready
+            }
+            resetTargetFrameValidationGate()
+            targetFrameValidationMessage = failure.actionMessage
+            lastAutomaticCaptureRejection = failure
+            return true
+        }
+
         @discardableResult
         func observeAutomaticTargetValidation(
             _ validation: TargetLockFrameValidation,
@@ -336,7 +411,7 @@ struct ScannerSheetView: View {
             validator: TargetLockFrameValidator = .init()
         ) -> TargetLockFrameReadinessUpdate {
             guard measurementMode == .automaticPhotos,
-                  let target = targetLockLifecycle.current,
+                  let target = automaticTargetValidationLockSnapshot,
                   target.identity == evidence.identity else {
                 return .ignoredStaleIdentity
             }
@@ -345,10 +420,15 @@ struct ScannerSheetView: View {
                 subject: measurementSubject,
                 evidence: evidence
             )
-            return observeAutomaticTargetValidation(
+            let update = observeAutomaticTargetValidation(
                 validation,
                 identity: evidence.identity
             )
+            if update == .ready,
+               targetLockLifecycle.current?.state == .ambiguous {
+                _ = targetLockLifecycle.restoreLocked(identity: evidence.identity)
+            }
+            return update
         }
 
         func beginCameraZoomAvailabilityDiscovery() {
@@ -524,6 +604,7 @@ struct ScannerSheetView: View {
             if admittedAngle {
                 capturedAngleRecords.append(recordedCapture)
                 resetTargetFrameValidationGate()
+                lastAutomaticCaptureRejection = nil
             }
             switch progress {
             case .accepted(let consensus):
@@ -551,6 +632,7 @@ struct ScannerSheetView: View {
             isApplyingCameraZoom = false
             isPreparingForAiming = false
             requiresFreshCameraEvidence = false
+            guidedCaptureFeedback = nil
         }
 
         func prepareForAiming() {
@@ -614,7 +696,15 @@ struct ScannerSheetView: View {
                     targetID: targetID
                 )
             )
+            guidedCaptureFeedback = nil
             requestFreshPreviewReadiness()
+            return true
+        }
+
+        @discardableResult
+        func requestGuidedPointCapture() -> Bool {
+            guard canRequestGuidedPointCapture else { return false }
+            guidedPointCaptureIntentID += 1
             return true
         }
 
@@ -648,7 +738,41 @@ struct ScannerSheetView: View {
             }
             let update = session.consume(sample)
             guidedCaptureSession = session
+            switch update {
+            case .ignored:
+                break
+            case let .rejected(rejection):
+                guidedCaptureFeedback = .error(
+                    guidedCaptureRejectionMessage(rejection)
+                )
+            case .workflow(.advanced), .workflow(.ready):
+                guidedCaptureFeedback = nil
+            case let .workflow(.needsReplacement(point, error)):
+                guidedCaptureFeedback = .replacement(
+                    point: point,
+                    message: error.localizedDescription
+                )
+            case let .workflow(.failed(error)):
+                guidedCaptureFeedback = .error(error.localizedDescription)
+            case .workflow(.ignored):
+                break
+            }
             return update
+        }
+
+        @discardableResult
+        func guidedCaptureFailed(
+            request: GuidedBoxCaptureRequest,
+            failure: GuidedBoxCaptureFailure
+        ) -> Bool {
+            guard measurementMode == .guidedCorners,
+                  var session = guidedCaptureSession,
+                  session.fail(request: request, failure: failure) else {
+                return false
+            }
+            guidedCaptureSession = session
+            guidedCaptureFeedback = .error(failure.actionMessage)
+            return true
         }
 
         @discardableResult
@@ -661,6 +785,7 @@ struct ScannerSheetView: View {
             guidedCaptureSession = session
             estimate = nil
             objectOverlay = nil
+            guidedCaptureFeedback = nil
             return true
         }
 
@@ -677,6 +802,7 @@ struct ScannerSheetView: View {
             estimate = result.estimate
             objectOverlay = nil
             phase = .measured
+            guidedCaptureFeedback = nil
             return result
         }
 
@@ -723,7 +849,22 @@ struct ScannerSheetView: View {
             automaticTargetPrompt = nil
             targetFrameValidationGate = nil
             targetFrameValidationMessage = nil
+            lastAutomaticCaptureRejection = nil
             pendingAutomaticCaptureAuthority = nil
+        }
+
+        private func guidedCaptureRejectionMessage(
+            _ rejection: GuidedBoxCaptureRejection
+        ) -> String {
+            switch rejection {
+            case .invalidCapturePose:
+                GuidedBoxCaptureFailure.trackingTimeout.actionMessage
+            case .cameraMoved:
+                "The camera moved before the point was captured. Hold still and try again."
+            case .inactive, .noPendingRequest, .requestMismatch,
+                 .contextMismatch, .pointMismatch, .wrongEvidenceSource:
+                "That point capture is no longer current. Try again."
+            }
         }
 
         private func resetTargetFrameValidationGate() {

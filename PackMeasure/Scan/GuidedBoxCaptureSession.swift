@@ -47,6 +47,25 @@ struct GuidedBoxCaptureRequest: Equatable, Sendable {
     let requestedPose: GuidedBoxCapturePose
 }
 
+enum GuidedBoxCaptureFailure: Equatable, Sendable {
+    case depthTimeout
+    case trackingTimeout
+
+    var actionMessage: String {
+        switch self {
+        case .depthTimeout:
+            "LiDAR could not confirm that point. Hold still on the box and try again."
+        case .trackingTimeout:
+            "Motion tracking was not ready. Hold the phone steady and try again."
+        }
+    }
+}
+
+enum GuidedBoxCaptureFeedback: Equatable, Sendable {
+    case error(String)
+    case replacement(point: GuidedBoxPoint, message: String)
+}
+
 struct GuidedBoxPointProvenance: Equatable, Sendable {
     var requestID: Int
     var context: GuidedBoxCaptureContext
@@ -342,6 +361,23 @@ struct GuidedBoxCaptureSession: Sendable {
         apply(sample, for: update)
         measurementResult = nil
         return .workflow(update)
+    }
+
+    /// Terminates only the exact pending request that encountered an AR
+    /// timeout. Delayed failures cannot cancel a request from another point,
+    /// target, series, pose, or request ID.
+    @discardableResult
+    mutating func fail(
+        request: GuidedBoxCaptureRequest,
+        failure: GuidedBoxCaptureFailure
+    ) -> Bool {
+        _ = failure
+        guard context == request.context,
+              pendingRequest == request else {
+            return false
+        }
+        pendingRequest = nil
+        return true
     }
 
     mutating func back() {
