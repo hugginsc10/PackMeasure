@@ -721,7 +721,7 @@ struct ScannerCapturePolicyTests {
         position: SIMD3<Float>,
         horizontalForward: SIMD2<Float>? = nil,
         objectOverlay: MeasurementObjectOverlay? = nil
-    ) -> MeasurementAngleCapture {
+    ) -> ScannerRecordedAngleCapture {
         let derivedForward = SIMD2<Float>(-position.x, -position.z)
         let resolvedForward: SIMD2<Float>
         if let horizontalForward {
@@ -732,25 +732,45 @@ struct ScannerCapturePolicyTests {
             resolvedForward = SIMD2<Float>(0, -1)
         }
 
-        return MeasurementAngleCapture(
-            evidence: MeasurementCaptureEvidence(
-                estimate: MeasurementEstimate(
-                    lengthMeters: length,
-                    widthMeters: width,
-                    heightMeters: height,
-                    confidence: pointCloudConfidence == .high ? .medium : pointCloudConfidence,
-                    sampleCount: 800,
-                    frameCount: 1
+        return ScannerRecordedAngleCapture(
+            measurement: MeasurementAngleCapture(
+                evidence: MeasurementCaptureEvidence(
+                    estimate: MeasurementEstimate(
+                        lengthMeters: length,
+                        widthMeters: width,
+                        heightMeters: height,
+                        confidence: pointCloudConfidence == .high
+                            ? .medium
+                            : pointCloudConfidence,
+                        sampleCount: 800,
+                        frameCount: 1
+                    ),
+                    pointCloudConfidence: pointCloudConfidence,
+                    geometryCenter: center
                 ),
-                pointCloudConfidence: pointCloudConfidence,
-                geometryCenter: center
+                viewpoint: MeasurementCameraViewpoint(
+                    position: position,
+                    horizontalForward: resolvedForward
+                ),
+                objectOverlay: objectOverlay
             ),
-            viewpoint: MeasurementCameraViewpoint(
-                position: position,
-                horizontalForward: resolvedForward
-            ),
-            objectOverlay: objectOverlay
+            cameraProvenance: cameraProvenance()
         )
+    }
+
+    private func cameraProvenance(
+        zoom: ScannerCameraZoom = .standard
+    ) -> ScannerCameraCaptureProvenance {
+        ScannerCameraCaptureProvenance(
+            cameraZoom: zoom,
+            appliedDisplayZoomFactor: zoom.rawValue,
+            intrinsics: simd_float3x3(columns: (
+                SIMD3<Float>(1_000, 0, 0),
+                SIMD3<Float>(0, 1_000, 0),
+                SIMD3<Float>(1_000, 500, 1)
+            )),
+            imageResolutionPixels: SIMD2<Int>(2_000, 1_000)
+        )!
     }
 
     private func meters(fromInches inches: Double) -> Double {
