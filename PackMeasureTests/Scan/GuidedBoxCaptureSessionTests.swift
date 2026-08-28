@@ -99,7 +99,7 @@ final class GuidedBoxCaptureSessionTests: XCTestCase {
         XCTAssertEqual(session.confirm(), result, "Guided confirmation should be idempotent")
     }
 
-    func testMatchingWrongSourceConsumesRequestWithoutAddingMarker() throws {
+    func testAutomaticSourceIsInertAndCannotConsumeGuidedRequest() throws {
         var session = GuidedBoxCaptureSession(context: context)
         let request = try XCTUnwrap(
             session.beginRequest(requestID: 1, requestedPose: stablePose)
@@ -112,9 +112,13 @@ final class GuidedBoxCaptureSessionTests: XCTestCase {
 
         XCTAssertEqual(
             session.consume(sample),
-            .rejected(.wrongEvidenceSource(expected: .guidedLidarCorners, actual: .automaticPhoto))
+            .ignored(.wrongEvidenceSource(expected: .guidedLidarCorners, actual: .automaticPhoto))
         )
-        XCTAssertNil(session.pendingRequest, "A matching consumed request must always terminate")
+        XCTAssertEqual(
+            session.pendingRequest,
+            request,
+            "A delayed automatic callback must not terminate a guided request"
+        )
         XCTAssertEqual(session.step, .referenceCorner)
         XCTAssertTrue(session.overlay.isEmpty)
     }
@@ -141,7 +145,7 @@ final class GuidedBoxCaptureSessionTests: XCTestCase {
         XCTAssertTrue(session.overlay.isEmpty)
     }
 
-    func testSeriesOrTargetMismatchConsumesMatchingRequestAndFailsClosed() throws {
+    func testSeriesOrTargetMismatchIsInertAndLeavesGuidedRequestPending() throws {
         var session = GuidedBoxCaptureSession(context: context)
         let request = try XCTUnwrap(
             session.beginRequest(requestID: 1, requestedPose: stablePose)
@@ -162,9 +166,9 @@ final class GuidedBoxCaptureSessionTests: XCTestCase {
                     capturedPose: stablePose
                 )
             ),
-            .rejected(.contextMismatch(expected: context, actual: wrongContext))
+            .ignored(.contextMismatch(expected: context, actual: wrongContext))
         )
-        XCTAssertNil(session.pendingRequest)
+        XCTAssertEqual(session.pendingRequest, request)
         XCTAssertTrue(session.overlay.isEmpty)
     }
 
@@ -369,16 +373,17 @@ final class GuidedBoxCaptureSessionTests: XCTestCase {
 
         XCTAssertEqual(
             session.consume(sample(for: oldRequest, worldPosition: .zero)),
-            .rejected(.contextMismatch(expected: newContext, actual: context))
+            .ignored(.contextMismatch(expected: newContext, actual: context))
         )
-        XCTAssertNil(session.pendingRequest)
+        XCTAssertEqual(session.pendingRequest, newRequest)
         XCTAssertEqual(session.step, .referenceCorner)
         XCTAssertTrue(session.overlay.isEmpty)
 
-        let retry = try XCTUnwrap(
-            session.beginRequest(requestID: 2, requestedPose: stablePose)
+        XCTAssertEqual(
+            session.consume(sample(for: newRequest, worldPosition: .zero)),
+            .workflow(.advanced(to: .lengthEndpoint))
         )
-        XCTAssertEqual(retry.context, newRequest.context)
+        XCTAssertNil(session.pendingRequest)
     }
 
     private func record(
