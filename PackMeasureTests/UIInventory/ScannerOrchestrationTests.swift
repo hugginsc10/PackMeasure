@@ -154,6 +154,82 @@ struct ScannerOrchestrationTests {
     }
 
     @Test @MainActor
+    func nextAngleRetiresPriorWorldAnchorAndRequiresAFreshTap() throws {
+        let state = try selectedReadyState()
+        let firstAuthority = try #require(state.beginAutomaticCapture())
+        let firstIdentity = firstAuthority.identity
+        _ = try #require(
+            state.receiveAutomaticMeasurement(
+                automaticCapture(center: SIMD3<Float>(0.2, 0.4, -1.1)),
+                authority: firstAuthority
+            )
+        )
+        let acceptedRecords = state.capturedAngleRecords
+        let seriesID = state.measurementSeriesID
+
+        state.prepareForAiming()
+
+        #expect(state.capturedAngleRecords == acceptedRecords)
+        #expect(state.measurementSeriesID == seriesID)
+        #expect(state.activeTargetIdentity == nil)
+        #expect(state.activeTargetLock == nil)
+        #expect(state.automaticTargetPrompt == nil)
+        #expect(state.automaticTargetValidationLockSnapshot == nil)
+        #expect(state.targetFrameValidationGate == nil)
+        #expect(state.pendingAutomaticCaptureAuthority == nil)
+        #expect(state.previewBecameReady())
+        #expect(!state.canStartAutomaticCapture)
+        #expect(
+            state.observeAutomaticTargetValidation(.valid, identity: firstIdentity)
+                == .ignoredStaleIdentity
+        )
+
+        let secondPoint = SIMD2<Float>(0.72, 0.41)
+        let secondIdentity = try #require(
+            state.selectAutomaticTarget(
+                rawCameraNormalizedPoint: secondPoint,
+                id: secondTargetID
+            )
+        )
+        #expect(secondIdentity != firstIdentity)
+        #expect(secondIdentity.targetID == secondTargetID)
+        #expect(secondIdentity.measurementSeriesID == seriesID)
+        #expect(
+            state.automaticTargetPrompt
+                == .target(normalizedImagePoint: secondPoint)
+        )
+        #expect(state.canStartAutomaticCapture)
+
+        let secondAuthority = try #require(state.beginAutomaticCapture())
+        #expect(secondAuthority.identity == secondIdentity)
+        #expect(secondAuthority.lockedContext == nil)
+        #expect(
+            state.receiveAutomaticMeasurement(
+                automaticCapture(center: SIMD3<Float>(8, 0, -3)),
+                authority: firstAuthority
+            ) == nil
+        )
+        #expect(state.pendingAutomaticCaptureAuthority == secondAuthority)
+        #expect(state.capturedAngleRecords == acceptedRecords)
+    }
+
+    @Test @MainActor
+    func reopeningCameraForNextAngleIsIdempotent() throws {
+        let state = try acceptedFirstAngleState()
+        let acceptedRecords = state.capturedAngleRecords
+        let previewRequestID = state.previewRequestID
+
+        state.prepareForAiming()
+        state.prepareForAiming()
+
+        #expect(state.previewRequestID == previewRequestID + 1)
+        #expect(state.capturedAngleRecords == acceptedRecords)
+        #expect(state.activeTargetLock == nil)
+        #expect(state.automaticTargetPrompt == nil)
+        #expect(state.isPreparingForAiming)
+    }
+
+    @Test @MainActor
     func missingBoundsNoTargetAndStaleRequestFailClosed() throws {
         let noTarget = readyState()
         let fakeIdentity = TargetLockIdentity(
