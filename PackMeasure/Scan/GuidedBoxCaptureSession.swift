@@ -304,28 +304,30 @@ struct GuidedBoxCaptureSession: Sendable {
             )
         }
 
-        // From this point onward the exact pending request has been consumed,
-        // even if its returned evidence is rejected.
-        pendingRequest = nil
-
         guard sample.provenance.context == context else {
-            return .rejected(
+            return .ignored(
                 .contextMismatch(expected: context, actual: sample.provenance.context)
             )
         }
         guard sample.provenance.point == request.point else {
-            return .rejected(
+            return .ignored(
                 .pointMismatch(expected: request.point, actual: sample.provenance.point)
             )
         }
         guard evidencePolicy.accepts(sample.provenance.source, for: .guidedCorners) else {
-            return .rejected(
+            return .ignored(
                 .wrongEvidenceSource(
                     expected: .guidedLidarCorners,
                     actual: sample.provenance.source
                 )
             )
         }
+
+        // Only a callback with the complete guided provenance consumes the
+        // request. Delayed automatic or prior-series callbacks are inert even
+        // if an external request counter was reused.
+        pendingRequest = nil
+
         if let rejection = stabilityPolicy.rejection(
             from: request.requestedPose,
             to: sample.capturedPose
