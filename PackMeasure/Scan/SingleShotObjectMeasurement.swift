@@ -59,6 +59,7 @@ enum SingleShotCaptureFailure: Error, Equatable, Sendable {
     case depthGridUnreadable
     case foreground(ForegroundMaskAdapterError)
     case targetSelection(PhotoTargetSelectionError)
+    case targetLock(TargetLockFrameValidationFailure)
     case photo(PhotoObjectMeasurementError)
     case unexpectedProcessingFailure(domain: String, code: Int)
 
@@ -84,6 +85,8 @@ enum SingleShotCaptureFailure: Error, Equatable, Sendable {
             error.retryCategory
         case .targetSelection(let error):
             error.retryCategory
+        case .targetLock:
+            .isolation
         case .photo(let error):
             error.retryCategory
         }
@@ -99,6 +102,8 @@ enum SingleShotCaptureFailure: Error, Equatable, Sendable {
             error.disposition
         case .targetSelection(let error):
             error.disposition
+        case .targetLock:
+            .targetRejected
         case .photo(let error):
             error.retryCategory == .processing ? .unavailable : .targetRejected
         }
@@ -114,6 +119,8 @@ enum SingleShotCaptureFailure: Error, Equatable, Sendable {
             error.diagnosticCode
         case .targetSelection(let error):
             error.diagnosticCode
+        case .targetLock:
+            "T03"
         case .photo(let error):
             error.diagnosticCode
         case .unexpectedProcessingFailure:
@@ -131,6 +138,8 @@ enum SingleShotCaptureFailure: Error, Equatable, Sendable {
             error.diagnosticDescription
         case .targetSelection(let error):
             error.diagnosticDescription
+        case .targetLock(let reason):
+            "target_lock_frame_rejected,reason=\(String(describing: reason))"
         case .photo(let error):
             error.diagnosticDescription
         case let .unexpectedProcessingFailure(domain, code):

@@ -923,6 +923,8 @@ enum ScannerPhotoFailureCopy {
             "That item selection is no longer current. Retap the same item before taking another photo."
         case .targetSelection(.invalidTargetSelectionPoint):
             nil
+        case .targetLock(let reason):
+            reason.actionMessage
         case .foreground(.photo(_, let error)), .photo(let error):
             photoErrorMessage(for: error)
         case .foreground, .unexpectedProcessingFailure:
