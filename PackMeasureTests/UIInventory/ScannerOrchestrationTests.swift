@@ -486,6 +486,231 @@ struct ScannerOrchestrationTests {
         }
     }
 
+    @Test @MainActor
+    func guidedPointIntentRequiresReadyActiveStepWithoutPendingRequest() throws {
+        let state = ScannerSheetView.ScannerStateModel()
+
+        #expect(!state.canRequestGuidedPointCapture)
+        #expect(!state.requestGuidedPointCapture())
+        #expect(state.guidedPointCaptureIntentID == 0)
+
+        #expect(state.enterGuidedCorners(targetID: firstTargetID))
+        #expect(!state.canRequestGuidedPointCapture)
+        #expect(!state.requestGuidedPointCapture())
+        #expect(state.guidedPointCaptureIntentID == 0)
+
+        #expect(state.previewBecameReady())
+        #expect(state.canRequestGuidedPointCapture)
+        #expect(state.requestGuidedPointCapture())
+        let firstIntentID = state.guidedPointCaptureIntentID
+        #expect(firstIntentID == 1)
+
+        let request = try #require(
+            state.beginGuidedCapture(requestedPose: stablePose)
+        )
+        #expect(!state.canRequestGuidedPointCapture)
+        #expect(!state.requestGuidedPointCapture())
+        #expect(state.guidedPointCaptureIntentID == firstIntentID)
+
+        #expect(
+            state.consumeGuidedCapture(
+                guidedSample(for: request, worldPosition: .zero)
+            ) == .workflow(.advanced(to: .lengthEndpoint))
+        )
+        #expect(state.canRequestGuidedPointCapture)
+        #expect(state.requestGuidedPointCapture())
+        #expect(state.guidedPointCaptureIntentID == firstIntentID + 1)
+
+        state.clearGuidedCapture(for: .restart)
+        #expect(!state.canRequestGuidedPointCapture)
+        #expect(!state.requestGuidedPointCapture())
+        #expect(state.guidedPointCaptureIntentID == firstIntentID + 1)
+
+        #expect(state.enterGuidedCorners(targetID: secondTargetID))
+        #expect(state.previewBecameReady())
+        #expect(state.requestGuidedPointCapture())
+        #expect(state.guidedPointCaptureIntentID == firstIntentID + 2)
+    }
+
+    @Test @MainActor
+    func exactGuidedTimeoutConsumesOnlyMatchingRequestAndSurfacesRetryFeedback() throws {
+        let state = ScannerSheetView.ScannerStateModel()
+        #expect(state.enterGuidedCorners(targetID: firstTargetID))
+        #expect(state.previewBecameReady())
+        #expect(state.requestGuidedPointCapture())
+        let request = try #require(
+            state.beginGuidedCapture(requestedPose: stablePose)
+        )
+        let staleRequest = GuidedBoxCaptureRequest(
+            requestID: request.requestID,
+            context: GuidedBoxCaptureContext(
+                measurementSeriesID: request.context.measurementSeriesID + 1,
+                targetID: secondTargetID
+            ),
+            point: request.point,
+            requestedPose: request.requestedPose
+        )
+
+        #expect(
+            !state.guidedCaptureFailed(
+                request: staleRequest,
+                failure: .depthTimeout
+            )
+        )
+        #expect(state.guidedCaptureSession?.pendingRequest == request)
+        #expect(state.guidedCaptureFeedback == nil)
+
+        #expect(
+            state.guidedCaptureFailed(
+                request: request,
+                failure: .depthTimeout
+            )
+        )
+        #expect(state.guidedCaptureSession?.pendingRequest == nil)
+        #expect(
+            state.guidedCaptureFeedback
+                == .error(GuidedBoxCaptureFailure.depthTimeout.actionMessage)
+        )
+        #expect(state.canRequestGuidedPointCapture)
+
+        #expect(state.requestGuidedPointCapture())
+        let retry = try #require(
+            state.beginGuidedCapture(requestedPose: stablePose)
+        )
+        #expect(
+            state.consumeGuidedCapture(
+                guidedSample(for: retry, worldPosition: .zero)
+            ) == .workflow(.advanced(to: .lengthEndpoint))
+        )
+        #expect(state.guidedCaptureFeedback == nil)
+
+        #expect(state.requestGuidedPointCapture())
+        let trackingRequest = try #require(
+            state.beginGuidedCapture(requestedPose: stablePose)
+        )
+        #expect(
+            state.guidedCaptureFailed(
+                request: trackingRequest,
+                failure: .trackingTimeout
+            )
+        )
+        #expect(
+            state.guidedCaptureFeedback
+                == .error(GuidedBoxCaptureFailure.trackingTimeout.actionMessage)
+        )
+        #expect(state.guidedBack())
+        #expect(state.guidedCaptureFeedback == nil)
+
+        state.clearGuidedCapture(for: .sessionReset)
+        #expect(state.guidedCaptureFeedback == nil)
+    }
+
+    @Test @MainActor
+    func guidedGeometryFailureSurfacesReplacementFeedback() throws {
+        let state = ScannerSheetView.ScannerStateModel()
+        #expect(state.enterGuidedCorners(targetID: firstTargetID))
+        #expect(state.previewBecameReady())
+
+        let positions = [
+            SIMD3<Float>.zero,
+            SIMD3<Float>(0.6, 0, 0),
+            SIMD3<Float>(0.3, 0, 0.4),
+            SIMD3<Float>(0, 0.5, 0),
+        ]
+        var finalUpdate: GuidedBoxCaptureSessionUpdate?
+        for position in positions {
+            #expect(state.requestGuidedPointCapture())
+            let request = try #require(
+                state.beginGuidedCapture(requestedPose: stablePose)
+            )
+            finalUpdate = state.consumeGuidedCapture(
+                guidedSample(for: request, worldPosition: position)
+            )
+        }
+
+        guard case let .workflow(.needsReplacement(point, error)) = finalUpdate else {
+            Issue.record("expected guided geometry to request a replacement point")
+            return
+        }
+        #expect(point == .widthEndpoint)
+        #expect(
+            state.guidedCaptureFeedback
+                == .replacement(
+                    point: .widthEndpoint,
+                    message: error.localizedDescription
+                )
+        )
+
+        #expect(state.guidedBack())
+        #expect(state.guidedCaptureFeedback == nil)
+    }
+
+    @Test @MainActor
+    func exactAutomaticT03AmbiguatesThenRevalidatesStoredLockAfterTwoPasses() throws {
+        let state = try acceptedFirstAngleState(center: .zero)
+        let identity = try #require(state.activeTargetIdentity)
+        let acceptedRecords = state.capturedAngleRecords
+        let evidence = validTargetFrameEvidence(identity: identity)
+
+        state.prepareForAiming()
+        #expect(state.previewBecameReady())
+        #expect(state.receiveAutomaticTargetFrameEvidence(evidence) == .waiting)
+        #expect(state.receiveAutomaticTargetFrameEvidence(evidence) == .ready)
+        let authority = try #require(state.beginAutomaticCapture())
+        let lockedContext = try #require(authority.lockedContext)
+        let failure = TargetLockFrameValidationFailure.surfaceOutsideBounds
+
+        #expect(
+            state.rejectAutomaticCapture(
+                authority: authority,
+                failure: failure
+            )
+        )
+        #expect(state.pendingAutomaticCaptureAuthority == nil)
+        #expect(state.phase == .ready)
+        #expect(state.capturedAngleRecords == acceptedRecords)
+        #expect(state.activeTargetLock?.state == .ambiguous)
+        #expect(state.activeTargetLock?.captureContext == nil)
+        #expect(state.targetFrameValidationGate?.consecutivePassCount == 0)
+        #expect(state.targetFrameValidationMessage == failure.actionMessage)
+        #expect(state.lastAutomaticCaptureRejection == failure)
+        #expect(!state.canStartAutomaticCapture)
+
+        let validationSnapshot = try #require(
+            state.automaticTargetValidationLockSnapshot
+        )
+        #expect(validationSnapshot.state == .locked)
+        #expect(validationSnapshot.captureContext == lockedContext)
+
+        #expect(state.receiveAutomaticTargetFrameEvidence(evidence) == .waiting)
+        #expect(state.activeTargetLock?.state == .ambiguous)
+        #expect(!state.canStartAutomaticCapture)
+        #expect(state.receiveAutomaticTargetFrameEvidence(evidence) == .ready)
+        #expect(state.activeTargetLock?.state == .locked)
+        #expect(state.activeTargetLock?.captureContext == lockedContext)
+        #expect(state.canStartAutomaticCapture)
+        #expect(state.lastAutomaticCaptureRejection == failure)
+
+        let nextAuthority = try #require(state.beginAutomaticCapture())
+        #expect(
+            !state.rejectAutomaticCapture(
+                authority: authority,
+                failure: .boxNearFaceMismatch
+            )
+        )
+        #expect(state.pendingAutomaticCaptureAuthority == nextAuthority)
+        #expect(state.activeTargetLock?.state == .locked)
+        #expect(
+            state.rejectAutomaticCapture(
+                authority: nextAuthority,
+                failure: .boxNearFaceMismatch
+            )
+        )
+        #expect(state.capturedAngleRecords == acceptedRecords)
+        #expect(state.activeTargetLock?.state == .ambiguous)
+        #expect(state.lastAutomaticCaptureRejection == .boxNearFaceMismatch)
+    }
+
     @MainActor
     private func readyState() -> ScannerSheetView.ScannerStateModel {
         let state = ScannerSheetView.ScannerStateModel()
@@ -582,5 +807,59 @@ struct ScannerOrchestrationTests {
             gravity: SIMD3<Float>(0, -1, 0),
             capturedPose: stablePose
         )
+    }
+
+    private func validTargetFrameEvidence(
+        identity: TargetLockIdentity
+    ) -> TargetLockFrameEvidence {
+        TargetLockFrameEvidence(
+            identity: identity,
+            projectedPreviewPoint: SIMD2<Float>(0.5, 0.5),
+            cameraWorldPosition: SIMD3<Float>(0, 0, 2),
+            observedSurface: TargetLockObservedSurface(
+                worldPoint: SIMD3<Float>(0, 0, 0.5),
+                confidence: .medium
+            )
+        )
+    }
+}
+
+// RED-only compatibility shims let the missing live-authority API execute as
+// behavioral failures. The GREEN implementation removes this entire block;
+// the assertions above stay unchanged and bind to the production seams.
+private enum GuidedBoxCaptureFailure: Equatable, Sendable {
+    case depthTimeout
+    case trackingTimeout
+
+    var actionMessage: String { "Missing guided capture failure feedback." }
+}
+
+private enum GuidedBoxCaptureFeedback: Equatable, Sendable {
+    case error(String)
+    case replacement(point: GuidedBoxPoint, message: String)
+}
+
+@MainActor
+private extension ScannerSheetView.ScannerStateModel {
+    var guidedPointCaptureIntentID: Int { 0 }
+    var canRequestGuidedPointCapture: Bool { false }
+    var guidedCaptureFeedback: GuidedBoxCaptureFeedback? { nil }
+    var lastAutomaticCaptureRejection: TargetLockFrameValidationFailure? { nil }
+    var automaticTargetValidationLockSnapshot: TargetLock? { nil }
+
+    func requestGuidedPointCapture() -> Bool { false }
+
+    func guidedCaptureFailed(
+        request: GuidedBoxCaptureRequest,
+        failure: GuidedBoxCaptureFailure
+    ) -> Bool {
+        false
+    }
+
+    func rejectAutomaticCapture(
+        authority: AutomaticPhotoCaptureAuthority,
+        failure: TargetLockFrameValidationFailure
+    ) -> Bool {
+        false
     }
 }
