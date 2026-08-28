@@ -10,13 +10,16 @@ struct Build33ScannerPresentationTests {
 
         #expect(selection.subject == .box)
         #expect(selection.mode == .automaticPhotos)
-        #expect(selection.selectMode(.guidedCorners))
+        let selectedGuidedMode = selection.selectMode(.guidedCorners)
+        #expect(selectedGuidedMode)
         #expect(selection.mode == .guidedCorners)
 
-        #expect(selection.selectSubject(.generalItem))
+        let selectedGeneralItem = selection.selectSubject(.generalItem)
+        #expect(selectedGeneralItem)
         #expect(selection.subject == .generalItem)
         #expect(selection.mode == .automaticPhotos)
-        #expect(!selection.selectMode(.guidedCorners))
+        let rejectedGuidedMode = selection.selectMode(.guidedCorners)
+        #expect(!rejectedGuidedMode)
         #expect(selection.mode == .automaticPhotos)
     }
 
