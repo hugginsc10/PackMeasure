@@ -32,6 +32,7 @@
 		72B2BD9B3F2229A3E60FD7C9 /* MeasurementEstimator.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1FDBE8DEE3F3C0C88A2B2D8 /* MeasurementEstimator.swift */; };
 		87759A4113E1DE288FDD8AB7 /* TargetLockTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB57A76391FA481635F4749F /* TargetLockTests.swift */; };
 		8AD56996B4FAC128B09E64BA /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77EE721A9A7420432B19066B /* HomeView.swift */; };
+		90F793A156AD8C3BCCD46175 /* GuidedBoxCaptureSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 961BDEF98B3781473174BC5A /* GuidedBoxCaptureSession.swift */; };
 		91AD755F1BCD2E4F9302040A /* GuidedBoxMeasurement.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6C55F1052A5849E765D593B /* GuidedBoxMeasurement.swift */; };
 		948887BBF3D249A4522DDB48 /* ScannerCameraZoomTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EF900F501945DF4F2CBD830 /* ScannerCameraZoomTests.swift */; };
 		9ACAC0C2DE532E56CF9C8912 /* PackMeasureApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D518452488C8F3B0C8FACA8 /* PackMeasureApp.swift */; };
@@ -93,6 +94,7 @@
 		794FA5965F3F52912B316BA7 /* PhotoRigidItemMultiplicityGuard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoRigidItemMultiplicityGuard.swift; sourceTree = "<group>"; };
 		84DFB60E2C6A4BA85E8C1AA0 /* ScannerSheetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScannerSheetView.swift; sourceTree = "<group>"; };
 		87791FBEF3FF3863B53EF421 /* ScannerCapturePolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScannerCapturePolicyTests.swift; sourceTree = "<group>"; };
+		961BDEF98B3781473174BC5A /* GuidedBoxCaptureSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuidedBoxCaptureSession.swift; sourceTree = "<group>"; };
 		96CE46D4CD43343EBB49FF22 /* ManualEntryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ManualEntryTests.swift; sourceTree = "<group>"; };
 		A913CFFAAADC0687F83660C2 /* MeasurementARView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeasurementARView.swift; sourceTree = "<group>"; };
 		A95C05B5C8AAFBFBE93F5F88 /* PackMeasureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PackMeasureTests.swift; sourceTree = "<group>"; };
@@ -118,6 +120,7 @@
 			isa = PBXGroup;
 			children = (
 				AFE446F73A1491E55F2738CE /* DepthRegionSegmenter.swift */,
+				961BDEF98B3781473174BC5A /* GuidedBoxCaptureSession.swift */,
 				D6C55F1052A5849E765D593B /* GuidedBoxMeasurement.swift */,
 				6C32970059157769F21557D7 /* GuidedBoxWorkflow.swift */,
 				790431810A5597537D5F330C /* PhotoObjectMeasurement.swift */,
@@ -391,6 +394,7 @@
 				36DBA15AB0F050325DAEABCF /* DepthRegionSegmenter.swift in Sources */,
 				B39AADAB17187469145C4D4A /* GeometryModels.swift in Sources */,
 				B4AD52C415CCBB88280E366C /* GravityAlignedBoundingBoxEstimator.swift in Sources */,
+				90F793A156AD8C3BCCD46175 /* GuidedBoxCaptureSession.swift in Sources */,
 				91AD755F1BCD2E4F9302040A /* GuidedBoxMeasurement.swift in Sources */,
 				649D27BD2AC2B2A76BE517DC /* GuidedBoxWorkflow.swift in Sources */,
 				8AD56996B4FAC128B09E64BA /* HomeView.swift in Sources */,
