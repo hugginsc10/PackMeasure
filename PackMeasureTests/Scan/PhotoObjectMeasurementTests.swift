@@ -3,6 +3,113 @@ import simd
 @testable import PackMeasure
 
 final class PhotoObjectMeasurementTests: XCTestCase {
+    func testExplicitTargetSelectsTappedInstanceInsteadOfCenteredInstance() throws {
+        let labels = try labelMask(
+            [
+                [1, 1, 0, 2, 2],
+                [1, 1, 0, 2, 2],
+                [0, 0, 3, 3, 3],
+                [0, 0, 3, 3, 3],
+                [0, 0, 0, 0, 0],
+            ]
+        )
+
+        let selected = try PhotoForegroundInstanceSelector().select(
+            in: labels,
+            prompt: .target(normalizedImagePoint: SIMD2<Float>(0.9, 0.2))
+        )
+
+        XCTAssertEqual(selected.label, 2)
+        XCTAssertEqual(selected.selectedPixelCount, 4)
+        XCTAssertTrue(selected.contains(x: 4, y: 1))
+        XCTAssertFalse(selected.contains(x: 2, y: 2), "the centered object must not replace an explicit target")
+    }
+
+    func testExplicitTargetSelectsOnlyTappedConnectedComponentForReusedLabel() throws {
+        let labels = try labelMask(
+            [
+                [5, 5, 0, 0, 0, 0, 0],
+                [5, 5, 0, 0, 0, 0, 0],
+                [0, 0, 0, 5, 5, 5, 0],
+                [0, 0, 0, 5, 5, 5, 0],
+                [0, 0, 0, 5, 5, 5, 0],
+                [0, 0, 0, 0, 0, 0, 0],
+                [0, 0, 0, 0, 0, 0, 0],
+            ]
+        )
+
+        let selected = try PhotoForegroundInstanceSelector().select(
+            in: labels,
+            prompt: .target(normalizedImagePoint: SIMD2<Float>(0.1, 0.1))
+        )
+
+        XCTAssertEqual(selected.label, 5)
+        XCTAssertEqual(selected.selectedPixelCount, 4)
+        XCTAssertTrue(selected.contains(x: 0, y: 0))
+        XCTAssertFalse(selected.contains(x: 3, y: 3), "selection must follow the tapped component, not image center")
+    }
+
+    func testExplicitTargetOnBackgroundFailsWithoutSoleOrCenterFallback() throws {
+        let labels = try labelMask(
+            [
+                [0, 0, 0, 0, 0],
+                [0, 7, 7, 0, 0],
+                [0, 7, 7, 0, 0],
+                [0, 0, 0, 0, 0],
+                [0, 0, 0, 0, 0],
+            ]
+        )
+
+        XCTAssertThrowsError(
+            try PhotoForegroundInstanceSelector().select(
+                in: labels,
+                prompt: .target(normalizedImagePoint: SIMD2<Float>(0.9, 0.9))
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? PhotoObjectMeasurementError,
+                .noForegroundAtTargetPoint
+            )
+        }
+    }
+
+    func testInvalidExplicitTargetPointsFailClosed() throws {
+        let labels = try boxMask(width: 5, height: 5, x: 1...3, y: 1...3)
+        let invalidPoints = [
+            SIMD2<Float>(-.infinity, 0.5),
+            SIMD2<Float>(0.5, .nan),
+            SIMD2<Float>(-0.001, 0.5),
+            SIMD2<Float>(0.5, 1.001),
+        ]
+
+        for point in invalidPoints {
+            XCTAssertThrowsError(
+                try PhotoForegroundInstanceSelector().select(
+                    in: labels,
+                    prompt: .target(normalizedImagePoint: point)
+                )
+            ) { error in
+                XCTAssertEqual(
+                    error as? PhotoObjectMeasurementError,
+                    .invalidTargetSelectionPoint
+                )
+            }
+        }
+    }
+
+    func testStaleExplicitTargetPromptFailsClosed() throws {
+        let labels = try boxMask(width: 5, height: 5, x: 1...3, y: 1...3)
+
+        XCTAssertThrowsError(
+            try PhotoForegroundInstanceSelector().select(in: labels, prompt: .stale)
+        ) { error in
+            XCTAssertEqual(
+                error as? PhotoObjectMeasurementError,
+                .staleTargetSelectionPrompt
+            )
+        }
+    }
+
     func testSelectsForegroundInstanceUnderImageCenter() throws {
         let labels = try labelMask(
             [
@@ -444,6 +551,38 @@ final class PhotoObjectMeasurementTests: XCTestCase {
             XCTAssertGreaterThan(result.worldPoints.count, 10)
             XCTAssertTrue(result.worldPoints.allSatisfy(isFinite))
         }
+    }
+
+    func testPointCloudUsesExplicitTargetForAppearanceAndDepthSelection() throws {
+        let width = 12
+        let height = 12
+        var labels = Array(repeating: UInt32(0), count: width * height)
+        for y in 3...8 {
+            for x in 1...4 {
+                labels[y * width + x] = 7
+            }
+            for x in 6...9 {
+                labels[y * width + x] = 5
+            }
+        }
+
+        let result = try PhotoObjectMeasurement(policy: permissivePolicy).makePointCloud(
+            labelMask: try PhotoInstanceLabelMask(
+                width: width,
+                height: height,
+                labels: labels
+            ),
+            depthGrid: populatedDepthGrid(width: width, height: height),
+            calibration: calibration(imageWidth: width, imageHeight: height),
+            prompt: .target(normalizedImagePoint: SIMD2<Float>(0.25, 0.5))
+        )
+
+        XCTAssertEqual(result.selectedLabel, 7)
+        XCTAssertEqual(result.maskQuality.selectedPixelCount, 24)
+        XCTAssertEqual(
+            Set(result.depthSupport.indices),
+            Set((3...8).flatMap { y in (1...4).map { x in y * width + x } })
+        )
     }
 
     func testPointCloudExcludesDisconnectedSameLabelClutter() throws {

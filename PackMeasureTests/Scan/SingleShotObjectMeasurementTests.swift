@@ -117,6 +117,7 @@ struct SingleShotObjectMeasurementTests {
         let cases: [(PhotoObjectMeasurementError, ScannerPhotoRetryCategory, String)] = [
             (.noForegroundInstance, .isolation, "F01"),
             (.ambiguousForegroundInstances(labels: [1, 2]), .isolation, "F02"),
+            (.noForegroundAtTargetPoint, .isolation, "F07"),
             (.maskAreaTooSmall(actual: 0.01, minimum: 0.03), .isolation, "F03"),
             (.maskAreaTooLarge(actual: 0.9, maximum: 0.85), .framing, "F04"),
             (.maskTouchesImageEdge, .framing, "F05"),
@@ -136,6 +137,8 @@ struct SingleShotObjectMeasurementTests {
             (.depthGridResolutionMismatch, .processing, "P07"),
             (.invalidCameraCalibration, .processing, "P08"),
             (.invalidWorldPoint, .processing, "P09"),
+            (.invalidTargetSelectionPoint, .processing, "P10"),
+            (.staleTargetSelectionPrompt, .processing, "P11"),
         ]
 
         for (error, category, code) in cases {
@@ -216,6 +219,9 @@ struct SingleShotObjectMeasurementTests {
                 )
             ),
             .photo(.ambiguousForegroundInstances(labels: [1, 2])),
+            .photo(.noForegroundAtTargetPoint),
+            .photo(.invalidTargetSelectionPoint),
+            .photo(.staleTargetSelectionPrompt),
             .photo(.maskAreaTooSmall(actual: 0.01, minimum: 0.03)),
             .photo(.maskAreaTooLarge(actual: 0.90, maximum: 0.85)),
             .photo(.maskTouchesImageEdge),
