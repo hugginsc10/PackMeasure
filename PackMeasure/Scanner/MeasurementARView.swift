@@ -1916,20 +1916,10 @@ struct MeasurementARView: UIViewRepresentable {
             )
             guard orientedSize.width > 0, orientedSize.height > 0 else { return nil }
 
-            let transform: CGAffineTransform
-            if #available(iOS 27.0, *) {
-                // PackMeasure is portrait-only, and ARKit expresses this angle
-                // in degrees for the iOS 27 display-transform API.
-                transform = frame.displayTransform(
-                    viewRotationAngle: 90,
-                    viewportSize: orientedSize
-                )
-            } else {
-                transform = frame.displayTransform(
-                    for: .portrait,
-                    viewportSize: orientedSize
-                )
-            }
+            let transform = frame.displayTransform(
+                for: .portrait,
+                viewportSize: orientedSize
+            )
 
             let displayOutline = outline.mappingPoints { point in
                 let mapped = CGPoint(
