@@ -12,6 +12,7 @@
 		09B7FEF948AAD6D288F89342 /* MeasurementEstimatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BEC26224D7E1CD00B41CDF5 /* MeasurementEstimatorTests.swift */; };
 		0A2EDE96AA8A58C7E6E2F0A0 /* TargetLockFrameValidation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69219302EBBBE2A09187AD59 /* TargetLockFrameValidation.swift */; };
 		0C12718BED3478DDF2846719 /* ManualEntryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D4A5310F76E7632DEA4C529 /* ManualEntryView.swift */; };
+		13855B2BFED482DBF1472A02 /* PhotoRigidItemMultiplicityGuard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 794FA5965F3F52912B316BA7 /* PhotoRigidItemMultiplicityGuard.swift */; };
 		30BBD6FD335F3F0136F0B5BE /* GravityAlignedBoundingBoxEstimatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01DA76636D28E2A195DBE9FC /* GravityAlignedBoundingBoxEstimatorTests.swift */; };
 		36DBA15AB0F050325DAEABCF /* DepthRegionSegmenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFE446F73A1491E55F2738CE /* DepthRegionSegmenter.swift */; };
 		3A924383405EB0C753BF58A1 /* TargetSelectionIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5349B6BAD5E7920E5A7ABE74 /* TargetSelectionIntegrationTests.swift */; };
@@ -87,6 +88,7 @@
 		720B306F033EEFA5D3D7BADE /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		77EE721A9A7420432B19066B /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
 		790431810A5597537D5F330C /* PhotoObjectMeasurement.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoObjectMeasurement.swift; sourceTree = "<group>"; };
+		794FA5965F3F52912B316BA7 /* PhotoRigidItemMultiplicityGuard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoRigidItemMultiplicityGuard.swift; sourceTree = "<group>"; };
 		84DFB60E2C6A4BA85E8C1AA0 /* ScannerSheetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScannerSheetView.swift; sourceTree = "<group>"; };
 		87791FBEF3FF3863B53EF421 /* ScannerCapturePolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScannerCapturePolicyTests.swift; sourceTree = "<group>"; };
 		96CE46D4CD43343EBB49FF22 /* ManualEntryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ManualEntryTests.swift; sourceTree = "<group>"; };
@@ -115,6 +117,7 @@
 				D6C55F1052A5849E765D593B /* GuidedBoxMeasurement.swift */,
 				6C32970059157769F21557D7 /* GuidedBoxWorkflow.swift */,
 				790431810A5597537D5F330C /* PhotoObjectMeasurement.swift */,
+				794FA5965F3F52912B316BA7 /* PhotoRigidItemMultiplicityGuard.swift */,
 				DA64797949F43B846C4EDD69 /* SingleShotObjectMeasurement.swift */,
 				D1FD36B27E413AA99055CB3E /* TargetLock.swift */,
 				69219302EBBBE2A09187AD59 /* TargetLockFrameValidation.swift */,
@@ -396,6 +399,7 @@
 				53E91AADA18D60E722530171 /* PackingPlanner.swift in Sources */,
 				DFC589F73318DFDF2A834553 /* PackingVehicles.swift in Sources */,
 				5F68845EACD6F3268807135E /* PhotoObjectMeasurement.swift in Sources */,
+				13855B2BFED482DBF1472A02 /* PhotoRigidItemMultiplicityGuard.swift in Sources */,
 				C65D41867508C7250DFFCF99 /* RootPlaceholderView.swift in Sources */,
 				505B39CB31D0CC5449424178 /* ScannerSheetView.swift in Sources */,
 				AFA54B21D376DF7B453E6AA6 /* SingleShotObjectMeasurement.swift in Sources */,

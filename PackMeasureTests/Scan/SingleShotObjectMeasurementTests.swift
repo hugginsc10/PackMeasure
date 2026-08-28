@@ -121,6 +121,18 @@ struct SingleShotObjectMeasurementTests {
             (.maskAreaTooLarge(actual: 0.9, maximum: 0.85), .framing, "F04"),
             (.maskTouchesImageEdge, .framing, "F05"),
             (.noReticleDepthSurface, .isolation, "F06"),
+            (
+                .multipleRigidItemsDetected(
+                    PhotoRigidItemMultiplicityEvidence(
+                        splitHeightFraction: 0.5,
+                        maximumBoundaryShiftMeters: 0.1,
+                        normalizedBoundaryShift: 0.2,
+                        significantBoundaryCount: 3
+                    )
+                ),
+                .isolation,
+                "F08"
+            ),
             (.insufficientDepthSamples(actual: 31, minimum: 48), .depth, "D01"),
             (.insufficientDepthCoverage(actual: 0.42, minimum: 0.6), .depth, "D02"),
             (.insufficientHorizontalDepthSupport(actual: 0.51, minimum: 0.65), .depth, "D03"),

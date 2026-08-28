@@ -62,6 +62,26 @@ final class PhotoRigidItemMultiplicityGuardTests: XCTestCase {
         )
     }
 
+    func testCannotDistinguishPerfectlyFlushMatchingStackFromOneTallCuboid() {
+        let points = rectangularBody(
+            center: .zero,
+            size: SIMD2<Float>(0.48, 0.36),
+            minY: 0,
+            maxY: 0.48
+        ) + rectangularBody(
+            center: .zero,
+            size: SIMD2<Float>(0.48, 0.36),
+            minY: 0.48,
+            maxY: 0.96
+        )
+
+        XCTAssertEqual(
+            PhotoRigidItemMultiplicityGuard().assess(worldPoints: points),
+            .singleRigidItem,
+            "No geometric guard can separate a perfectly flush identical stack from one tall cuboid"
+        )
+    }
+
     func testAcceptsCuboidWithOrdinaryTapeSeamAndMissingDepthStripe() {
         let points = rectangularBody(
             center: .zero,
@@ -174,6 +194,19 @@ final class PhotoRigidItemMultiplicityGuardTests: XCTestCase {
         }
     }
 
+    func testPhotoMeasurementCanDisableRigidGuardForGeneralItemMode() throws {
+        let fixture = try stackedPhotoFixture()
+        let measurement = PhotoObjectMeasurement(rigidItemMultiplicityGuard: nil)
+
+        let pointCloud = try measurement.makePointCloud(
+            labelMask: fixture.mask,
+            depthGrid: fixture.depth,
+            calibration: fixture.calibration
+        )
+
+        XCTAssertFalse(pointCloud.worldPoints.isEmpty)
+    }
+
     func testMultipleItemFailureHasStableIsolationDiagnosticAndNoFallback() {
         let evidence = PhotoRigidItemMultiplicityEvidence(
             splitHeightFraction: 0.5,
@@ -186,7 +219,7 @@ final class PhotoRigidItemMultiplicityGuardTests: XCTestCase {
 
         XCTAssertEqual(failure.retryCategory, .isolation)
         XCTAssertEqual(failure.disposition, .targetRejected)
-        XCTAssertEqual(failure.diagnosticCode, "F07")
+        XCTAssertEqual(failure.diagnosticCode, "F08")
         XCTAssertFalse(failure.shouldAttemptReticleDepthFallback)
         XCTAssertEqual(
             SingleShotObjectMeasurement.failure(for: error),
@@ -209,7 +242,7 @@ final class PhotoRigidItemMultiplicityGuardTests: XCTestCase {
         XCTAssertTrue(message.contains("more than one box"))
         XCTAssertTrue(message.contains("Retap a solid face"))
         XCTAssertTrue(message.contains("4 points"))
-        XCTAssertTrue(message.contains("Diagnostic F07"))
+        XCTAssertTrue(message.contains("Diagnostic F08"))
     }
 
     private func rectangularBody(

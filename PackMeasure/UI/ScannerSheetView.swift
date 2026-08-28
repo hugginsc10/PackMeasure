@@ -912,6 +912,8 @@ enum ScannerPhotoFailureCopy {
             "LiDAR depth covered \(percent(actual, rounded: .down))% of the least-covered horizontal endpoint band in the photo; this build needs \(percent(minimum, rounded: .up))% at both horizontal ends. Hold steady at a three-quarter angle and retake it."
         case let .insufficientVerticalDepthEndpointCoverage(actual, minimum):
             "LiDAR depth covered \(percent(actual, rounded: .down))% of the least-covered vertical endpoint band in the photo; this build needs \(percent(minimum, rounded: .up))% at both vertical ends. Hold steady at a three-quarter angle and retake it."
+        case .multipleRigidItemsDetected:
+            "The selected outline appears to include more than one box. Retap a solid face of the one box you want, or use 4 points if the boxes cannot be separated."
         case .noForegroundInstance:
             "Foreground detection didn't recognize this object. Try a lower three-quarter angle or place it against a plain wall."
         case .invalidLabelMaskDimensions,

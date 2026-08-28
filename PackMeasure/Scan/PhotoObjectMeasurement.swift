@@ -22,6 +22,7 @@ enum PhotoObjectMeasurementError: Error, Equatable, Sendable {
     case insufficientVerticalDepthSupport(actual: Float, minimum: Float)
     case insufficientHorizontalDepthEndpointCoverage(actual: Float, minimum: Float)
     case insufficientVerticalDepthEndpointCoverage(actual: Float, minimum: Float)
+    case multipleRigidItemsDetected(PhotoRigidItemMultiplicityEvidence)
     case invalidCameraCalibration
     case invalidWorldPoint
 }
@@ -1395,6 +1396,10 @@ struct PhotoObjectMeasurement: Sendable {
     var policy = PhotoObjectMeasurementPolicy()
     var instanceSelector = PhotoForegroundInstanceSelector()
     var depthMaskFilter = PhotoReticleDepthMaskFilter()
+    /// The public scanner is Box-first, so strong stacked-body rejection is on
+    /// by default. General-item mode must explicitly inject `nil`; it must not
+    /// apply rigid-body change-point assumptions to arbitrary furniture.
+    var rigidItemMultiplicityGuard: PhotoRigidItemMultiplicityGuard? = .init()
 
     func makePointCloud(
         labelMask: PhotoInstanceLabelMask,
@@ -1454,6 +1459,12 @@ struct PhotoObjectMeasurement: Sendable {
             depthGrid: depthGrid,
             calibration: calibration
         )
+        if let rigidItemMultiplicityGuard,
+           case .multipleRigidItems(let evidence) = rigidItemMultiplicityGuard.assess(
+               worldPoints: points
+           ) {
+            throw PhotoObjectMeasurementError.multipleRigidItemsDetected(evidence)
+        }
 
         return PhotoObjectPointCloud(
             selectedLabel: selected.label,

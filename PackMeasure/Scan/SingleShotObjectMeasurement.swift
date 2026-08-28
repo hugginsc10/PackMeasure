@@ -202,7 +202,8 @@ extension PhotoObjectMeasurementError {
         case .noForegroundInstance,
              .ambiguousForegroundInstances,
              .noReticleDepthSurface,
-             .maskAreaTooSmall:
+             .maskAreaTooSmall,
+             .multipleRigidItemsDetected:
             .isolation
         case .insufficientDepthSamples,
              .insufficientDepthCoverage,
@@ -238,6 +239,8 @@ extension PhotoObjectMeasurementError {
             "F05"
         case .noReticleDepthSurface:
             "F06"
+        case .multipleRigidItemsDetected:
+            "F08"
         case .insufficientDepthSamples:
             "D01"
         case .insufficientDepthCoverage:
@@ -311,6 +314,8 @@ extension PhotoObjectMeasurementError {
             "insufficient_horizontal_depth_endpoint_coverage,actual=\(Self.metric(actual)),minimum=\(Self.metric(minimum))"
         case let .insufficientVerticalDepthEndpointCoverage(actual, minimum):
             "insufficient_vertical_depth_endpoint_coverage,actual=\(Self.metric(actual)),minimum=\(Self.metric(minimum))"
+        case let .multipleRigidItemsDetected(evidence):
+            "multiple_rigid_items_detected,split_height_fraction=\(Self.metric(evidence.splitHeightFraction)),maximum_boundary_shift_meters=\(Self.metric(evidence.maximumBoundaryShiftMeters)),normalized_boundary_shift=\(Self.metric(evidence.normalizedBoundaryShift)),significant_boundary_count=\(evidence.significantBoundaryCount)"
         case .invalidCameraCalibration:
             "invalid_camera_calibration"
         case .invalidWorldPoint:
@@ -371,7 +376,8 @@ enum SingleShotObjectMeasurement {
              .insufficientHorizontalDepthSupport,
              .insufficientVerticalDepthSupport,
              .insufficientHorizontalDepthEndpointCoverage,
-             .insufficientVerticalDepthEndpointCoverage:
+             .insufficientVerticalDepthEndpointCoverage,
+             .multipleRigidItemsDetected:
             return .targetRejected(.insufficientSurfaceEvidence)
         }
     }
