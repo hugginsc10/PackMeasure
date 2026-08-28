@@ -19,14 +19,14 @@ struct CrowdedSceneScannerCopyTests {
     }
 
     @Test
-    func selectedLanguageDoesNotClaimAcceptedIdentityTooEarly() {
+    func selectedLanguageStaysScopedToTheCurrentAngle() {
         #expect(
             ScannerCrowdedSceneCopy.targetStatus(ownsAcceptedEvidence: false)
-                == "Item selected"
+                == "Item selected for this angle"
         )
         #expect(
             ScannerCrowdedSceneCopy.targetStatus(ownsAcceptedEvidence: true)
-                == "Same selected item locked"
+                == "Item captured for this angle"
         )
     }
 

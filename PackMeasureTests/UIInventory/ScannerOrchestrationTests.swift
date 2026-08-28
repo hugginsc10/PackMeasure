@@ -288,8 +288,9 @@ struct ScannerOrchestrationTests {
         let state = try acceptedFirstAngleState()
         let identity = try #require(state.activeTargetIdentity)
 
-        state.prepareForAiming()
-        #expect(state.previewBecameReady())
+        // Exercise the stored-lock validator directly. The shipping next-angle
+        // path retires this lock before reopening the camera.
+        state.phase = .ready
         #expect(!state.canStartAutomaticCapture)
 
         let stale = TargetLockIdentity(
@@ -326,9 +327,8 @@ struct ScannerOrchestrationTests {
     }
 
     @Test @MainActor
-    func zoomReacquisitionPreservesAngleButGenericPreviewCannotUnlockShutter() throws {
+    func betweenAngleZoomPreservesAcceptedAnglesButStillRequiresFreshTap() throws {
         let state = try acceptedFirstAngleState()
-        let identity = try #require(state.activeTargetIdentity)
         let acceptedRecords = state.capturedAngleRecords
         let seriesID = state.measurementSeriesID
 
@@ -342,12 +342,12 @@ struct ScannerOrchestrationTests {
         #expect(state.selectCameraZoom(.half))
 
         #expect(state.cameraEvidenceReacquisitionID == 1)
-        #expect(state.targetFrameValidationGate?.consecutivePassCount == 0)
+        #expect(state.targetFrameValidationGate == nil)
         #expect(state.targetFrameValidationMessage == nil)
         #expect(state.pendingAutomaticCaptureAuthority == nil)
         #expect(state.capturedAngleRecords == acceptedRecords)
         #expect(state.measurementSeriesID == seriesID)
-        #expect(state.activeTargetIdentity == identity)
+        #expect(state.activeTargetIdentity == nil)
 
         state.updateCameraZoomAvailability(
             [.half, .standard],
@@ -357,30 +357,27 @@ struct ScannerOrchestrationTests {
         )
         #expect(state.previewBecameReady())
         #expect(!state.requiresFreshCameraEvidence)
-        #expect(!state.canStartMeasurement)
         #expect(!state.canStartAutomaticCapture)
 
-        #expect(
-            state.observeAutomaticTargetValidation(.valid, identity: identity)
-                == .waiting
+        let nextIdentity = try #require(
+            state.selectAutomaticTarget(
+                rawCameraNormalizedPoint: SIMD2<Float>(0.59, 0.36),
+                id: secondTargetID
+            )
         )
-        #expect(
-            state.observeAutomaticTargetValidation(.valid, identity: identity)
-                == .ready
-        )
-        #expect(state.canStartMeasurement)
+        #expect(nextIdentity.targetID == secondTargetID)
+        #expect(state.canStartAutomaticCapture)
 
-        let nextAuthority = try #require(state.beginAutomaticCapture())
-        #expect(nextAuthority.lockedContext == state.activeTargetLock?.captureContext)
-        #expect(nextAuthority.cameraEvidenceReacquisitionID == 1)
+        let authority = try #require(state.beginAutomaticCapture())
+        #expect(authority.lockedContext == nil)
+        #expect(authority.cameraEvidenceReacquisitionID == 1)
     }
 
     @Test @MainActor
     func frameEvidenceAdapterUsesValidatorAndIgnoresStaleIdentity() throws {
         let state = try acceptedFirstAngleState(center: .zero)
         let identity = try #require(state.activeTargetIdentity)
-        state.prepareForAiming()
-        #expect(state.previewBecameReady())
+        state.phase = .ready
 
         let validEvidence = TargetLockFrameEvidence(
             identity: identity,
@@ -412,6 +409,35 @@ struct ScannerOrchestrationTests {
                 == .ignoredStaleIdentity
         )
         #expect(state.targetFrameValidationGate?.isReady == true)
+    }
+
+    @Test @MainActor
+    func nextAngleTargetCanBeChangedWithoutLosingAcceptedEvidence() throws {
+        let state = try acceptedFirstAngleState(center: .zero)
+        let acceptedRecords = state.capturedAngleRecords
+        state.prepareForAiming()
+        #expect(state.previewBecameReady())
+
+        let initialIdentity = try #require(
+            state.selectAutomaticTarget(
+                rawCameraNormalizedPoint: SIMD2<Float>(0.31, 0.57),
+                id: firstTargetID
+            )
+        )
+        #expect(initialIdentity.targetID == firstTargetID)
+        #expect(state.canChangeAutomaticTarget)
+        #expect(state.changeAutomaticTarget())
+        #expect(state.activeTargetIdentity == nil)
+
+        let replacementIdentity = try #require(
+            state.selectAutomaticTarget(
+                rawCameraNormalizedPoint: SIMD2<Float>(0.68, 0.44),
+                id: secondTargetID
+            )
+        )
+        #expect(replacementIdentity.targetID == secondTargetID)
+        #expect(state.activeTargetIdentity == replacementIdentity)
+        #expect(state.capturedAngleRecords == acceptedRecords)
     }
 
     @Test @MainActor
@@ -722,14 +748,35 @@ struct ScannerOrchestrationTests {
     }
 
     @Test @MainActor
+    func betweenAngleRetargetingDoesNotUseLockedFrameValidation() throws {
+        let state = try acceptedFirstAngleState(center: .zero)
+        state.prepareForAiming()
+        #expect(state.previewBecameReady())
+        let freshIdentity = try #require(
+            state.selectAutomaticTarget(
+                rawCameraNormalizedPoint: SIMD2<Float>(0.42, 0.63),
+                id: secondTargetID
+            )
+        )
+        #expect(
+            state.receiveAutomaticTargetFrameEvidence(
+                validTargetFrameEvidence(identity: freshIdentity)
+            ) == .ignoredStaleIdentity
+        )
+        #expect(state.targetFrameValidationGate?.isReady != true)
+        #expect(state.canStartAutomaticCapture)
+    }
+
+    @Test @MainActor
     func exactAutomaticT03AmbiguatesThenRevalidatesStoredLockAfterTwoPasses() throws {
         let state = try acceptedFirstAngleState(center: .zero)
         let identity = try #require(state.activeTargetIdentity)
         let acceptedRecords = state.capturedAngleRecords
         let evidence = validTargetFrameEvidence(identity: identity)
 
-        state.prepareForAiming()
-        #expect(state.previewBecameReady())
+        // This directly exercises the defensive stored-lock recovery seam. The
+        // shipping next-angle path retires the lock and asks for a fresh tap.
+        state.phase = .ready
         #expect(state.receiveAutomaticTargetFrameEvidence(evidence) == .waiting)
         #expect(state.receiveAutomaticTargetFrameEvidence(evidence) == .ready)
         let authority = try #require(state.beginAutomaticCapture())

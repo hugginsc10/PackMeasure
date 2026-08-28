@@ -9,6 +9,7 @@ struct Build33ScannerPresentationTests {
         let needsSelection = ScannerBuild33RuntimePolicy.automaticCapture(
             hasTarget: false,
             ownsAcceptedEvidence: false,
+            acceptedAngleCount: 0,
             canCapture: false,
             validationMessage: nil
         )
@@ -19,6 +20,7 @@ struct Build33ScannerPresentationTests {
         let selected = ScannerBuild33RuntimePolicy.automaticCapture(
             hasTarget: true,
             ownsAcceptedEvidence: false,
+            acceptedAngleCount: 0,
             canCapture: true,
             validationMessage: nil
         )
@@ -29,16 +31,29 @@ struct Build33ScannerPresentationTests {
         let reacquiring = ScannerBuild33RuntimePolicy.automaticCapture(
             hasTarget: true,
             ownsAcceptedEvidence: true,
+            acceptedAngleCount: 1,
             canCapture: false,
             validationMessage: "Move until the same selected item is clearly visible."
         )
         #expect(reacquiring.actionTitle == "Take photo")
-        #expect(reacquiring.targetStatus == "Same selected item locked")
+        #expect(reacquiring.targetStatus == "Item captured for this angle")
         #expect(
             reacquiring.guidance
                 == "Move until the same selected item is clearly visible."
         )
         #expect(!reacquiring.canCapture)
+
+        let nextAngleNeedsRetap = ScannerBuild33RuntimePolicy.automaticCapture(
+            hasTarget: false,
+            ownsAcceptedEvidence: false,
+            acceptedAngleCount: 1,
+            canCapture: false,
+            validationMessage: nil
+        )
+        #expect(nextAngleNeedsRetap.actionTitle == "Select item")
+        #expect(nextAngleNeedsRetap.guidance == "Tap the item again for angle 2.")
+        #expect(nextAngleNeedsRetap.targetStatus == nil)
+        #expect(!nextAngleNeedsRetap.canCapture)
     }
 
     @Test
