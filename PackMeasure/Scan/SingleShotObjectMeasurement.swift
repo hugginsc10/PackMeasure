@@ -58,6 +58,7 @@ enum SingleShotCaptureFailure: Error, Equatable, Sendable {
     case sceneDepthUnavailable
     case depthGridUnreadable
     case foreground(ForegroundMaskAdapterError)
+    case targetSelection(PhotoTargetSelectionError)
     case photo(PhotoObjectMeasurementError)
     case unexpectedProcessingFailure(domain: String, code: Int)
 
@@ -81,6 +82,8 @@ enum SingleShotCaptureFailure: Error, Equatable, Sendable {
             .processing
         case .foreground(let error):
             error.retryCategory
+        case .targetSelection(let error):
+            error.retryCategory
         case .photo(let error):
             error.retryCategory
         }
@@ -94,6 +97,8 @@ enum SingleShotCaptureFailure: Error, Equatable, Sendable {
             .unavailable
         case .foreground(let error):
             error.disposition
+        case .targetSelection(let error):
+            error.disposition
         case .photo(let error):
             error.retryCategory == .processing ? .unavailable : .targetRejected
         }
@@ -106,6 +111,8 @@ enum SingleShotCaptureFailure: Error, Equatable, Sendable {
         case .depthGridUnreadable:
             "C02"
         case .foreground(let error):
+            error.diagnosticCode
+        case .targetSelection(let error):
             error.diagnosticCode
         case .photo(let error):
             error.diagnosticCode
@@ -122,10 +129,54 @@ enum SingleShotCaptureFailure: Error, Equatable, Sendable {
             "depth_grid_unreadable"
         case .foreground(let error):
             error.diagnosticDescription
+        case .targetSelection(let error):
+            error.diagnosticDescription
         case .photo(let error):
             error.diagnosticDescription
         case let .unexpectedProcessingFailure(domain, code):
             "unexpected_processing_failure,domain=\(domain),code=\(code)"
+        }
+    }
+}
+
+extension PhotoTargetSelectionError {
+    var retryCategory: ScannerPhotoRetryCategory {
+        switch self {
+        case .invalidTargetSelectionPoint:
+            .processing
+        case .staleTargetSelectionPrompt, .noForegroundAtTargetPoint:
+            .isolation
+        }
+    }
+
+    var disposition: SingleShotFailureDisposition {
+        switch self {
+        case .invalidTargetSelectionPoint:
+            .unavailable
+        case .staleTargetSelectionPrompt, .noForegroundAtTargetPoint:
+            .targetRejected
+        }
+    }
+
+    var diagnosticCode: String {
+        switch self {
+        case .invalidTargetSelectionPoint:
+            "P10"
+        case .staleTargetSelectionPrompt:
+            "T02"
+        case .noForegroundAtTargetPoint:
+            "F07"
+        }
+    }
+
+    var diagnosticDescription: String {
+        switch self {
+        case .invalidTargetSelectionPoint:
+            "invalid_target_selection_point"
+        case .staleTargetSelectionPrompt:
+            "stale_target_selection_prompt"
+        case .noForegroundAtTargetPoint:
+            "no_foreground_at_target_point"
         }
     }
 }

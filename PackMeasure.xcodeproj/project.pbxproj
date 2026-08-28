@@ -23,6 +23,7 @@
 		53E91AADA18D60E722530171 /* PackingPlanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACE91F472F72AC07FEC8432F /* PackingPlanner.swift */; };
 		5E0B34A313A28EA94D945649 /* ScannerCapturePolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87791FBEF3FF3863B53EF421 /* ScannerCapturePolicyTests.swift */; };
 		5E9AA3639748D36667D1C43C /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CF21F67461D439CFC0A0C93 /* AppModel.swift */; };
+		5EB0FD3A212C404E7D6765E7 /* ScannerTargetProjection.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFC2C247D8D005E9F20D3D31 /* ScannerTargetProjection.swift */; };
 		5F68845EACD6F3268807135E /* PhotoObjectMeasurement.swift in Sources */ = {isa = PBXBuildFile; fileRef = 790431810A5597537D5F330C /* PhotoObjectMeasurement.swift */; };
 		63ED8F2D2AA20E138544E34C /* AppModelInventoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1B053787D5054BAAEE243C1 /* AppModelInventoryTests.swift */; };
 		649D27BD2AC2B2A76BE517DC /* GuidedBoxWorkflow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C32970059157769F21557D7 /* GuidedBoxWorkflow.swift */; };
@@ -106,6 +107,7 @@
 		D1FDBE8DEE3F3C0C88A2B2D8 /* MeasurementEstimator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeasurementEstimator.swift; sourceTree = "<group>"; };
 		D6C55F1052A5849E765D593B /* GuidedBoxMeasurement.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuidedBoxMeasurement.swift; sourceTree = "<group>"; };
 		DA64797949F43B846C4EDD69 /* SingleShotObjectMeasurement.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SingleShotObjectMeasurement.swift; sourceTree = "<group>"; };
+		EFC2C247D8D005E9F20D3D31 /* ScannerTargetProjection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScannerTargetProjection.swift; sourceTree = "<group>"; };
 		F1B053787D5054BAAEE243C1 /* AppModelInventoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModelInventoryTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -118,6 +120,7 @@
 				6C32970059157769F21557D7 /* GuidedBoxWorkflow.swift */,
 				790431810A5597537D5F330C /* PhotoObjectMeasurement.swift */,
 				794FA5965F3F52912B316BA7 /* PhotoRigidItemMultiplicityGuard.swift */,
+				EFC2C247D8D005E9F20D3D31 /* ScannerTargetProjection.swift */,
 				DA64797949F43B846C4EDD69 /* SingleShotObjectMeasurement.swift */,
 				D1FD36B27E413AA99055CB3E /* TargetLock.swift */,
 				69219302EBBBE2A09187AD59 /* TargetLockFrameValidation.swift */,
@@ -402,6 +405,7 @@
 				13855B2BFED482DBF1472A02 /* PhotoRigidItemMultiplicityGuard.swift in Sources */,
 				C65D41867508C7250DFFCF99 /* RootPlaceholderView.swift in Sources */,
 				505B39CB31D0CC5449424178 /* ScannerSheetView.swift in Sources */,
+				5EB0FD3A212C404E7D6765E7 /* ScannerTargetProjection.swift in Sources */,
 				AFA54B21D376DF7B453E6AA6 /* SingleShotObjectMeasurement.swift in Sources */,
 				0998BB49CF34380BDAAFF37E /* TargetLock.swift in Sources */,
 				0A2EDE96AA8A58C7E6E2F0A0 /* TargetLockFrameValidation.swift in Sources */,

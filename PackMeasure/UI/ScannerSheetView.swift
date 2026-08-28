@@ -879,6 +879,12 @@ enum ScannerPhotoFailureCopy {
         case .foreground(.noObservation),
              .foreground(.photo(_, .noForegroundInstance)):
             "Foreground detection didn't recognize this object. Try a lower three-quarter angle or place it against a plain wall."
+        case .targetSelection(.noForegroundAtTargetPoint):
+            "PackMeasure couldn't match the selected item in this frame. Retap the same item, or use 4 points if it cannot be isolated."
+        case .targetSelection(.staleTargetSelectionPrompt):
+            "That item selection is no longer current. Retap the same item before taking another photo."
+        case .targetSelection(.invalidTargetSelectionPoint):
+            nil
         case .foreground(.photo(_, let error)), .photo(let error):
             photoErrorMessage(for: error)
         case .foreground, .unexpectedProcessingFailure:
