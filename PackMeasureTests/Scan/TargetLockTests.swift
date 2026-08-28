@@ -49,24 +49,23 @@ struct TargetLockTests {
         var lifecycle = TargetLockLifecycle()
         let identity = lifecycle.select(measurementSeriesID: 7, id: firstID)
 
-        #expect(
-            !lifecycle.promote(
-                identity: identity,
-                worldAnchor: SIMD3<Float>(.nan, 0, 0),
-                bounds: targetBounds()
+        let nonFinitePromotion = lifecycle.promote(
+            identity: identity,
+            worldAnchor: SIMD3<Float>(.nan, 0, 0),
+            bounds: targetBounds()
+        )
+        let degeneratePromotion = lifecycle.promote(
+            identity: identity,
+            worldAnchor: .zero,
+            bounds: TargetLockBounds(
+                center: .zero,
+                halfExtents: SIMD3<Float>(0.5, 0, 0.5),
+                yawRadians: 0
             )
         )
-        #expect(
-            !lifecycle.promote(
-                identity: identity,
-                worldAnchor: .zero,
-                bounds: TargetLockBounds(
-                    center: .zero,
-                    halfExtents: SIMD3<Float>(0.5, 0, 0.5),
-                    yawRadians: 0
-                )
-            )
-        )
+
+        #expect(!nonFinitePromotion)
+        #expect(!degeneratePromotion)
         #expect(lifecycle.current?.state == .provisional)
         #expect(lifecycle.currentCaptureContext == nil)
     }
@@ -76,7 +75,9 @@ struct TargetLockTests {
         var lifecycle = TargetLockLifecycle()
         let identity = lifecycle.select(measurementSeriesID: 7, id: firstID)
 
-        #expect(lifecycle.cancelUnaccepted(identity: identity))
+        let canceled = lifecycle.cancelUnaccepted(identity: identity)
+
+        #expect(canceled)
         #expect(lifecycle.current == nil)
     }
 
@@ -86,7 +87,9 @@ struct TargetLockTests {
         let identity = try #require(lifecycle.current?.identity)
 
         #expect(lifecycle.current?.state == .locked)
-        #expect(lifecycle.cancelUnaccepted(identity: identity))
+        let canceled = lifecycle.cancelUnaccepted(identity: identity)
+
+        #expect(canceled)
         #expect(lifecycle.current == nil)
     }
 
@@ -96,9 +99,12 @@ struct TargetLockTests {
         let identity = try #require(lifecycle.current?.identity)
         let context = try #require(lifecycle.currentCaptureContext)
 
-        #expect(lifecycle.recordAcceptedAngle(using: context))
+        let recorded = lifecycle.recordAcceptedAngle(using: context)
+        let canceled = lifecycle.cancelUnaccepted(identity: identity)
+
+        #expect(recorded)
         #expect(lifecycle.current?.acceptedAngleCount == 1)
-        #expect(!lifecycle.cancelUnaccepted(identity: identity))
+        #expect(!canceled)
         #expect(lifecycle.current?.identity == identity)
     }
 
@@ -106,7 +112,9 @@ struct TargetLockTests {
     func replacingCanceledSelectionUsesFreshIdentity() throws {
         var lifecycle = TargetLockLifecycle()
         let first = lifecycle.select(measurementSeriesID: 7, id: firstID)
-        #expect(lifecycle.cancelUnaccepted(identity: first))
+        let canceled = lifecycle.cancelUnaccepted(identity: first)
+
+        #expect(canceled)
 
         let replacement = lifecycle.select(measurementSeriesID: 7, id: secondID)
 
@@ -116,22 +124,35 @@ struct TargetLockTests {
     }
 
     @Test
+    func secondTapCannotReplaceActiveTargetWithoutExplicitCancellation() {
+        var lifecycle = TargetLockLifecycle()
+        let first = lifecycle.select(measurementSeriesID: 7, id: firstID)
+
+        let repeatedSelection = lifecycle.select(measurementSeriesID: 7, id: secondID)
+
+        #expect(repeatedSelection == first)
+        #expect(lifecycle.current?.identity == first)
+        #expect(lifecycle.current?.state == .provisional)
+    }
+
+    @Test
     func delayedContextFromCanceledTargetCannotAdvanceReplacement() throws {
         var lifecycle = lockedLifecycle(id: firstID)
         let firstIdentity = try #require(lifecycle.current?.identity)
         let delayedContext = try #require(lifecycle.currentCaptureContext)
-        #expect(lifecycle.cancelUnaccepted(identity: firstIdentity))
+        let canceled = lifecycle.cancelUnaccepted(identity: firstIdentity)
+        #expect(canceled)
 
         let replacement = lifecycle.select(measurementSeriesID: 7, id: secondID)
-        #expect(
-            lifecycle.promote(
-                identity: replacement,
-                worldAnchor: SIMD3<Float>(0, 0, 0.5),
-                bounds: targetBounds()
-            )
+        let promoted = lifecycle.promote(
+            identity: replacement,
+            worldAnchor: SIMD3<Float>(0, 0, 0.5),
+            bounds: targetBounds()
         )
+        let recordedDelayedContext = lifecycle.recordAcceptedAngle(using: delayedContext)
 
-        #expect(!lifecycle.recordAcceptedAngle(using: delayedContext))
+        #expect(promoted)
+        #expect(!recordedDelayedContext)
         #expect(lifecycle.current?.identity == replacement)
         #expect(lifecycle.current?.acceptedAngleCount == 0)
     }
@@ -149,7 +170,9 @@ struct TargetLockTests {
             bounds: current.bounds
         )
 
-        #expect(!lifecycle.recordAcceptedAngle(using: stale))
+        let recorded = lifecycle.recordAcceptedAngle(using: stale)
+
+        #expect(!recorded)
         #expect(lifecycle.current?.acceptedAngleCount == 0)
     }
 
@@ -158,16 +181,21 @@ struct TargetLockTests {
         var lifecycle = lockedLifecycle()
         let identity = try #require(lifecycle.current?.identity)
         let context = try #require(lifecycle.currentCaptureContext)
-        #expect(lifecycle.recordAcceptedAngle(using: context))
+        let recorded = lifecycle.recordAcceptedAngle(using: context)
+        let markedAmbiguous = lifecycle.markAmbiguous(identity: identity)
 
-        #expect(lifecycle.markAmbiguous(identity: identity))
+        #expect(recorded)
+
+        #expect(markedAmbiguous)
         #expect(lifecycle.current?.state == .ambiguous)
         #expect(lifecycle.current?.acceptedAngleCount == 1)
         #expect(lifecycle.currentCaptureContext == nil)
 
-        #expect(lifecycle.restoreLocked(identity: identity))
+        let restored = lifecycle.restoreLocked(identity: identity)
+        #expect(restored)
         #expect(lifecycle.currentCaptureContext != nil)
-        #expect(lifecycle.markLost(identity: identity))
+        let markedLost = lifecycle.markLost(identity: identity)
+        #expect(markedLost)
         #expect(lifecycle.current?.state == .lost)
         #expect(lifecycle.current?.acceptedAngleCount == 1)
         #expect(lifecycle.currentCaptureContext == nil)
@@ -178,9 +206,12 @@ struct TargetLockTests {
         var lifecycle = lockedLifecycle()
         let identity = try #require(lifecycle.current?.identity)
 
-        #expect(lifecycle.markMoved(identity: identity))
+        let markedMoved = lifecycle.markMoved(identity: identity)
+        let restored = lifecycle.restoreLocked(identity: identity)
+
+        #expect(markedMoved)
         #expect(lifecycle.current?.state == .moved)
-        #expect(!lifecycle.restoreLocked(identity: identity))
+        #expect(!restored)
         #expect(lifecycle.currentCaptureContext == nil)
     }
 

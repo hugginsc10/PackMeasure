@@ -266,10 +266,12 @@ struct TargetLockFrameValidationTests {
         let identity = try lockedTarget().identity
         var gate = TargetLockFrameValidationGate(identity: identity)
 
-        #expect(gate.observe(.valid, identity: identity) == .waiting)
+        let first = gate.observe(.valid, identity: identity)
+        #expect(first == .waiting)
         #expect(gate.consecutivePassCount == 1)
         #expect(!gate.isReady)
-        #expect(gate.observe(.valid, identity: identity) == .ready)
+        let second = gate.observe(.valid, identity: identity)
+        #expect(second == .ready)
         #expect(gate.consecutivePassCount == 2)
         #expect(gate.isReady)
     }
@@ -281,15 +283,15 @@ struct TargetLockFrameValidationTests {
         _ = gate.observe(.valid, identity: identity)
         _ = gate.observe(.valid, identity: identity)
 
-        #expect(
-            gate.observe(
-                .rejected(.surfaceOutsideBounds),
-                identity: identity
-            ) == .rejected(.surfaceOutsideBounds)
+        let rejected = gate.observe(
+            .rejected(.surfaceOutsideBounds),
+            identity: identity
         )
+        #expect(rejected == .rejected(.surfaceOutsideBounds))
         #expect(gate.consecutivePassCount == 0)
         #expect(!gate.isReady)
-        #expect(gate.observe(.valid, identity: identity) == .waiting)
+        let firstAfterFailure = gate.observe(.valid, identity: identity)
+        #expect(firstAfterFailure == .waiting)
     }
 
     @Test
@@ -298,17 +300,19 @@ struct TargetLockFrameValidationTests {
         let stale = TargetLockIdentity(targetID: staleID, measurementSeriesID: 9)
         var gate = TargetLockFrameValidationGate(identity: identity)
 
-        #expect(gate.observe(.valid, identity: identity) == .waiting)
-        #expect(gate.observe(.valid, identity: stale) == .ignoredStaleIdentity)
+        let first = gate.observe(.valid, identity: identity)
+        let stalePass = gate.observe(.valid, identity: stale)
+        #expect(first == .waiting)
+        #expect(stalePass == .ignoredStaleIdentity)
         #expect(gate.consecutivePassCount == 1)
-        #expect(
-            gate.observe(
-                .rejected(.surfaceOutsideBounds),
-                identity: stale
-            ) == .ignoredStaleIdentity
+        let staleFailure = gate.observe(
+            .rejected(.surfaceOutsideBounds),
+            identity: stale
         )
+        #expect(staleFailure == .ignoredStaleIdentity)
         #expect(gate.consecutivePassCount == 1)
-        #expect(gate.observe(.valid, identity: identity) == .ready)
+        let second = gate.observe(.valid, identity: identity)
+        #expect(second == .ready)
     }
 
     @Test
