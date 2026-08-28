@@ -209,13 +209,16 @@ enum ScannerBuild33RuntimePolicy {
     static func automaticCapture(
         hasTarget: Bool,
         ownsAcceptedEvidence: Bool,
+        acceptedAngleCount: Int,
         canCapture: Bool,
         validationMessage: String?
     ) -> ScannerAutomaticCapturePresentation {
         guard hasTarget else {
             return ScannerAutomaticCapturePresentation(
                 actionTitle: "Select item",
-                guidance: "Tap the item you want to measure.",
+                guidance: acceptedAngleCount > 0
+                    ? "Tap the item again for angle \(acceptedAngleCount + 1)."
+                    : "Tap the item you want to measure.",
                 targetStatus: nil,
                 canCapture: false
             )

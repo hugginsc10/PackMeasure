@@ -25,7 +25,7 @@ struct Build33ScannerPresentationTests {
             validationMessage: nil
         )
         #expect(selected.actionTitle == "Take photo")
-        #expect(selected.targetStatus == "Item selected")
+        #expect(selected.targetStatus == "Item selected for this angle")
         #expect(selected.canCapture)
 
         let reacquiring = ScannerBuild33RuntimePolicy.automaticCapture(

@@ -144,8 +144,6 @@ struct ScannerSheetView: View {
             guard measurementMode == .automaticPhotos,
                   let target = targetLockLifecycle.current,
                   target.canCancelBeforeAcceptedEvidence,
-                  measurementWorkflow.captures.isEmpty,
-                  capturedAngleRecords.isEmpty,
                   phase == .ready,
                   objectOverlay == nil,
                   !phase.isCapturing,
@@ -636,7 +634,10 @@ struct ScannerSheetView: View {
         }
 
         func prepareForAiming() {
-            guard measurementMode == .automaticPhotos else { return }
+            guard measurementMode == .automaticPhotos,
+                  !isPreparingForAiming else {
+                return
+            }
             switch phase {
             case .measured, .failed:
                 break
@@ -649,6 +650,12 @@ struct ScannerSheetView: View {
             case .awaitingFirstAngle, .needsAnotherAngle:
                 break
             }
+            // A target selection belongs to one camera angle only. Preserve the
+            // accepted measurements and series, but never project a prior
+            // angle's world anchor into the next live preview. The next shutter
+            // request must be authorized by a fresh tap in that angle's frame.
+            targetLockLifecycle.reset()
+            clearAutomaticTargetAuthority()
             estimate = nil
             objectOverlay = nil
             isPreparingForAiming = true
@@ -1303,6 +1310,7 @@ struct ScannerSheetView: View {
             hasTarget: scannerState.activeTargetLock != nil,
             ownsAcceptedEvidence:
                 scannerState.activeTargetLock?.ownsAcceptedEvidence == true,
+            acceptedAngleCount: scannerState.capturedAngleRecords.count,
             canCapture: scannerState.canStartAutomaticCapture,
             validationMessage: scannerState.targetFrameValidationMessage
         )
@@ -1858,7 +1866,9 @@ enum ScannerCrowdedSceneCopy {
     static let restartReplacementNote = "Replaces saved photo angles. No clear space needed."
 
     static func targetStatus(ownsAcceptedEvidence: Bool) -> String {
-        ownsAcceptedEvidence ? "Same selected item locked" : "Item selected"
+        ownsAcceptedEvidence
+            ? "Item captured for this angle"
+            : "Item selected for this angle"
     }
 }
 
