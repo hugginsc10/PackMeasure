@@ -56,6 +56,14 @@ struct ScannerSheetView: View {
     @MainActor
     @Observable
     final class ScannerStateModel {
+        struct AutomaticPhotoCaptureAuthority: Equatable, Sendable {
+            let captureRequestID: Int
+            let identity: TargetLockIdentity
+            let prompt: PhotoTargetSelectionPrompt
+            let lockedContext: TargetCaptureContext?
+            let cameraEvidenceReacquisitionID: Int
+        }
+
         var captureRequestID = 0
         var previewRequestID = 0
         private(set) var cameraZoomRequestID = 0
@@ -75,6 +83,15 @@ struct ScannerSheetView: View {
         private(set) var measurementSeriesID = 0
         private(set) var measurementWorkflow = MultiAngleMeasurementWorkflow()
         private(set) var capturedAngleRecords: [ScannerRecordedAngleCapture] = []
+        private(set) var measurementSubject = TargetLockSubject.box
+        private(set) var measurementMode = ScannerMeasurementMode.automaticPhotos
+        private(set) var automaticTargetPrompt: PhotoTargetSelectionPrompt?
+        private(set) var targetLockLifecycle = TargetLockLifecycle()
+        private(set) var targetFrameValidationGate: TargetLockFrameValidationGate?
+        private(set) var targetFrameValidationMessage: String?
+        private(set) var pendingAutomaticCaptureAuthority: AutomaticPhotoCaptureAuthority?
+        private(set) var guidedCaptureSession: GuidedBoxCaptureSession?
+        private(set) var guidedCaptureRequestID = 0
 
         var measurementProgress: MultiAngleMeasurementProgress {
             measurementWorkflow.progress
@@ -82,6 +99,46 @@ struct ScannerSheetView: View {
 
         var capturedEstimates: [MeasurementEstimate] {
             capturedAngleRecords.map(\.evidence.estimate)
+        }
+
+        var activeTargetIdentity: TargetLockIdentity? {
+            targetLockLifecycle.current?.identity
+        }
+
+        var activeTargetLock: TargetLock? {
+            targetLockLifecycle.current
+        }
+
+        var automaticPhotoMeasurement: PhotoObjectMeasurement {
+            var measurement = PhotoObjectMeasurement()
+            if measurementSubject == .generalItem {
+                measurement.rigidItemMultiplicityGuard = nil
+            }
+            return measurement
+        }
+
+        var canChangeAutomaticTarget: Bool {
+            guard measurementMode == .automaticPhotos,
+                  let target = targetLockLifecycle.current,
+                  target.canCancelBeforeAcceptedEvidence,
+                  measurementWorkflow.captures.isEmpty,
+                  capturedAngleRecords.isEmpty,
+                  phase == .ready,
+                  objectOverlay == nil,
+                  !phase.isCapturing,
+                  !isApplyingCameraZoom,
+                  !isPreparingForAiming,
+                  !requiresFreshCameraEvidence,
+                  pendingAutomaticCaptureAuthority == nil else {
+                return false
+            }
+            return true
+        }
+
+        var canStartAutomaticCapture: Bool {
+            baseCanStartMeasurement
+                && automaticTargetIsReady
+                && pendingAutomaticCaptureAuthority == nil
         }
 
         var canChangeCameraZoom: Bool {
@@ -96,12 +153,13 @@ struct ScannerSheetView: View {
                 && phase == .ready
                 && !isApplyingCameraZoom
                 && !requiresFreshCameraEvidence
+                && targetLockLifecycle.current?.canCancelBeforeAcceptedEvidence != true
         }
 
         var canStartMeasurement: Bool {
-            ScannerActionPolicy.canStartMeasurement(phase: phase)
-                && !isApplyingCameraZoom
-                && !requiresFreshCameraEvidence
+            guard baseCanStartMeasurement else { return false }
+            guard targetLockLifecycle.current != nil else { return true }
+            return automaticTargetIsReady
         }
 
         var shouldReapplyCameraZoomAfterSessionRun: Bool {
@@ -136,6 +194,161 @@ struct ScannerSheetView: View {
                 return .single(onlyZoom)
             }
             return .fixed
+        }
+
+        @discardableResult
+        func setMeasurementSubject(_ subject: TargetLockSubject) -> Bool {
+            guard measurementMode == .automaticPhotos,
+                  targetLockLifecycle.current == nil,
+                  measurementWorkflow.captures.isEmpty,
+                  capturedAngleRecords.isEmpty,
+                  pendingAutomaticCaptureAuthority == nil,
+                  !phase.isCapturing,
+                  !isApplyingCameraZoom,
+                  !isPreparingForAiming else {
+                return false
+            }
+            measurementSubject = subject
+            return true
+        }
+
+        @discardableResult
+        func selectAutomaticTarget(
+            rawCameraNormalizedPoint: SIMD2<Float>,
+            id: UUID = UUID()
+        ) -> TargetLockIdentity? {
+            guard measurementMode == .automaticPhotos else { return nil }
+            if let identity = targetLockLifecycle.current?.identity {
+                return identity
+            }
+            guard phase == .ready,
+                  objectOverlay == nil,
+                  !phase.isCapturing,
+                  !isApplyingCameraZoom,
+                  !isPreparingForAiming,
+                  !requiresFreshCameraEvidence,
+                  pendingAutomaticCaptureAuthority == nil,
+                  rawCameraNormalizedPoint.x.isFinite,
+                  rawCameraNormalizedPoint.y.isFinite,
+                  (0...1).contains(rawCameraNormalizedPoint.x),
+                  (0...1).contains(rawCameraNormalizedPoint.y) else {
+                return nil
+            }
+
+            let identity = targetLockLifecycle.select(
+                measurementSeriesID: measurementSeriesID,
+                id: id
+            )
+            automaticTargetPrompt = .target(
+                normalizedImagePoint: rawCameraNormalizedPoint
+            )
+            targetFrameValidationGate = TargetLockFrameValidationGate(
+                identity: identity
+            )
+            targetFrameValidationMessage = nil
+            pendingAutomaticCaptureAuthority = nil
+            return identity
+        }
+
+        @discardableResult
+        func changeAutomaticTarget() -> Bool {
+            guard canChangeAutomaticTarget,
+                  let identity = targetLockLifecycle.current?.identity,
+                  targetLockLifecycle.cancelUnaccepted(identity: identity) else {
+                return false
+            }
+            clearAutomaticTargetAuthority()
+            return true
+        }
+
+        @discardableResult
+        func beginAutomaticCapture() -> AutomaticPhotoCaptureAuthority? {
+            guard canStartAutomaticCapture,
+                  let identity = activeTargetIdentity,
+                  identity.measurementSeriesID == measurementSeriesID,
+                  let prompt = automaticTargetPrompt else {
+                return nil
+            }
+
+            let currentTarget = targetLockLifecycle.current
+            let lockedContext = currentTarget?.captureContext
+            if currentTarget?.ownsAcceptedEvidence == true,
+               lockedContext == nil {
+                return nil
+            }
+
+            startMeasurementCore()
+            let authority = AutomaticPhotoCaptureAuthority(
+                captureRequestID: captureRequestID,
+                identity: identity,
+                prompt: prompt,
+                lockedContext: lockedContext,
+                cameraEvidenceReacquisitionID: cameraEvidenceReacquisitionID
+            )
+            pendingAutomaticCaptureAuthority = authority
+            return authority
+        }
+
+        @discardableResult
+        func automaticCaptureFailed(
+            authority: AutomaticPhotoCaptureAuthority
+        ) -> Bool {
+            guard measurementMode == .automaticPhotos,
+                  pendingAutomaticCaptureAuthority == authority else {
+                return false
+            }
+            pendingAutomaticCaptureAuthority = nil
+            if phase.isCapturing {
+                phase = .ready
+            }
+            resetTargetFrameValidationGate()
+            return true
+        }
+
+        @discardableResult
+        func observeAutomaticTargetValidation(
+            _ validation: TargetLockFrameValidation,
+            identity: TargetLockIdentity
+        ) -> TargetLockFrameReadinessUpdate {
+            guard measurementMode == .automaticPhotos,
+                  targetLockLifecycle.current?.identity == identity,
+                  var gate = targetFrameValidationGate,
+                  gate.identity == identity else {
+                return .ignoredStaleIdentity
+            }
+
+            let update = gate.observe(validation, identity: identity)
+            targetFrameValidationGate = gate
+            switch update {
+            case .waiting, .ready:
+                targetFrameValidationMessage = nil
+            case let .rejected(failure):
+                targetFrameValidationMessage = failure.actionMessage
+            case .ignoredStaleIdentity:
+                break
+            }
+            return update
+        }
+
+        @discardableResult
+        func receiveAutomaticTargetFrameEvidence(
+            _ evidence: TargetLockFrameEvidence,
+            validator: TargetLockFrameValidator = .init()
+        ) -> TargetLockFrameReadinessUpdate {
+            guard measurementMode == .automaticPhotos,
+                  let target = targetLockLifecycle.current,
+                  target.identity == evidence.identity else {
+                return .ignoredStaleIdentity
+            }
+            let validation = validator.validate(
+                lock: target,
+                subject: measurementSubject,
+                evidence: evidence
+            )
+            return observeAutomaticTargetValidation(
+                validation,
+                identity: evidence.identity
+            )
         }
 
         func beginCameraZoomAvailabilityDiscovery() {
@@ -191,6 +404,7 @@ struct ScannerSheetView: View {
             isApplyingCameraZoom = true
             cameraZoomRequestID += 1
             cameraEvidenceReacquisitionID += 1
+            invalidateAutomaticTargetCameraEvidence()
             requiresFreshCameraEvidence = true
             estimate = nil
             objectOverlay = nil
@@ -204,6 +418,10 @@ struct ScannerSheetView: View {
         func receiveMeasurement(
             _ recordedCapture: ScannerRecordedAngleCapture
         ) -> MultiAngleMeasurementProgress {
+            guard measurementMode == .automaticPhotos,
+                  targetLockLifecycle.current == nil else {
+                return measurementWorkflow.progress
+            }
             isPreparingForAiming = false
             let capture = recordedCapture.measurement
             objectOverlay = capture.objectOverlay
@@ -228,10 +446,106 @@ struct ScannerSheetView: View {
             return progress
         }
 
+        /// Accepts only the exact automatic-photo request that produced the
+        /// callback. The lifecycle and workflow are first updated in local
+        /// copies so a missing bound, stale identity, or target mismatch cannot
+        /// partially admit an angle.
+        @discardableResult
+        func receiveAutomaticMeasurement(
+            _ recordedCapture: ScannerRecordedAngleCapture,
+            authority: AutomaticPhotoCaptureAuthority
+        ) -> MultiAngleMeasurementProgress? {
+            guard measurementMode == .automaticPhotos,
+                  pendingAutomaticCaptureAuthority == authority,
+                  authority.captureRequestID == captureRequestID,
+                  authority.cameraEvidenceReacquisitionID
+                    == cameraEvidenceReacquisitionID,
+                  authority.identity.measurementSeriesID == measurementSeriesID,
+                  targetLockLifecycle.current?.identity == authority.identity,
+                  automaticTargetPrompt == authority.prompt else {
+                return nil
+            }
+
+            // A callback that owns the current pending request is terminal even
+            // when its measurement evidence fails closed. A delayed callback
+            // cannot consume a newer request because the full authority differs.
+            pendingAutomaticCaptureAuthority = nil
+            isPreparingForAiming = false
+            let capture = recordedCapture.measurement
+            objectOverlay = capture.objectOverlay
+
+            guard capture.evidence.estimate.confidence != .low else {
+                estimate = capture.evidence.estimate
+                phase = .measured
+                return nil
+            }
+            guard let bounds = capture.evidence.targetLockBounds else {
+                estimate = nil
+                objectOverlay = nil
+                phase = .failed(
+                    "The selected item could not be verified in this photo. Retake the photo."
+                )
+                return nil
+            }
+
+            var candidateLifecycle = targetLockLifecycle
+            let ownedAcceptedEvidence = candidateLifecycle.current?.ownsAcceptedEvidence == true
+            if ownedAcceptedEvidence {
+                guard let context = candidateLifecycle.currentCaptureContext,
+                      authority.lockedContext == context else {
+                    return nil
+                }
+            } else {
+                guard authority.lockedContext == nil,
+                      candidateLifecycle.promote(
+                          identity: authority.identity,
+                          worldAnchor: capture.evidence.geometryCenter,
+                          bounds: bounds
+                      ) else {
+                    return nil
+                }
+            }
+            guard let captureContext = candidateLifecycle.currentCaptureContext else {
+                return nil
+            }
+
+            var candidateWorkflow = measurementWorkflow
+            let acceptedCount = candidateWorkflow.captures.count
+            let progress = candidateWorkflow.record(capture)
+            let admittedAngle = candidateWorkflow.captures.count == acceptedCount + 1
+            if admittedAngle {
+                guard candidateLifecycle.recordAcceptedAngle(using: captureContext) else {
+                    return nil
+                }
+            }
+
+            measurementWorkflow = candidateWorkflow
+            targetLockLifecycle = candidateLifecycle
+            if admittedAngle {
+                capturedAngleRecords.append(recordedCapture)
+                resetTargetFrameValidationGate()
+            }
+            switch progress {
+            case .accepted(let consensus):
+                estimate = consensus
+            case .awaitingFirstAngle, .needsAnotherAngle, .inconsistent:
+                estimate = nil
+            }
+            phase = .measured
+            return progress
+        }
+
         func resetMeasurementSeries() {
+            if var guidedCaptureSession {
+                guidedCaptureSession.clear(for: .restart)
+            }
+            guidedCaptureSession = nil
+            measurementMode = .automaticPhotos
             measurementWorkflow.reset()
             capturedAngleRecords = []
             measurementSeriesID += 1
+            targetLockLifecycle.reset()
+            clearAutomaticTargetAuthority()
             estimate = nil
             objectOverlay = nil
             isApplyingCameraZoom = false
@@ -240,6 +554,7 @@ struct ScannerSheetView: View {
         }
 
         func prepareForAiming() {
+            guard measurementMode == .automaticPhotos else { return }
             switch phase {
             case .measured, .failed:
                 break
@@ -273,12 +588,166 @@ struct ScannerSheetView: View {
         }
 
         func startMeasurement() {
-            guard canStartMeasurement else { return }
+            guard measurementMode == .automaticPhotos else { return }
+            if targetLockLifecycle.current != nil {
+                _ = beginAutomaticCapture()
+                return
+            }
+            guard baseCanStartMeasurement else { return }
+            startMeasurementCore()
+        }
+
+        @discardableResult
+        func enterGuidedCorners(targetID: UUID = UUID()) -> Bool {
+            guard measurementSubject == .box,
+                  measurementMode == .automaticPhotos,
+                  !phase.isCapturing,
+                  !isApplyingCameraZoom else {
+                return false
+            }
+
+            measurementWorkflow.reset()
+            capturedAngleRecords = []
+            measurementSeriesID += 1
+            targetLockLifecycle.reset()
+            clearAutomaticTargetAuthority()
+            estimate = nil
+            objectOverlay = nil
+            isPreparingForAiming = false
+            requiresFreshCameraEvidence = false
+            measurementMode = .guidedCorners
+            guidedCaptureSession = GuidedBoxCaptureSession(
+                context: GuidedBoxCaptureContext(
+                    measurementSeriesID: measurementSeriesID,
+                    targetID: targetID
+                )
+            )
+            return true
+        }
+
+        @discardableResult
+        func beginGuidedCapture(
+            requestedPose: GuidedBoxCapturePose
+        ) -> GuidedBoxCaptureRequest? {
+            guard measurementMode == .guidedCorners,
+                  var session = guidedCaptureSession else {
+                return nil
+            }
+            let nextRequestID = guidedCaptureRequestID + 1
+            guard let request = session.beginRequest(
+                requestID: nextRequestID,
+                requestedPose: requestedPose
+            ) else {
+                return nil
+            }
+            guidedCaptureRequestID = nextRequestID
+            guidedCaptureSession = session
+            return request
+        }
+
+        @discardableResult
+        func consumeGuidedCapture(
+            _ sample: GuidedBoxPointSample
+        ) -> GuidedBoxCaptureSessionUpdate {
+            guard measurementMode == .guidedCorners,
+                  var session = guidedCaptureSession else {
+                return .ignored(.inactive)
+            }
+            let update = session.consume(sample)
+            guidedCaptureSession = session
+            return update
+        }
+
+        @discardableResult
+        func guidedBack() -> Bool {
+            guard measurementMode == .guidedCorners,
+                  var session = guidedCaptureSession else {
+                return false
+            }
+            session.back()
+            guidedCaptureSession = session
+            estimate = nil
+            objectOverlay = nil
+            return true
+        }
+
+        @discardableResult
+        func confirmGuidedCapture() -> GuidedBoxMeasurementResult? {
+            guard measurementMode == .guidedCorners,
+                  var session = guidedCaptureSession,
+                  let result = session.confirm(),
+                  result.source == .guidedLidarCorners,
+                  result.context == session.context else {
+                return nil
+            }
+            guidedCaptureSession = session
+            estimate = result.estimate
+            objectOverlay = nil
+            phase = .measured
+            return result
+        }
+
+        func clearGuidedCapture(for boundary: GuidedBoxLifecycleBoundary) {
+            guard measurementMode == .guidedCorners else { return }
+            if var session = guidedCaptureSession {
+                session.clear(for: boundary)
+            }
+            guidedCaptureSession = nil
+            estimate = nil
+            objectOverlay = nil
+        }
+
+        private var baseCanStartMeasurement: Bool {
+            measurementMode == .automaticPhotos
+                && ScannerActionPolicy.canStartMeasurement(phase: phase)
+                && !isApplyingCameraZoom
+                && !requiresFreshCameraEvidence
+        }
+
+        private var automaticTargetIsReady: Bool {
+            guard let target = targetLockLifecycle.current,
+                  target.identity.measurementSeriesID == measurementSeriesID,
+                  automaticTargetPrompt != nil else {
+                return false
+            }
+            guard target.ownsAcceptedEvidence else {
+                return target.state == .provisional
+            }
+            return target.captureContext != nil
+                && targetFrameValidationGate?.identity == target.identity
+                && targetFrameValidationGate?.isReady == true
+        }
+
+        private func startMeasurementCore() {
             estimate = nil
             objectOverlay = nil
             isPreparingForAiming = false
             captureRequestID += 1
             phase = .scanning(progress: 0)
+        }
+
+        private func clearAutomaticTargetAuthority() {
+            automaticTargetPrompt = nil
+            targetFrameValidationGate = nil
+            targetFrameValidationMessage = nil
+            pendingAutomaticCaptureAuthority = nil
+        }
+
+        private func resetTargetFrameValidationGate() {
+            guard let identity = targetLockLifecycle.current?.identity else {
+                targetFrameValidationGate = nil
+                targetFrameValidationMessage = nil
+                return
+            }
+            targetFrameValidationGate = TargetLockFrameValidationGate(
+                identity: identity
+            )
+            targetFrameValidationMessage = nil
+        }
+
+        private func invalidateAutomaticTargetCameraEvidence() {
+            pendingAutomaticCaptureAuthority = nil
+            resetTargetFrameValidationGate()
         }
     }
 

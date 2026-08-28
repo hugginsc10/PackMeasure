@@ -400,14 +400,16 @@ struct ScannerOrchestrationTests {
         let heightRequest = try #require(
             state.beginGuidedCapture(requestedPose: stablePose)
         )
-        #expect(
-            state.consumeGuidedCapture(
-                guidedSample(
-                    for: heightRequest,
-                    worldPosition: SIMD3<Float>(0, 0.508, 0)
-                )
-            ) == .workflow(.ready)
+        let heightUpdate = state.consumeGuidedCapture(
+            guidedSample(
+                for: heightRequest,
+                worldPosition: SIMD3<Float>(0, 0.508, 0)
+            )
         )
+        guard case .workflow(.ready) = heightUpdate else {
+            Issue.record("expected four guided points to produce a reviewable measurement")
+            return
+        }
 
         #expect(state.estimate == nil)
         let result = try #require(state.confirmGuidedCapture())
