@@ -421,6 +421,7 @@ struct ScannerCameraZoomTests {
             confirmsExplicitSelection: true
         )
         #expect(state.shouldReapplyCameraZoomAfterSessionRun)
+        #expect(state.previewBecameReady())
 
         #expect(state.selectCameraZoom(.standard))
         state.cameraZoomApplicationFailed()
@@ -480,6 +481,10 @@ struct ScannerCameraZoomTests {
         )
 
         #expect(!state.isApplyingCameraZoom)
+        #expect(state.requiresFreshCameraEvidence)
+        #expect(!state.canChangeCameraZoom)
+        #expect(state.previewBecameReady())
+        #expect(!state.requiresFreshCameraEvidence)
         #expect(state.canChangeCameraZoom)
         #expect(state.cameraZoomRequestID == initialRequestID + 1)
     }

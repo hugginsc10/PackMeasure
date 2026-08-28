@@ -38,6 +38,96 @@ enum ScannerCameraZoom: Double, CaseIterable, Identifiable, Sendable {
     }
 }
 
+/// Camera calibration retained with one accepted angle. Mixed-zoom series are
+/// valid only when every measurement remains attributable to the exact lens
+/// state and AR-frame calibration that produced its point cloud.
+struct ScannerCameraCaptureProvenance: Equatable, Sendable {
+    private static let zoomFactorTolerance = 0.02
+
+    let cameraZoom: ScannerCameraZoom
+    let appliedDisplayZoomFactor: Double
+    let imageResolutionPixels: SIMD2<Int>
+    let normalizedFocalLength: Double
+    let horizontalFieldOfViewRadians: Double
+    let verticalFieldOfViewRadians: Double
+
+    private let intrinsicsColumn0: SIMD3<Float>
+    private let intrinsicsColumn1: SIMD3<Float>
+    private let intrinsicsColumn2: SIMD3<Float>
+
+    var intrinsics: simd_float3x3 {
+        simd_float3x3(columns: (
+            intrinsicsColumn0,
+            intrinsicsColumn1,
+            intrinsicsColumn2
+        ))
+    }
+
+    init?(
+        cameraZoom: ScannerCameraZoom,
+        appliedDisplayZoomFactor: Double,
+        intrinsics: simd_float3x3,
+        imageResolutionPixels: SIMD2<Int>
+    ) {
+        let columns = intrinsics.columns
+        let components = [
+            columns.0.x, columns.0.y, columns.0.z,
+            columns.1.x, columns.1.y, columns.1.z,
+            columns.2.x, columns.2.y, columns.2.z,
+        ]
+        guard appliedDisplayZoomFactor.isFinite,
+              appliedDisplayZoomFactor > 0,
+              abs(appliedDisplayZoomFactor - cameraZoom.rawValue)
+                <= Self.zoomFactorTolerance,
+              imageResolutionPixels.x > 0,
+              imageResolutionPixels.y > 0,
+              components.allSatisfy(\.isFinite) else {
+            return nil
+        }
+
+        let focalX = Double(columns.0.x)
+        let focalY = Double(columns.1.y)
+        let width = Double(imageResolutionPixels.x)
+        let height = Double(imageResolutionPixels.y)
+        guard focalX > 0, focalY > 0 else { return nil }
+
+        let normalizedFocalLength = focalX / width
+        let horizontalFieldOfViewRadians = 2 * atan(width / (2 * focalX))
+        let verticalFieldOfViewRadians = 2 * atan(height / (2 * focalY))
+        guard normalizedFocalLength.isFinite,
+              normalizedFocalLength > 0,
+              horizontalFieldOfViewRadians.isFinite,
+              horizontalFieldOfViewRadians > 0,
+              horizontalFieldOfViewRadians < .pi,
+              verticalFieldOfViewRadians.isFinite,
+              verticalFieldOfViewRadians > 0,
+              verticalFieldOfViewRadians < .pi else {
+            return nil
+        }
+
+        self.cameraZoom = cameraZoom
+        self.appliedDisplayZoomFactor = appliedDisplayZoomFactor
+        self.imageResolutionPixels = imageResolutionPixels
+        self.normalizedFocalLength = normalizedFocalLength
+        self.horizontalFieldOfViewRadians = horizontalFieldOfViewRadians
+        self.verticalFieldOfViewRadians = verticalFieldOfViewRadians
+        intrinsicsColumn0 = columns.0
+        intrinsicsColumn1 = columns.1
+        intrinsicsColumn2 = columns.2
+    }
+}
+
+/// Scanner-owned wrapper that keeps camera provenance aligned with every
+/// accepted measurement without coupling the geometry workflow to ARKit.
+struct ScannerRecordedAngleCapture: Equatable, Sendable {
+    let measurement: MeasurementAngleCapture
+    let cameraProvenance: ScannerCameraCaptureProvenance
+
+    var evidence: MeasurementCaptureEvidence { measurement.evidence }
+    var viewpoint: MeasurementCameraViewpoint { measurement.viewpoint }
+    var objectOverlay: MeasurementObjectOverlay? { measurement.objectOverlay }
+}
+
 enum ScannerCameraZoomPolicy {
     private static let factorTolerance = 0.000_1
 
@@ -531,8 +621,10 @@ struct MeasurementARView: UIViewRepresentable {
             let requestID: Int
             let measurementSeriesID: Int
             let previewViewportSize: SIMD2<Float>
+            let cameraZoom: ScannerCameraZoom
             var settledFrameGate: SettledFrameCaptureGate
             var cameraViewpoint: MeasurementCameraViewpoint?
+            var cameraProvenance: ScannerCameraCaptureProvenance?
             var geometryCenter: SIMD3<Float>?
             var pointCloudConfidence: ScanConfidence?
             var worldPoints: [SIMD3<Float>] = []
@@ -848,6 +940,8 @@ struct MeasurementARView: UIViewRepresentable {
             measurementSeriesID: Int
         ) {
             guard let lifecycleGeneration = activeLifecycleGeneration() else { return }
+            markPreviewNeedsReadiness()
+            _ = beginPreviewRun(after: arView?.session.currentFrame?.timestamp)
             processingQueue.async { [weak self] in
                 guard let self,
                       isLifecycleActive(lifecycleGeneration) else {
@@ -1075,6 +1169,7 @@ struct MeasurementARView: UIViewRepresentable {
                 return
             }
             let now = CACurrentMediaTime()
+            let cameraZoom = state.cameraZoom
             state.estimate = nil
             state.phase = .scanning(progress: 0)
 
@@ -1083,6 +1178,7 @@ struct MeasurementARView: UIViewRepresentable {
                     requestID: requestID,
                     measurementSeriesID: measurementSeriesID,
                     previewViewportSize: previewViewportSize,
+                    cameraZoom: cameraZoom,
                     settledFrameGate: SettledFrameCaptureGate(
                         requestedAt: now,
                         policy: Self.settledFramePolicy
@@ -1173,6 +1269,18 @@ struct MeasurementARView: UIViewRepresentable {
             activeCapture.cameraViewpoint = MeasurementCameraViewpoint(
                 cameraTransform: frame.camera.transform
             )
+            guard let cameraProvenance = cameraCaptureProvenance(
+                from: frame,
+                expectedZoom: activeCapture.cameraZoom
+            ) else {
+                publishFailure(
+                    "The camera calibration changed before the photo. Hold steady and retake it.",
+                    requestID: activeCapture.requestID,
+                    measurementSeriesID: activeCapture.measurementSeriesID
+                )
+                return
+            }
+            activeCapture.cameraProvenance = cameraProvenance
             publishProgress(0.5, requestID: activeCapture.requestID)
             // Freeze the exact RGB/depth pair being measured before Vision runs.
             session.pause()
@@ -1402,6 +1510,39 @@ struct MeasurementARView: UIViewRepresentable {
             )
         }
 
+        private func cameraCaptureProvenance(
+            from frame: ARFrame,
+            expectedZoom: ScannerCameraZoom
+        ) -> ScannerCameraCaptureProvenance? {
+            let snapshot = cameraZoomSnapshot()
+            let appliedDisplayZoomFactor: Double
+            if snapshot.usesConfigurableDevice {
+                guard snapshot.selectedZoom == expectedZoom,
+                      let appliedFactor = snapshot.appliedDisplayFactor else {
+                    return nil
+                }
+                appliedDisplayZoomFactor = appliedFactor
+            } else {
+                guard expectedZoom == .standard else { return nil }
+                appliedDisplayZoomFactor = ScannerCameraZoom.standard.rawValue
+            }
+
+            let imageResolution = frame.camera.imageResolution
+            guard imageResolution.width.isFinite,
+                  imageResolution.height.isFinite else {
+                return nil
+            }
+            return ScannerCameraCaptureProvenance(
+                cameraZoom: expectedZoom,
+                appliedDisplayZoomFactor: appliedDisplayZoomFactor,
+                intrinsics: frame.camera.intrinsics,
+                imageResolutionPixels: SIMD2<Int>(
+                    Int(imageResolution.width.rounded()),
+                    Int(imageResolution.height.rounded())
+                )
+            )
+        }
+
         private func restoreCameraZoom(_ zoom: ScannerCameraZoom) {
             guard let device = ARWorldTrackingConfiguration
                 .configurableCaptureDeviceForPrimaryCamera else {
@@ -1518,10 +1659,8 @@ struct MeasurementARView: UIViewRepresentable {
                         usesConfigurableDevice: true
                     )
                 }
-                state.cameraZoomApplicationFailed()
-                state.resetMeasurementSeries()
-                state.phase = .failed(
-                    "Camera zoom could not be confirmed with depth. Retake the photo to try again."
+                state.cameraZoomApplicationFailed(
+                    message: "Camera zoom could not be confirmed with depth. Retake the photo to try again."
                 )
             }
         }
@@ -1619,10 +1758,22 @@ struct MeasurementARView: UIViewRepresentable {
                 return
             }
 
-            let angleCapture = MeasurementAngleCapture(
-                evidence: evidence,
-                viewpoint: cameraViewpoint,
-                objectOverlay: capture.objectOverlay
+            guard let cameraProvenance = capture.cameraProvenance else {
+                publishFailure(
+                    "The camera calibration was unavailable for this photo. Hold steady and retake it.",
+                    requestID: capture.requestID,
+                    measurementSeriesID: capture.measurementSeriesID
+                )
+                return
+            }
+
+            let angleCapture = ScannerRecordedAngleCapture(
+                measurement: MeasurementAngleCapture(
+                    evidence: evidence,
+                    viewpoint: cameraViewpoint,
+                    objectOverlay: capture.objectOverlay
+                ),
+                cameraProvenance: cameraProvenance
             )
 
             logCalibrationSummary(capture, result: .success(evidence.estimate))
@@ -1941,6 +2092,7 @@ struct MeasurementARView: UIViewRepresentable {
 
         private func publishPreviewReadyIfPossible(with frame: ARFrame) {
             guard previewReadinessNeeded,
+                  pendingCameraZoom == nil,
                   let previewRunToken = activePreviewRunToken() else {
                 return
             }
@@ -2539,9 +2691,32 @@ struct MeasurementARView: UIViewRepresentable {
             let centerX = diagnosticString(capture.geometryCenter?.x)
             let centerY = diagnosticString(capture.geometryCenter?.y)
             let centerZ = diagnosticString(capture.geometryCenter?.z)
+            let cameraProvenance = capture.cameraProvenance
+            let cameraZoom = cameraProvenance?.cameraZoom.label ?? "none"
+            let appliedZoom = diagnosticString(
+                cameraProvenance?.appliedDisplayZoomFactor
+            )
+            let normalizedFocalLength = diagnosticString(
+                cameraProvenance?.normalizedFocalLength
+            )
+            let horizontalFieldOfView = diagnosticString(
+                cameraProvenance?.horizontalFieldOfViewRadians
+            )
+            let verticalFieldOfView = diagnosticString(
+                cameraProvenance?.verticalFieldOfViewRadians
+            )
+            let intrinsics = cameraProvenance?.intrinsics
+            let focalX = diagnosticString(intrinsics?.columns.0.x)
+            let focalY = diagnosticString(intrinsics?.columns.1.y)
+            let principalX = diagnosticString(intrinsics?.columns.2.x)
+            let principalY = diagnosticString(intrinsics?.columns.2.y)
+            let imageWidth = cameraProvenance
+                .map { String($0.imageResolutionPixels.x) } ?? "none"
+            let imageHeight = cameraProvenance
+                .map { String($0.imageResolutionPixels.y) } ?? "none"
 
             Self.calibrationLogger.notice(
-                "scan_calibration request_id=\(capture.requestID, privacy: .public) measurement_series_id=\(capture.measurementSeriesID, privacy: .public) result=\(resultDescription, privacy: .public) attempts=\(capture.sampleAttemptCount, privacy: .public) accepted_frames=\(capture.frameCount, privacy: .public) rejected_frames=\(capture.rejectedFrameCount, privacy: .public) floor_rejected_frames=\(capture.floorRejectedFrameCount, privacy: .public) unavailable_frames=\(capture.unavailableFrameCount, privacy: .public) points=\(capture.worldPoints.count, privacy: .public) length_m=\(lengthMeters, privacy: .public) width_m=\(widthMeters, privacy: .public) height_m=\(heightMeters, privacy: .public) point_cloud_confidence=\(pointCloudConfidence, privacy: .public) camera_x=\(cameraX, privacy: .public) camera_y=\(cameraY, privacy: .public) camera_z=\(cameraZ, privacy: .public) camera_forward_x=\(cameraForwardX, privacy: .public) camera_forward_z=\(cameraForwardZ, privacy: .public) target_center_x=\(centerX, privacy: .public) target_center_y=\(centerY, privacy: .public) target_center_z=\(centerZ, privacy: .public) raw_region_pixels=\(rawRegionPixels, privacy: .public) retained_region_pixels=\(retainedRegionPixels, privacy: .public) coverage=\(coverage, privacy: .public) seed_abs_up_normal=\(seedUpNormal, privacy: .public) elevation_m=\(elevation, privacy: .public) background_floor_y_m=\(floorY, privacy: .public) floor_source=\(floorSource, privacy: .public) target_reason=\(finalTargetReasonDescription, privacy: .public) last_frame_rejection=\(lastRejectionDescription, privacy: .public) capture_path=\(capturePath, privacy: .public) fallback_trigger_code=\(fallbackTriggerCode, privacy: .public) fallback_trigger_detail=\(fallbackTriggerDetail, privacy: .public) fallback_result=\(fallbackResult, privacy: .public) photo_failure_code=\(photoFailureCode, privacy: .public) photo_failure_detail=\(photoFailureDetail, privacy: .public) estimation_failure=\(failureDescription, privacy: .public) geometry_error=\(geometryErrorDescription, privacy: .public)"
+                "scan_calibration request_id=\(capture.requestID, privacy: .public) measurement_series_id=\(capture.measurementSeriesID, privacy: .public) result=\(resultDescription, privacy: .public) attempts=\(capture.sampleAttemptCount, privacy: .public) accepted_frames=\(capture.frameCount, privacy: .public) rejected_frames=\(capture.rejectedFrameCount, privacy: .public) floor_rejected_frames=\(capture.floorRejectedFrameCount, privacy: .public) unavailable_frames=\(capture.unavailableFrameCount, privacy: .public) points=\(capture.worldPoints.count, privacy: .public) length_m=\(lengthMeters, privacy: .public) width_m=\(widthMeters, privacy: .public) height_m=\(heightMeters, privacy: .public) point_cloud_confidence=\(pointCloudConfidence, privacy: .public) camera_x=\(cameraX, privacy: .public) camera_y=\(cameraY, privacy: .public) camera_z=\(cameraZ, privacy: .public) camera_forward_x=\(cameraForwardX, privacy: .public) camera_forward_z=\(cameraForwardZ, privacy: .public) camera_zoom=\(cameraZoom, privacy: .public) camera_applied_display_zoom=\(appliedZoom, privacy: .public) camera_image_width=\(imageWidth, privacy: .public) camera_image_height=\(imageHeight, privacy: .public) camera_focal_x=\(focalX, privacy: .public) camera_focal_y=\(focalY, privacy: .public) camera_principal_x=\(principalX, privacy: .public) camera_principal_y=\(principalY, privacy: .public) camera_normalized_focal=\(normalizedFocalLength, privacy: .public) camera_horizontal_fov_rad=\(horizontalFieldOfView, privacy: .public) camera_vertical_fov_rad=\(verticalFieldOfView, privacy: .public) target_center_x=\(centerX, privacy: .public) target_center_y=\(centerY, privacy: .public) target_center_z=\(centerZ, privacy: .public) raw_region_pixels=\(rawRegionPixels, privacy: .public) retained_region_pixels=\(retainedRegionPixels, privacy: .public) coverage=\(coverage, privacy: .public) seed_abs_up_normal=\(seedUpNormal, privacy: .public) elevation_m=\(elevation, privacy: .public) background_floor_y_m=\(floorY, privacy: .public) floor_source=\(floorSource, privacy: .public) target_reason=\(finalTargetReasonDescription, privacy: .public) last_frame_rejection=\(lastRejectionDescription, privacy: .public) capture_path=\(capturePath, privacy: .public) fallback_trigger_code=\(fallbackTriggerCode, privacy: .public) fallback_trigger_detail=\(fallbackTriggerDetail, privacy: .public) fallback_result=\(fallbackResult, privacy: .public) photo_failure_code=\(photoFailureCode, privacy: .public) photo_failure_detail=\(photoFailureDetail, privacy: .public) estimation_failure=\(failureDescription, privacy: .public) geometry_error=\(geometryErrorDescription, privacy: .public)"
             )
         }
 
@@ -2619,7 +2794,7 @@ struct MeasurementARView: UIViewRepresentable {
         }
 
         private func publishMeasurementCapture(
-            _ capture: MeasurementAngleCapture,
+            _ capture: ScannerRecordedAngleCapture,
             requestID: Int,
             measurementSeriesID: Int
         ) {

@@ -59,6 +59,7 @@ struct ScannerSheetView: View {
         var captureRequestID = 0
         var previewRequestID = 0
         private(set) var cameraZoomRequestID = 0
+        private(set) var cameraEvidenceReacquisitionID = 0
         var phase: ScannerPhase = .checkingSupport
         var estimate: MeasurementEstimate?
         var objectOverlay: MeasurementObjectOverlay?
@@ -70,27 +71,37 @@ struct ScannerSheetView: View {
         private(set) var hasConfirmedExplicitCameraZoom = false
         private(set) var isApplyingCameraZoom = false
         private(set) var isPreparingForAiming = false
+        private(set) var requiresFreshCameraEvidence = false
         private(set) var measurementSeriesID = 0
         private(set) var measurementWorkflow = MultiAngleMeasurementWorkflow()
+        private(set) var capturedAngleRecords: [ScannerRecordedAngleCapture] = []
 
         var measurementProgress: MultiAngleMeasurementProgress {
             measurementWorkflow.progress
         }
 
         var capturedEstimates: [MeasurementEstimate] {
-            measurementWorkflow.captures.map(\.evidence.estimate)
+            capturedAngleRecords.map(\.evidence.estimate)
         }
 
         var canChangeCameraZoom: Bool {
-            availableCameraZooms.count > 1
-                && capturedEstimates.isEmpty
+            let workflowAcceptsAnotherAngle = switch measurementWorkflow.progress {
+            case .awaitingFirstAngle, .needsAnotherAngle:
+                true
+            case .accepted, .inconsistent:
+                false
+            }
+            return availableCameraZooms.count > 1
+                && workflowAcceptsAnotherAngle
                 && phase == .ready
                 && !isApplyingCameraZoom
+                && !requiresFreshCameraEvidence
         }
 
         var canStartMeasurement: Bool {
             ScannerActionPolicy.canStartMeasurement(phase: phase)
                 && !isApplyingCameraZoom
+                && !requiresFreshCameraEvidence
         }
 
         var shouldReapplyCameraZoomAfterSessionRun: Bool {
@@ -114,9 +125,6 @@ struct ScannerSheetView: View {
             guard showsCameraGuide, !phase.isCapturing else { return .hidden }
             guard hasResolvedCameraZoomAvailability else { return .checking }
             guard cameraZoomUsesConfigurableDevice else { return .fixed }
-            if !capturedEstimates.isEmpty {
-                return .locked(cameraZoom)
-            }
             if availableCameraZooms.count > 1 {
                 return .selectable(
                     zooms: availableCameraZooms,
@@ -155,10 +163,16 @@ struct ScannerSheetView: View {
             isApplyingCameraZoom = false
         }
 
-        func cameraZoomApplicationFailed() {
+        func cameraZoomApplicationFailed(message: String? = nil) {
             cameraZoom = lastConfirmedCameraZoom
             hasConfirmedExplicitCameraZoom = false
             isApplyingCameraZoom = false
+            requiresFreshCameraEvidence = true
+            if let message {
+                estimate = nil
+                objectOverlay = nil
+                phase = .failed(message)
+            }
         }
 
         func beginCameraZoomApplication() {
@@ -176,14 +190,22 @@ struct ScannerSheetView: View {
             hasConfirmedExplicitCameraZoom = false
             isApplyingCameraZoom = true
             cameraZoomRequestID += 1
+            cameraEvidenceReacquisitionID += 1
+            requiresFreshCameraEvidence = true
+            estimate = nil
+            objectOverlay = nil
+            isPreparingForAiming = false
+            phase = .checkingSupport
+            previewRequestID += 1
             return true
         }
 
         @discardableResult
         func receiveMeasurement(
-            _ capture: MeasurementAngleCapture
+            _ recordedCapture: ScannerRecordedAngleCapture
         ) -> MultiAngleMeasurementProgress {
             isPreparingForAiming = false
+            let capture = recordedCapture.measurement
             objectOverlay = capture.objectOverlay
             guard capture.evidence.estimate.confidence != .low else {
                 estimate = capture.evidence.estimate
@@ -191,7 +213,11 @@ struct ScannerSheetView: View {
                 return measurementWorkflow.progress
             }
 
+            let acceptedCount = measurementWorkflow.captures.count
             let progress = measurementWorkflow.record(capture)
+            if measurementWorkflow.captures.count == acceptedCount + 1 {
+                capturedAngleRecords.append(recordedCapture)
+            }
             switch progress {
             case .accepted(let consensus):
                 estimate = consensus
@@ -204,11 +230,13 @@ struct ScannerSheetView: View {
 
         func resetMeasurementSeries() {
             measurementWorkflow.reset()
+            capturedAngleRecords = []
             measurementSeriesID += 1
             estimate = nil
             objectOverlay = nil
             isApplyingCameraZoom = false
             isPreparingForAiming = false
+            requiresFreshCameraEvidence = false
         }
 
         func prepareForAiming() {
@@ -239,6 +267,7 @@ struct ScannerSheetView: View {
                 return false
             }
             isPreparingForAiming = false
+            requiresFreshCameraEvidence = false
             phase = .ready
             return true
         }
@@ -284,13 +313,16 @@ struct ScannerSheetView: View {
                         if scannerState.capturedEstimates.count > 1 {
                             Section(ScannerResultCopy.capturedAnglesSectionTitle) {
                                 ForEach(
-                                    Array(scannerState.capturedEstimates.enumerated()),
+                                    Array(scannerState.capturedAngleRecords.enumerated()),
                                     id: \.offset
-                                ) { index, capturedEstimate in
+                                ) { index, capturedAngle in
                                     HStack {
                                         Text("Angle \(index + 1)")
                                         Spacer()
-                                        Text(dimensionString(capturedEstimate))
+                                        Text(
+                                            "\(dimensionString(capturedAngle.evidence.estimate))"
+                                                + " · \(capturedAngle.cameraProvenance.cameraZoom.label)"
+                                        )
                                             .foregroundStyle(.secondary)
                                     }
                                 }
@@ -323,13 +355,16 @@ struct ScannerSheetView: View {
                     Form {
                         Section(ScannerResultCopy.capturedAnglesSectionTitle) {
                             ForEach(
-                                Array(scannerState.capturedEstimates.enumerated()),
+                                Array(scannerState.capturedAngleRecords.enumerated()),
                                 id: \.offset
-                            ) { index, capturedEstimate in
+                            ) { index, capturedAngle in
                                 HStack {
                                     Text("Angle \(index + 1)")
                                     Spacer()
-                                    Text(dimensionString(capturedEstimate))
+                                    Text(
+                                        "\(dimensionString(capturedAngle.evidence.estimate))"
+                                            + " · \(capturedAngle.cameraProvenance.cameraZoom.label)"
+                                    )
                                         .foregroundStyle(.secondary)
                                 }
                             }
@@ -564,6 +599,9 @@ struct ScannerSheetView: View {
     private var statusText: String {
         switch scannerState.phase {
         case .checkingSupport:
+            if scannerState.isApplyingCameraZoom {
+                return "Switching to \(scannerState.cameraZoom.label)…"
+            }
             return ScannerActionCopy.checkingSupport
         case .ready:
             if !scannerState.hasResolvedCameraZoomAvailability {
@@ -680,7 +718,7 @@ private struct CameraZoomControl: View {
                 .accessibilityValue(zoom == selectedZoom ? "Selected" : "Not selected")
                 .accessibilityHint(
                     isEnabled
-                        ? "Changes the camera field of view before the first angle"
+                        ? "Changes the camera field of view before the next photo"
                         : isApplying
                             ? "Camera zoom is changing"
                             : "Camera zoom is unavailable right now"
