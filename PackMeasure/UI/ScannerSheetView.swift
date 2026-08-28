@@ -606,15 +606,7 @@ struct ScannerSheetView: View {
                 return false
             }
 
-            measurementWorkflow.reset()
-            capturedAngleRecords = []
-            measurementSeriesID += 1
-            targetLockLifecycle.reset()
-            clearAutomaticTargetAuthority()
-            estimate = nil
-            objectOverlay = nil
-            isPreparingForAiming = false
-            requiresFreshCameraEvidence = false
+            resetMeasurementSeries()
             measurementMode = .guidedCorners
             guidedCaptureSession = GuidedBoxCaptureSession(
                 context: GuidedBoxCaptureContext(
@@ -622,6 +614,7 @@ struct ScannerSheetView: View {
                     targetID: targetID
                 )
             )
+            requestFreshPreviewReadiness()
             return true
         }
 
@@ -693,8 +686,8 @@ struct ScannerSheetView: View {
                 session.clear(for: boundary)
             }
             guidedCaptureSession = nil
-            estimate = nil
-            objectOverlay = nil
+            resetMeasurementSeries()
+            requestFreshPreviewReadiness()
         }
 
         private var baseCanStartMeasurement: Bool {
@@ -748,6 +741,15 @@ struct ScannerSheetView: View {
         private func invalidateAutomaticTargetCameraEvidence() {
             pendingAutomaticCaptureAuthority = nil
             resetTargetFrameValidationGate()
+        }
+
+        private func requestFreshPreviewReadiness() {
+            estimate = nil
+            objectOverlay = nil
+            isPreparingForAiming = false
+            requiresFreshCameraEvidence = true
+            phase = .checkingSupport
+            previewRequestID += 1
         }
     }
 
