@@ -26,6 +26,7 @@
 		63ED8F2D2AA20E138544E34C /* AppModelInventoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1B053787D5054BAAEE243C1 /* AppModelInventoryTests.swift */; };
 		649D27BD2AC2B2A76BE517DC /* GuidedBoxWorkflow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C32970059157769F21557D7 /* GuidedBoxWorkflow.swift */; };
 		6F4851E6263801CC3EE55EB6 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B55DECA1C7432025218A0B8B /* Assets.xcassets */; };
+		7209CA6F8F01E61291C59272 /* PhotoRigidItemMultiplicityGuardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E80BC43F70739A5A94D60D9 /* PhotoRigidItemMultiplicityGuardTests.swift */; };
 		72B2BD9B3F2229A3E60FD7C9 /* MeasurementEstimator.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1FDBE8DEE3F3C0C88A2B2D8 /* MeasurementEstimator.swift */; };
 		87759A4113E1DE288FDD8AB7 /* TargetLockTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB57A76391FA481635F4749F /* TargetLockTests.swift */; };
 		8AD56996B4FAC128B09E64BA /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77EE721A9A7420432B19066B /* HomeView.swift */; };
@@ -77,6 +78,7 @@
 		53B7914EAEB1EDE13DA87022 /* PhotoObjectMeasurementTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoObjectMeasurementTests.swift; sourceTree = "<group>"; };
 		5A6E5BC93C71F94AB333A1BF /* MeasurementMath.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeasurementMath.swift; sourceTree = "<group>"; };
 		5E7680F43D417158C818E786 /* GeometryModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GeometryModels.swift; sourceTree = "<group>"; };
+		5E80BC43F70739A5A94D60D9 /* PhotoRigidItemMultiplicityGuardTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoRigidItemMultiplicityGuardTests.swift; sourceTree = "<group>"; };
 		5ED8ABA37AF0157830862257 /* PackMeasureTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = PackMeasureTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		5EF900F501945DF4F2CBD830 /* ScannerCameraZoomTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScannerCameraZoomTests.swift; sourceTree = "<group>"; };
 		69219302EBBBE2A09187AD59 /* TargetLockFrameValidation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TargetLockFrameValidation.swift; sourceTree = "<group>"; };
@@ -146,6 +148,7 @@
 				AE9A446CAB13BE0B780048E1 /* GuidedBoxMeasurementTests.swift */,
 				1AA05B83704FCB14040623FB /* GuidedBoxWorkflowTests.swift */,
 				53B7914EAEB1EDE13DA87022 /* PhotoObjectMeasurementTests.swift */,
+				5E80BC43F70739A5A94D60D9 /* PhotoRigidItemMultiplicityGuardTests.swift */,
 				35CC0B9C38D98D8F0A49EDD3 /* SingleShotObjectMeasurementTests.swift */,
 				072DD19BDDC569526BD4D6C1 /* TargetLockFrameValidationTests.swift */,
 				CB57A76391FA481635F4749F /* TargetLockTests.swift */,
@@ -415,6 +418,7 @@
 				3D0B36D28510CAD37D056EE5 /* PackMeasureTests.swift in Sources */,
 				E481A09E4252F3209E588661 /* PackingPlannerTests.swift in Sources */,
 				42AD551A4A6F786DDA2A25F6 /* PhotoObjectMeasurementTests.swift in Sources */,
+				7209CA6F8F01E61291C59272 /* PhotoRigidItemMultiplicityGuardTests.swift in Sources */,
 				948887BBF3D249A4522DDB48 /* ScannerCameraZoomTests.swift in Sources */,
 				5E0B34A313A28EA94D945649 /* ScannerCapturePolicyTests.swift in Sources */,
 				9C825739E009739E0C6D92F7 /* SingleShotObjectMeasurementTests.swift in Sources */,
