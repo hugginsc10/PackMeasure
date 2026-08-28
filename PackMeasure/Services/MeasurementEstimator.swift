@@ -319,6 +319,22 @@ struct MeasurementCaptureEvidence: Equatable, Sendable {
     let estimate: MeasurementEstimate
     let pointCloudConfidence: ScanConfidence
     let geometryCenter: SIMD3<Float>
+    /// Exact yaw-oriented volume accepted by the geometry estimator. Synthetic
+    /// evidence used by higher-level policies may omit bounds rather than
+    /// inventing target authority it did not observe.
+    let targetLockBounds: TargetLockBounds?
+
+    init(
+        estimate: MeasurementEstimate,
+        pointCloudConfidence: ScanConfidence,
+        geometryCenter: SIMD3<Float>,
+        targetLockBounds: TargetLockBounds? = nil
+    ) {
+        self.estimate = estimate
+        self.pointCloudConfidence = pointCloudConfidence
+        self.geometryCenter = geometryCenter
+        self.targetLockBounds = targetLockBounds
+    }
 }
 
 enum MeasurementCaptureEvidenceOutcome: Equatable, Sendable {
@@ -831,7 +847,16 @@ enum MeasurementEstimator {
                     frameCount: frameCount
                 ),
                 pointCloudConfidence: pointCloudConfidence,
-                geometryCenter: geometry.center
+                geometryCenter: geometry.center,
+                targetLockBounds: TargetLockBounds(
+                    center: geometry.center,
+                    halfExtents: SIMD3<Float>(
+                        Float(geometry.dimensions.lengthMeters / 2),
+                        Float(geometry.dimensions.heightMeters / 2),
+                        Float(geometry.dimensions.widthMeters / 2)
+                    ),
+                    yawRadians: geometry.yawRadians
+                )
             )
         )
     }
