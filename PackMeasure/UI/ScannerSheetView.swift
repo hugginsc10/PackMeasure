@@ -909,6 +909,24 @@ struct ScannerSheetView: View {
             VStack(spacing: 16) {
                 cameraPreview
 
+                if showsModeSelector {
+                    ScannerModeSelector(
+                        selection: ScannerModeSelection(
+                            subject: scannerState.measurementSubject,
+                            mode: scannerState.measurementMode
+                        ),
+                        canChangeSubject: canChangeMeasurementSetup,
+                        canChangeMode: canChangeMeasurementSetup,
+                        onSelectSubject: { subject in
+                            _ = scannerState.setMeasurementSubject(subject)
+                        },
+                        onSelectMode: { mode in
+                            guard mode == .guidedCorners else { return }
+                            _ = scannerState.enterGuidedCorners()
+                        }
+                    )
+                }
+
                 if let estimate = scannerState.estimate {
                     Form {
                         Section(ScannerResultCopy.sizeSectionTitle) {
@@ -1011,7 +1029,7 @@ struct ScannerSheetView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") {
-                        dismiss()
+                        closeScanner()
                     }
                 }
             }
@@ -1042,7 +1060,19 @@ struct ScannerSheetView: View {
             .clipShape(RoundedRectangle(cornerRadius: 24))
             .overlay {
                 if showsCameraGuide, scannerState.objectOverlay == nil {
-                    CameraObjectFrame()
+                    if scannerState.measurementMode == .guidedCorners {
+                        GuidedPointReticle()
+                    } else {
+                        CameraObjectFrame()
+                    }
+                }
+            }
+            .overlay(alignment: .topLeading) {
+                if let target = scannerState.activeTargetLock {
+                    ScannerTargetStatusBadge(
+                        ownsAcceptedEvidence: target.ownsAcceptedEvidence
+                    )
+                    .padding()
                 }
             }
             .overlay(alignment: .top) {
@@ -1073,6 +1103,15 @@ struct ScannerSheetView: View {
 
     @ViewBuilder
     private var actionBar: some View {
+        if scannerState.measurementMode == .guidedCorners {
+            guidedActionBar
+        } else {
+            automaticActionBar
+        }
+    }
+
+    @ViewBuilder
+    private var automaticActionBar: some View {
         switch scannerState.phase {
         case .checkingSupport:
             ProgressView(ScannerActionCopy.checkingSupport)
@@ -1082,57 +1121,113 @@ struct ScannerSheetView: View {
                 .padding(.horizontal)
         case .unsupported:
             Button("Close") {
-                dismiss()
+                closeScanner()
             }
             .buttonStyle(.borderedProminent)
         case .failed where scannerState.isPreparingForAiming:
             ProgressView(ScannerActionCopy.preparingPreview)
                 .padding(.horizontal)
         case .failed:
-            retryActionBar
+            VStack(spacing: 10) {
+                retryActionBar
+                if showsGuidedEntryControl {
+                    guidedEntryControl
+                }
+            }
         case .measured where scannerState.isPreparingForAiming:
             ProgressView(ScannerActionCopy.preparingPreview)
                 .padding(.horizontal)
         case .measured where reviewState.additionalAngleMessage != nil:
-            comparisonActionBar
+            VStack(spacing: 10) {
+                comparisonActionBar
+                if showsGuidedEntryControl {
+                    guidedEntryControl
+                }
+            }
         case .measured where !reviewState.canSave:
-            retryActionBar
+            VStack(spacing: 10) {
+                retryActionBar
+                if showsGuidedEntryControl {
+                    guidedEntryControl
+                }
+            }
         default:
             measurementActionBar
         }
     }
 
+    @ViewBuilder
+    private var guidedActionBar: some View {
+        switch scannerState.phase {
+        case .checkingSupport:
+            ProgressView(ScannerActionCopy.checkingSupport)
+                .padding(.horizontal)
+        case .unsupported:
+            Button("Close") {
+                closeScanner()
+            }
+            .buttonStyle(.borderedProminent)
+        case .measured:
+            measurementActionBar
+        default:
+            if let session = scannerState.guidedCaptureSession {
+                ScannerGuidedCaptureControls(
+                    presentation: ScannerGuidedCapturePresentation(
+                        step: session.step,
+                        feedback: guidedPresentationFeedback
+                    ),
+                    isTakingPoint: session.pendingRequest != nil,
+                    actionsEnabled: guidedActionsEnabled,
+                    onBack: {
+                        _ = scannerState.guidedBack()
+                    },
+                    onTakePoint: {
+                        _ = scannerState.requestGuidedPointCapture()
+                    },
+                    onConfirm: {
+                        _ = scannerState.confirmGuidedCapture()
+                    }
+                )
+            }
+        }
+    }
+
     private var measurementActionBar: some View {
-        HStack {
-            if scannerState.estimate == nil {
-                measureButton
+        VStack(spacing: 10) {
+            HStack {
+                if scannerState.measurementMode == .automaticPhotos {
+                    if scannerState.estimate == nil {
+                        measureButton
+                            .buttonStyle(.borderedProminent)
+                    } else {
+                        measureButton
+                            .buttonStyle(.bordered)
+                    }
+
+                    if scannerState.canChangeAutomaticTarget {
+                        Button("Change item") {
+                            _ = scannerState.changeAutomaticTarget()
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
+
+                if let estimate = scannerState.estimate {
+                    Button("Save item") {
+                        saveItem(estimate)
+                    }
                     .buttonStyle(.borderedProminent)
-            } else {
-                measureButton
-                    .buttonStyle(.bordered)
+                    .disabled(!reviewState.canSave)
+                    .accessibilityHint(
+                        reviewState.canSave
+                            ? "Saves this measurement to the packing inventory"
+                            : "Retake the measurement before saving this item"
+                    )
+                }
             }
 
-            if let estimate = scannerState.estimate {
-                Button("Save item") {
-                    guard reviewState.canSave else { return }
-                    appModel.addItem(
-                        name: draftName,
-                        estimate: estimate,
-                        quantity: quantity,
-                        stackability: isStackable
-                            ? .stackable(maxLayers: maxStackLayers)
-                            : .notStackable,
-                        orientationPolicy: mayRotate ? .mayRotate : .keepUpright
-                    )
-                    dismiss()
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(!reviewState.canSave)
-                .accessibilityHint(
-                    reviewState.canSave
-                        ? "Saves this measurement to the packing inventory"
-                        : "Retake the photo before saving this item"
-                )
+            if showsGuidedEntryControl {
+                guidedEntryControl
             }
         }
     }
@@ -1140,7 +1235,7 @@ struct ScannerSheetView: View {
     private var retryActionBar: some View {
         HStack {
             Button("Close") {
-                dismiss()
+                closeScanner()
             }
             .buttonStyle(.bordered)
 
@@ -1156,7 +1251,7 @@ struct ScannerSheetView: View {
     private var comparisonActionBar: some View {
         HStack {
             Button("Close") {
-                dismiss()
+                closeScanner()
             }
             .buttonStyle(.bordered)
 
@@ -1172,6 +1267,7 @@ struct ScannerSheetView: View {
     private var measureButton: some View {
         Button {
             if scannerState.estimate == nil {
+                guard automaticCapturePresentation.canCapture else { return }
                 startMeasurement()
             } else {
                 prepareForAiming()
@@ -1179,7 +1275,7 @@ struct ScannerSheetView: View {
         } label: {
             Label(
                 scannerState.estimate == nil
-                    ? ScannerActionCopy.startMeasurement
+                    ? automaticCapturePresentation.actionTitle
                     : ScannerActionCopy.measureAgain,
                 systemImage: scannerState.estimate == nil
                     ? "camera.fill"
@@ -1188,16 +1284,103 @@ struct ScannerSheetView: View {
         }
         .disabled(
             scannerState.estimate == nil
-                && !scannerState.canStartMeasurement
+                && !automaticCapturePresentation.canCapture
         )
     }
 
     private var reviewState: ScannerCaptureReviewState {
-        ScannerCapturePolicy.reviewState(
+        ScannerBuild33RuntimePolicy.reviewState(
             phase: scannerState.phase,
             estimate: scannerState.estimate,
-            measurementProgress: scannerState.measurementProgress
+            measurementProgress: scannerState.measurementProgress,
+            subject: scannerState.measurementSubject,
+            mode: scannerState.measurementMode
         )
+    }
+
+    private var automaticCapturePresentation: ScannerAutomaticCapturePresentation {
+        ScannerBuild33RuntimePolicy.automaticCapture(
+            hasTarget: scannerState.activeTargetLock != nil,
+            ownsAcceptedEvidence:
+                scannerState.activeTargetLock?.ownsAcceptedEvidence == true,
+            canCapture: scannerState.canStartAutomaticCapture,
+            validationMessage: scannerState.targetFrameValidationMessage
+        )
+    }
+
+    private var showsModeSelector: Bool {
+        scannerState.measurementMode == .automaticPhotos
+            && scannerState.activeTargetLock == nil
+            && scannerState.capturedAngleRecords.isEmpty
+            && scannerState.estimate == nil
+            && !scannerState.phase.isCapturing
+            && !scannerState.isPreparingForAiming
+    }
+
+    private var canChangeMeasurementSetup: Bool {
+        showsModeSelector && !scannerState.isApplyingCameraZoom
+    }
+
+    private var showsGuidedEntryControl: Bool {
+        guard scannerState.measurementMode == .automaticPhotos,
+              scannerState.measurementSubject == .box,
+              scannerState.estimate == nil,
+              !scannerState.phase.isCapturing,
+              !scannerState.isApplyingCameraZoom else {
+            return false
+        }
+        return scannerState.activeTargetLock != nil
+            || !scannerState.capturedAngleRecords.isEmpty
+            || automaticCaptureFailed
+    }
+
+    private var automaticCaptureFailed: Bool {
+        if case .failed = scannerState.phase { return true }
+        return false
+    }
+
+    private var guidedEntryPresentation: ScannerGuidedEntryPresentation {
+        ScannerGuidedEntryPresentation.presentation(
+            for: ScannerBuild33RuntimePolicy.guidedEntrySituation(
+                automaticAngleCount: scannerState.capturedAngleRecords.count,
+                automaticCaptureFailed: automaticCaptureFailed
+            )
+        )
+    }
+
+    private var guidedEntryControl: some View {
+        ScannerGuidedEntryControl(
+            presentation: guidedEntryPresentation,
+            isEnabled: scannerState.measurementSubject == .box
+                && !scannerState.phase.isCapturing
+                && !scannerState.isApplyingCameraZoom,
+            onEnter: {
+                _ = scannerState.enterGuidedCorners()
+            }
+        )
+    }
+
+    private var guidedActionsEnabled: Bool {
+        guard scannerState.measurementMode == .guidedCorners,
+              let session = scannerState.guidedCaptureSession else {
+            return false
+        }
+        if session.step == .review {
+            return session.pendingRequest == nil
+        }
+        return scannerState.phase == .ready
+            && session.pendingRequest == nil
+    }
+
+    private var guidedPresentationFeedback: ScannerGuidedFeedback {
+        switch scannerState.guidedCaptureFeedback {
+        case nil:
+            return .none
+        case let .error(message):
+            return .error(message)
+        case let .replacement(point, message):
+            return .replacement(point: point, message: message)
+        }
     }
 
     private func prepareForAiming() {
@@ -1206,6 +1389,27 @@ struct ScannerSheetView: View {
 
     private func startMeasurement() {
         scannerState.startMeasurement()
+    }
+
+    private func saveItem(_ estimate: MeasurementEstimate) {
+        guard reviewState.canSave else { return }
+        appModel.addItem(
+            name: draftName,
+            estimate: estimate,
+            quantity: quantity,
+            stackability: isStackable
+                ? .stackable(maxLayers: maxStackLayers)
+                : .notStackable,
+            orientationPolicy: mayRotate ? .mayRotate : .keepUpright
+        )
+        closeScanner()
+    }
+
+    private func closeScanner() {
+        if scannerState.measurementMode == .guidedCorners {
+            scannerState.clearGuidedCapture(for: .exit)
+        }
+        dismiss()
     }
 
     private var statusText: String {
@@ -1279,8 +1483,18 @@ struct ScannerSheetView: View {
     }
 
     private var previewGuidanceText: String {
-        scannerState.capturedEstimates.isEmpty
-            ? ScannerGuidanceCopy.previewTarget
+        if scannerState.measurementMode == .guidedCorners,
+           let step = scannerState.guidedCaptureSession?.step {
+            return ScannerGuidedCapturePresentation(
+                step: step,
+                feedback: guidedPresentationFeedback
+            ).prompt
+        }
+        if let guidance = automaticCapturePresentation.guidance {
+            return guidance
+        }
+        return scannerState.capturedEstimates.isEmpty
+            ? ScannerGuidanceCopy.setup
             : ScannerGuidanceCopy.additionalAnglePreview
     }
 
@@ -1383,6 +1597,28 @@ private struct CameraObjectFrame: View {
             .shadow(color: .black.opacity(0.45), radius: 2)
             .allowsHitTesting(false)
             .accessibilityHidden(true)
+    }
+}
+
+private struct GuidedPointReticle: View {
+    var body: some View {
+        ZStack {
+            Circle()
+                .stroke(.cyan, lineWidth: 3)
+                .frame(width: 40, height: 40)
+            Rectangle()
+                .fill(.cyan)
+                .frame(width: 2, height: 52)
+            Rectangle()
+                .fill(.cyan)
+                .frame(width: 52, height: 2)
+            Circle()
+                .fill(.cyan)
+                .frame(width: 8, height: 8)
+        }
+        .shadow(color: .black.opacity(0.75), radius: 2)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 }
 

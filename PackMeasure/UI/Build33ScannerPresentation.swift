@@ -195,6 +195,98 @@ enum ScannerEvidencePresentationPolicy {
     }
 }
 
+struct ScannerAutomaticCapturePresentation: Equatable, Sendable {
+    let actionTitle: String
+    let guidance: String?
+    let targetStatus: String?
+    let canCapture: Bool
+}
+
+/// Pure screen-level policy shared by the shipping sheet and focused tests.
+/// It keeps automatic-photo consensus and guided-corner evidence on distinct
+/// review paths while making explicit target selection a visible prerequisite.
+enum ScannerBuild33RuntimePolicy {
+    static func automaticCapture(
+        hasTarget: Bool,
+        ownsAcceptedEvidence: Bool,
+        canCapture: Bool,
+        validationMessage: String?
+    ) -> ScannerAutomaticCapturePresentation {
+        guard hasTarget else {
+            return ScannerAutomaticCapturePresentation(
+                actionTitle: "Select item",
+                guidance: "Tap the item you want to measure.",
+                targetStatus: nil,
+                canCapture: false
+            )
+        }
+
+        return ScannerAutomaticCapturePresentation(
+            actionTitle: "Take photo",
+            guidance: validationMessage,
+            targetStatus: ScannerTargetStatusPresentation.text(
+                ownsAcceptedEvidence: ownsAcceptedEvidence
+            ),
+            canCapture: canCapture
+        )
+    }
+
+    static func guidedEntrySituation(
+        automaticAngleCount: Int,
+        automaticCaptureFailed: Bool
+    ) -> ScannerGuidedEntrySituation {
+        if automaticAngleCount > 0 {
+            return .replaceAcceptedPhotoAngles
+        }
+        return automaticCaptureFailed ? .automaticFailure : .setup
+    }
+
+    static func reviewState(
+        phase: ScannerPhase,
+        estimate: MeasurementEstimate?,
+        measurementProgress: MultiAngleMeasurementProgress,
+        subject: TargetLockSubject,
+        mode: ScannerMeasurementMode
+    ) -> ScannerCaptureReviewState {
+        guard mode == .guidedCorners else {
+            return ScannerCapturePolicy.reviewState(
+                phase: phase,
+                estimate: estimate,
+                measurementProgress: measurementProgress
+            )
+        }
+
+        guard ScannerEvidencePresentationPolicy.presentation(
+            for: .guidedLidarCorners,
+            subject: subject,
+            mode: mode
+        ) == .guidedBoxMeasurement else {
+            return .retryRequired(
+                "Four-point measurement is only available for boxes."
+            )
+        }
+
+        switch phase {
+        case .checkingSupport, .ready:
+            return .waiting
+        case .scanning:
+            return .capturing
+        case let .unsupported(message):
+            return .unavailable(message)
+        case let .failed(message):
+            return .retryRequired(message)
+        case .measured:
+            guard let estimate else {
+                return .retryRequired(ScannerGuidanceCopy.missingEstimateRetry)
+            }
+            guard estimate.confidence != .low else {
+                return .retryRequired(ScannerGuidanceCopy.lowConfidenceRetry)
+            }
+            return .accepted
+        }
+    }
+}
+
 struct ScannerNormalizedPreviewPoint: Equatable, Sendable {
     let x: CGFloat
     let y: CGFloat
