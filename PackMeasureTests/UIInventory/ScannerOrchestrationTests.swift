@@ -423,6 +423,69 @@ struct ScannerOrchestrationTests {
         #expect(state.objectOverlay == nil)
     }
 
+    @Test @MainActor
+    func guidedEntryFromPausedReviewRequestsFreshPreviewReadiness() throws {
+        for pausedPhase in [ScannerPhase.measured, .failed("Retake the photo")] {
+            let state = ScannerSheetView.ScannerStateModel()
+            state.phase = pausedPhase
+            state.previewRequestID = 7
+            state.objectOverlay = MeasurementObjectOverlay(
+                displayOrientedImageSize: SIMD2<Float>(4, 4),
+                outline: try #require(
+                    MeasurementObjectOutline(
+                        width: 4,
+                        height: 4,
+                        selectedIndices: [5]
+                    )
+                )
+            )
+
+            #expect(state.enterGuidedCorners(targetID: firstTargetID))
+            #expect(state.measurementMode == .guidedCorners)
+            #expect(state.previewRequestID == 8)
+            #expect(state.phase == .checkingSupport)
+            #expect(state.requiresFreshCameraEvidence)
+            #expect(state.objectOverlay == nil)
+
+            #expect(state.previewBecameReady())
+            #expect(state.phase == .ready)
+            #expect(!state.requiresFreshCameraEvidence)
+        }
+    }
+
+    @Test @MainActor
+    func guidedInterruptionAndSessionResetReturnToFreshAutomaticSeries() {
+        for boundary in [
+            GuidedBoxLifecycleBoundary.interruption,
+            .sessionReset,
+        ] {
+            let state = ScannerSheetView.ScannerStateModel()
+            state.phase = .measured
+            state.previewRequestID = 11
+            #expect(state.enterGuidedCorners(targetID: firstTargetID))
+            let guidedSeriesID = state.measurementSeriesID
+            let guidedPreviewRequestID = state.previewRequestID
+
+            state.clearGuidedCapture(for: boundary)
+
+            #expect(state.measurementMode == .automaticPhotos)
+            #expect(state.guidedCaptureSession == nil)
+            #expect(state.measurementSeriesID == guidedSeriesID + 1)
+            #expect(state.capturedAngleRecords.isEmpty)
+            #expect(state.activeTargetIdentity == nil)
+            #expect(state.phase == .checkingSupport)
+            #expect(state.requiresFreshCameraEvidence)
+            #expect(state.previewRequestID == guidedPreviewRequestID + 1)
+            #expect(!state.canStartMeasurement)
+
+            #expect(state.previewBecameReady())
+            #expect(state.measurementMode == .automaticPhotos)
+            #expect(state.phase == .ready)
+            #expect(!state.requiresFreshCameraEvidence)
+            #expect(state.canStartMeasurement)
+        }
+    }
+
     @MainActor
     private func readyState() -> ScannerSheetView.ScannerStateModel {
         let state = ScannerSheetView.ScannerStateModel()
