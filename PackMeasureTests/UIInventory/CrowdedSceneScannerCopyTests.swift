@@ -42,14 +42,35 @@ struct CrowdedSceneScannerCopyTests {
             .photo(.noReticleDepthSurface),
             .photo(.maskAreaTooSmall(actual: 0.01, minimum: 0.03)),
             .photo(.maskAreaTooLarge(actual: 0.90, maximum: 0.85)),
-            .photo(.maskTouchesImageEdge),
+            .photo(.maskTouchesImageEdge(stage: .sourceMask)),
             .photo(
                 .multipleRigidItemsDetected(
-                    PhotoRigidItemMultiplicityEvidence(
-                        splitHeightFraction: 0.5,
-                        maximumBoundaryShiftMeters: 0.1,
-                        normalizedBoundaryShift: 0.2,
-                        significantBoundaryCount: 2
+                    PhotoRigidItemMultiplicityEvaluation(
+                        assessment: .multipleRigidItems(
+                            PhotoRigidItemMultiplicityEvidence(
+                                splitHeightFraction: 0.5,
+                                maximumBoundaryShiftMeters: 0.1,
+                                normalizedBoundaryShift: 0.2,
+                                significantBoundaryCount: 2
+                            )
+                        ),
+                        finitePointCount: 256,
+                        minimumPointCount: 160,
+                        usableBinCount: 20,
+                        comparableSplitCount: 4,
+                        indeterminateReason: nil
+                    )
+                )
+            ),
+            .photo(
+                .rigidItemMultiplicityUncertain(
+                    PhotoRigidItemMultiplicityEvaluation(
+                        assessment: .insufficientEvidence,
+                        finitePointCount: 160,
+                        minimumPointCount: 160,
+                        usableBinCount: 6,
+                        comparableSplitCount: 0,
+                        indeterminateReason: .noComparableSplit
                     )
                 )
             ),
@@ -82,5 +103,45 @@ struct CrowdedSceneScannerCopyTests {
         #expect(copy.localizedCaseInsensitiveContains("move the phone closer"))
         #expect(!copy.localizedCaseInsensitiveContains("move the item"))
         #expect(!copy.localizedCaseInsensitiveContains("clear the scene"))
+    }
+
+    @Test
+    func f09GuidanceMatchesTheIndeterminateReason() {
+        func message(
+            for reason: PhotoRigidItemMultiplicityIndeterminateReason
+        ) -> String {
+            ScannerPhotoFailureCopy.message(
+                for: .photo(
+                    .rigidItemMultiplicityUncertain(
+                        PhotoRigidItemMultiplicityEvaluation(
+                            assessment: .insufficientEvidence,
+                            finitePointCount: 320,
+                            minimumPointCount: 160,
+                            usableBinCount: 12,
+                            comparableSplitCount: 6,
+                            indeterminateReason: reason,
+                            eligibleSplitCount: 14
+                        )
+                    )
+                )
+            )
+        }
+
+        let oneBoundary = message(for: .oneStrongBoundary)
+        #expect(oneBoundary.localizedCaseInsensitiveContains("another box or an obstruction"))
+        #expect(oneBoundary.localizedCaseInsensitiveContains("4 points"))
+
+        let incomplete = message(for: .incompleteProfileCoverage)
+        #expect(incomplete.localizedCaseInsensitiveContains("three-quarter angle"))
+        #expect(incomplete.localizedCaseInsensitiveContains("4 points"))
+
+        let tooSmall = message(for: .footprintBelowMinimum)
+        #expect(tooSmall.localizedCaseInsensitiveContains("too small"))
+        #expect(tooSmall.localizedCaseInsensitiveContains("4 points"))
+        #expect(!tooSmall.localizedCaseInsensitiveContains("closer"))
+
+        let flat = message(for: .degenerateVerticalSpan)
+        #expect(flat.localizedCaseInsensitiveContains("flat face"))
+        #expect(flat.localizedCaseInsensitiveContains("three-quarter angle"))
     }
 }

@@ -813,6 +813,25 @@ struct MeasurementARView: UIViewRepresentable {
             let absoluteUpNormal: Float?
             let elevationAboveFloorMeters: Float?
             let floorEstimate: SceneFloorEstimate?
+            let rigidItemMultiplicityEvaluation: PhotoRigidItemMultiplicityEvaluation?
+
+            init(
+                rawRegionPixelCount: Int,
+                retainedRegionPixelCount: Int,
+                regionCoverage: Float,
+                absoluteUpNormal: Float?,
+                elevationAboveFloorMeters: Float?,
+                floorEstimate: SceneFloorEstimate?,
+                rigidItemMultiplicityEvaluation: PhotoRigidItemMultiplicityEvaluation? = nil
+            ) {
+                self.rawRegionPixelCount = rawRegionPixelCount
+                self.retainedRegionPixelCount = retainedRegionPixelCount
+                self.regionCoverage = regionCoverage
+                self.absoluteUpNormal = absoluteUpNormal
+                self.elevationAboveFloorMeters = elevationAboveFloorMeters
+                self.floorEstimate = floorEstimate
+                self.rigidItemMultiplicityEvaluation = rigidItemMultiplicityEvaluation
+            }
         }
 
         private enum DepthFrameSample {
@@ -1725,12 +1744,12 @@ struct MeasurementARView: UIViewRepresentable {
                     )
                 }
                 if let objectOverlay,
-                   !objectOverlay.isFullyVisible(
+                   let previewFramingFailure = objectOverlay.previewFramingFailure(
                        in: settledPreviewViewportSize,
                        protectedInsetFraction: Self.protectedPreviewInsetFraction
                    ) {
                     let photoFailure = SingleShotCaptureFailure.photo(
-                        .maskTouchesImageEdge
+                        previewFramingFailure
                     )
                     activeCapture.lastPhotoFailure = photoFailure
                     activeCapture.lastCalibration = diagnostics
@@ -2931,7 +2950,9 @@ struct MeasurementARView: UIViewRepresentable {
                     regionCoverage: pointCloud.depthSupport.coverage,
                     absoluteUpNormal: nil,
                     elevationAboveFloorMeters: nil,
-                    floorEstimate: nil
+                    floorEstimate: nil,
+                    rigidItemMultiplicityEvaluation:
+                        pointCloud.rigidItemMultiplicityEvaluation
                 )
                 return .accepted(
                     pointCloud.worldPoints,
@@ -3579,6 +3600,60 @@ struct MeasurementARView: UIViewRepresentable {
             let elevation = diagnosticString(diagnostics?.elevationAboveFloorMeters)
             let floorY = diagnosticString(diagnostics?.floorEstimate?.y)
             let floorSource = diagnostics?.floorEstimate?.source.rawValue ?? "none"
+            let multiplicityEvaluation = diagnostics?.rigidItemMultiplicityEvaluation
+                ?? multiplicityEvaluation(from: capture.lastPhotoFailure)
+            let multiplicityGuardEnabled = capture.photoMeasurement
+                .rigidItemMultiplicityGuard != nil
+            let multiplicityAssessment: String = if let multiplicityEvaluation {
+                multiplicityEvaluation.assessment.diagnosticLabel
+            } else if !multiplicityGuardEnabled {
+                "disabled"
+            } else {
+                "not_attempted"
+            }
+            let multiplicityRoute = multiplicityEvaluation?.diagnosticRoute ?? "none"
+            let multiplicityFinitePoints = multiplicityEvaluation
+                .map { String($0.finitePointCount) } ?? "none"
+            let multiplicityMinimumPoints = multiplicityEvaluation
+                .map { String($0.minimumPointCount) } ?? "none"
+            let multiplicityUsableBins = multiplicityEvaluation
+                .map { String($0.usableBinCount) } ?? "none"
+            let multiplicityEligibleSplits = multiplicityEvaluation
+                .map { String($0.eligibleSplitCount) } ?? "none"
+            let multiplicityComparableSplits = multiplicityEvaluation
+                .map { String($0.comparableSplitCount) } ?? "none"
+            let multiplicityComparableSplitFraction = diagnosticString(
+                multiplicityEvaluation?.comparableSplitFraction
+            )
+            let multiplicityIndeterminateReason = multiplicityEvaluation?
+                .indeterminateReason?.rawValue ?? "none"
+            var multiplicityEvidence = multiplicityEvaluation?.candidateEvidence
+            if let multiplicityEvaluation,
+               case .multipleRigidItems(let acceptedEvidence) =
+                multiplicityEvaluation.assessment {
+                multiplicityEvidence = acceptedEvidence
+            }
+            let multiplicityBoundaryBasis = multiplicityEvidence?.basis.rawValue ?? "none"
+            let multiplicityMaximumBoundaryShift = diagnosticString(
+                multiplicityEvidence?.maximumBoundaryShiftMeters
+            )
+            let multiplicityMaximumQualifyingNoise = diagnosticString(
+                multiplicityEvidence?.maximumQualifyingNoiseMeters
+            )
+            let multiplicityBoundaryCount = multiplicityEvidence
+                .map { String($0.significantBoundaryCount) } ?? "none"
+            let multiplicityLowerBodyHeightFraction = diagnosticString(
+                multiplicityEvidence?.lowerBodyHeightFraction
+            )
+            let multiplicityUpperBodyHeightFraction = diagnosticString(
+                multiplicityEvidence?.upperBodyHeightFraction
+            )
+            let multiplicityLowerBodyPointFraction = diagnosticString(
+                multiplicityEvidence?.lowerBodyPointFraction
+            )
+            let multiplicityUpperBodyPointFraction = diagnosticString(
+                multiplicityEvidence?.upperBodyPointFraction
+            )
             let finalTargetReason: CenteredTargetRejection? = if let result,
                 case .failure(.targetRejected(let reason)) = result {
                 reason
@@ -3636,8 +3711,28 @@ struct MeasurementARView: UIViewRepresentable {
                 .map { String($0.imageResolutionPixels.y) } ?? "none"
 
             Self.calibrationLogger.notice(
-                "scan_calibration request_id=\(capture.requestID, privacy: .public) measurement_series_id=\(capture.measurementSeriesID, privacy: .public) result=\(resultDescription, privacy: .public) attempts=\(capture.sampleAttemptCount, privacy: .public) accepted_frames=\(capture.frameCount, privacy: .public) rejected_frames=\(capture.rejectedFrameCount, privacy: .public) floor_rejected_frames=\(capture.floorRejectedFrameCount, privacy: .public) unavailable_frames=\(capture.unavailableFrameCount, privacy: .public) points=\(capture.worldPoints.count, privacy: .public) length_m=\(lengthMeters, privacy: .public) width_m=\(widthMeters, privacy: .public) height_m=\(heightMeters, privacy: .public) point_cloud_confidence=\(pointCloudConfidence, privacy: .public) camera_x=\(cameraX, privacy: .public) camera_y=\(cameraY, privacy: .public) camera_z=\(cameraZ, privacy: .public) camera_forward_x=\(cameraForwardX, privacy: .public) camera_forward_z=\(cameraForwardZ, privacy: .public) camera_zoom=\(cameraZoom, privacy: .public) camera_applied_display_zoom=\(appliedZoom, privacy: .public) camera_image_width=\(imageWidth, privacy: .public) camera_image_height=\(imageHeight, privacy: .public) camera_focal_x=\(focalX, privacy: .public) camera_focal_y=\(focalY, privacy: .public) camera_principal_x=\(principalX, privacy: .public) camera_principal_y=\(principalY, privacy: .public) camera_normalized_focal=\(normalizedFocalLength, privacy: .public) camera_horizontal_fov_rad=\(horizontalFieldOfView, privacy: .public) camera_vertical_fov_rad=\(verticalFieldOfView, privacy: .public) target_center_x=\(centerX, privacy: .public) target_center_y=\(centerY, privacy: .public) target_center_z=\(centerZ, privacy: .public) raw_region_pixels=\(rawRegionPixels, privacy: .public) retained_region_pixels=\(retainedRegionPixels, privacy: .public) coverage=\(coverage, privacy: .public) seed_abs_up_normal=\(seedUpNormal, privacy: .public) elevation_m=\(elevation, privacy: .public) background_floor_y_m=\(floorY, privacy: .public) floor_source=\(floorSource, privacy: .public) target_reason=\(finalTargetReasonDescription, privacy: .public) last_frame_rejection=\(lastRejectionDescription, privacy: .public) capture_path=\(capturePath, privacy: .public) fallback_trigger_code=\(fallbackTriggerCode, privacy: .public) fallback_trigger_detail=\(fallbackTriggerDetail, privacy: .public) fallback_result=\(fallbackResult, privacy: .public) photo_failure_code=\(photoFailureCode, privacy: .public) photo_failure_detail=\(photoFailureDetail, privacy: .public) estimation_failure=\(failureDescription, privacy: .public) geometry_error=\(geometryErrorDescription, privacy: .public)"
+                "scan_calibration request_id=\(capture.requestID, privacy: .public) measurement_series_id=\(capture.measurementSeriesID, privacy: .public) result=\(resultDescription, privacy: .public) attempts=\(capture.sampleAttemptCount, privacy: .public) accepted_frames=\(capture.frameCount, privacy: .public) rejected_frames=\(capture.rejectedFrameCount, privacy: .public) floor_rejected_frames=\(capture.floorRejectedFrameCount, privacy: .public) unavailable_frames=\(capture.unavailableFrameCount, privacy: .public) points=\(capture.worldPoints.count, privacy: .public) length_m=\(lengthMeters, privacy: .public) width_m=\(widthMeters, privacy: .public) height_m=\(heightMeters, privacy: .public) point_cloud_confidence=\(pointCloudConfidence, privacy: .public) camera_x=\(cameraX, privacy: .public) camera_y=\(cameraY, privacy: .public) camera_z=\(cameraZ, privacy: .public) camera_forward_x=\(cameraForwardX, privacy: .public) camera_forward_z=\(cameraForwardZ, privacy: .public) camera_zoom=\(cameraZoom, privacy: .public) camera_applied_display_zoom=\(appliedZoom, privacy: .public) camera_image_width=\(imageWidth, privacy: .public) camera_image_height=\(imageHeight, privacy: .public) camera_focal_x=\(focalX, privacy: .public) camera_focal_y=\(focalY, privacy: .public) camera_principal_x=\(principalX, privacy: .public) camera_principal_y=\(principalY, privacy: .public) camera_normalized_focal=\(normalizedFocalLength, privacy: .public) camera_horizontal_fov_rad=\(horizontalFieldOfView, privacy: .public) camera_vertical_fov_rad=\(verticalFieldOfView, privacy: .public) target_center_x=\(centerX, privacy: .public) target_center_y=\(centerY, privacy: .public) target_center_z=\(centerZ, privacy: .public) raw_region_pixels=\(rawRegionPixels, privacy: .public) retained_region_pixels=\(retainedRegionPixels, privacy: .public) coverage=\(coverage, privacy: .public) seed_abs_up_normal=\(seedUpNormal, privacy: .public) elevation_m=\(elevation, privacy: .public) background_floor_y_m=\(floorY, privacy: .public) floor_source=\(floorSource, privacy: .public) multiplicity_guard_enabled=\(multiplicityGuardEnabled, privacy: .public) multiplicity_assessment=\(multiplicityAssessment, privacy: .public) multiplicity_assessment_route=\(multiplicityRoute, privacy: .public) multiplicity_finite_points=\(multiplicityFinitePoints, privacy: .public) multiplicity_minimum_points=\(multiplicityMinimumPoints, privacy: .public) multiplicity_usable_bins=\(multiplicityUsableBins, privacy: .public) multiplicity_eligible_splits=\(multiplicityEligibleSplits, privacy: .public) multiplicity_comparable_splits=\(multiplicityComparableSplits, privacy: .public) multiplicity_comparable_split_fraction=\(multiplicityComparableSplitFraction, privacy: .public) multiplicity_indeterminate_reason=\(multiplicityIndeterminateReason, privacy: .public) multiplicity_boundary_basis=\(multiplicityBoundaryBasis, privacy: .public) multiplicity_boundary_count=\(multiplicityBoundaryCount, privacy: .public) multiplicity_maximum_boundary_shift_m=\(multiplicityMaximumBoundaryShift, privacy: .public) multiplicity_maximum_qualifying_noise_m=\(multiplicityMaximumQualifyingNoise, privacy: .public) multiplicity_lower_body_height_fraction=\(multiplicityLowerBodyHeightFraction, privacy: .public) multiplicity_upper_body_height_fraction=\(multiplicityUpperBodyHeightFraction, privacy: .public) multiplicity_lower_body_point_fraction=\(multiplicityLowerBodyPointFraction, privacy: .public) multiplicity_upper_body_point_fraction=\(multiplicityUpperBodyPointFraction, privacy: .public) target_reason=\(finalTargetReasonDescription, privacy: .public) last_frame_rejection=\(lastRejectionDescription, privacy: .public) capture_path=\(capturePath, privacy: .public) fallback_trigger_code=\(fallbackTriggerCode, privacy: .public) fallback_trigger_detail=\(fallbackTriggerDetail, privacy: .public) fallback_result=\(fallbackResult, privacy: .public) photo_failure_code=\(photoFailureCode, privacy: .public) photo_failure_detail=\(photoFailureDetail, privacy: .public) estimation_failure=\(failureDescription, privacy: .public) geometry_error=\(geometryErrorDescription, privacy: .public)"
             )
+        }
+
+        private func multiplicityEvaluation(
+            from failure: SingleShotCaptureFailure?
+        ) -> PhotoRigidItemMultiplicityEvaluation? {
+            let photoError: PhotoObjectMeasurementError? = switch failure {
+            case .photo(let error):
+                error
+            case .foreground(.photo(_, let error)):
+                error
+            default:
+                nil
+            }
+            return switch photoError {
+            case .multipleRigidItemsDetected(let evaluation),
+                 .rigidItemMultiplicityUncertain(let evaluation):
+                evaluation
+            default:
+                nil
+            }
         }
 
         private func diagnosticString(_ value: Float?) -> String {

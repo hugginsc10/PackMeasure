@@ -2,23 +2,132 @@ import Foundation
 import simd
 
 struct PhotoRigidItemMultiplicityEvidence: Equatable, Sendable {
+    enum Basis: String, Equatable, Sendable {
+        case standardBoundaryPair = "standard_boundary_pair"
+        case strongBoundaryPair = "strong_boundary_pair"
+        case strongSingleBoundary = "strong_single_boundary"
+    }
+
     let splitHeightFraction: Float
     let maximumBoundaryShiftMeters: Float
     let normalizedBoundaryShift: Float
     let significantBoundaryCount: Int
+    let basis: Basis
+    let maximumQualifyingNoiseMeters: Float
+    let lowerBodyHeightFraction: Float
+    let upperBodyHeightFraction: Float
+    let lowerBodyPointFraction: Float
+    let upperBodyPointFraction: Float
+
+    init(
+        splitHeightFraction: Float,
+        maximumBoundaryShiftMeters: Float,
+        normalizedBoundaryShift: Float,
+        significantBoundaryCount: Int,
+        basis: Basis = .standardBoundaryPair,
+        maximumQualifyingNoiseMeters: Float = 0,
+        lowerBodyHeightFraction: Float = 0,
+        upperBodyHeightFraction: Float = 0,
+        lowerBodyPointFraction: Float = 0,
+        upperBodyPointFraction: Float = 0
+    ) {
+        self.splitHeightFraction = splitHeightFraction
+        self.maximumBoundaryShiftMeters = maximumBoundaryShiftMeters
+        self.normalizedBoundaryShift = normalizedBoundaryShift
+        self.significantBoundaryCount = significantBoundaryCount
+        self.basis = basis
+        self.maximumQualifyingNoiseMeters = maximumQualifyingNoiseMeters
+        self.lowerBodyHeightFraction = lowerBodyHeightFraction
+        self.upperBodyHeightFraction = upperBodyHeightFraction
+        self.lowerBodyPointFraction = lowerBodyPointFraction
+        self.upperBodyPointFraction = upperBodyPointFraction
+    }
 }
 
 enum PhotoRigidItemMultiplicityAssessment: Equatable, Sendable {
     case insufficientEvidence
     case singleRigidItem
     case multipleRigidItems(PhotoRigidItemMultiplicityEvidence)
+
+    var diagnosticLabel: String {
+        switch self {
+        case .insufficientEvidence:
+            "insufficient_evidence"
+        case .singleRigidItem:
+            "single_rigid_item"
+        case .multipleRigidItems:
+            "multiple_rigid_items"
+        }
+    }
 }
 
-/// Rejects a selected Box-mode point cloud only when its horizontal footprint
-/// changes abruptly across an interior gravity-aligned plane. A persistent
-/// change in at least two robust footprint boundaries is strong evidence that
-/// the selection spans two stacked rigid bodies; a texture seam, one noisy
-/// edge, or a small protrusion is not.
+enum PhotoRigidItemMultiplicityIndeterminateReason: String, Equatable, Sendable {
+    case invalidConfiguration = "invalid_configuration"
+    case tooFewPoints = "too_few_points"
+    case degenerateVerticalSpan = "degenerate_vertical_span"
+    case footprintBelowMinimum = "footprint_below_minimum"
+    case noComparableSplit = "no_comparable_split"
+    case oneStrongBoundary = "one_strong_boundary"
+    case incompleteProfileCoverage = "incomplete_profile_coverage"
+}
+
+struct PhotoRigidItemMultiplicityEvaluation: Equatable, Sendable {
+    let assessment: PhotoRigidItemMultiplicityAssessment
+    let finitePointCount: Int
+    let minimumPointCount: Int
+    let usableBinCount: Int
+    let comparableSplitCount: Int
+    let indeterminateReason: PhotoRigidItemMultiplicityIndeterminateReason?
+    let eligibleSplitCount: Int
+    let candidateEvidence: PhotoRigidItemMultiplicityEvidence?
+
+    init(
+        assessment: PhotoRigidItemMultiplicityAssessment,
+        finitePointCount: Int,
+        minimumPointCount: Int,
+        usableBinCount: Int,
+        comparableSplitCount: Int,
+        indeterminateReason: PhotoRigidItemMultiplicityIndeterminateReason?,
+        eligibleSplitCount: Int = 0,
+        candidateEvidence: PhotoRigidItemMultiplicityEvidence? = nil
+    ) {
+        self.assessment = assessment
+        self.finitePointCount = finitePointCount
+        self.minimumPointCount = minimumPointCount
+        self.usableBinCount = usableBinCount
+        self.comparableSplitCount = comparableSplitCount
+        self.indeterminateReason = indeterminateReason
+        self.eligibleSplitCount = eligibleSplitCount
+        self.candidateEvidence = candidateEvidence
+    }
+
+    var diagnosticRoute: String {
+        if case .multipleRigidItems(let evidence) = assessment {
+            return evidence.basis.rawValue
+        }
+        if let candidateEvidence {
+            return candidateEvidence.basis.rawValue
+        }
+        if assessment == .singleRigidItem {
+            return "complete_no_boundary"
+        }
+        if indeterminateReason == .incompleteProfileCoverage {
+            return "incomplete_profile"
+        }
+        return "not_classified"
+    }
+
+    var comparableSplitFraction: Float {
+        guard eligibleSplitCount > 0 else { return 0 }
+        return Float(comparableSplitCount) / Float(eligibleSplitCount)
+    }
+}
+
+/// Verifies a selected Box-mode point cloud across its interior
+/// gravity-aligned profile. Two corroborating footprint-boundary changes are
+/// strong evidence of multiple rigid bodies. One strong change or incomplete
+/// profile coverage is uncertain and fails closed without claiming that the
+/// selection definitely contains multiple boxes.
 ///
 /// Set `PhotoObjectMeasurement.rigidItemMultiplicityGuard` to `nil` for a
 /// general-item scan whose shape is not expected to be one rigid body.
@@ -39,24 +148,67 @@ struct PhotoRigidItemMultiplicityGuard: Sendable {
     var minimumRelativeBoundaryShift: Float = 0.09
     var minimumSignificantBoundaryCount = 2
     var noiseMultiplier: Float = 2.5
+    var minimumStrongBodyHeightFraction: Float = 0.15
+    var minimumStrongBodyPointFraction: Float = 0.15
+    var minimumStrongBoundaryShiftMeters: Float = 0.08
+    var minimumStrongRelativeBoundaryShift: Float = 0.18
+    var strongNoiseMultiplier: Float = 3
 
     func assess(
         worldPoints: [SIMD3<Float>]
     ) -> PhotoRigidItemMultiplicityAssessment {
-        guard configurationIsValid else { return .insufficientEvidence }
+        evaluate(worldPoints: worldPoints).assessment
+    }
 
+    func evaluate(
+        worldPoints: [SIMD3<Float>]
+    ) -> PhotoRigidItemMultiplicityEvaluation {
         let finitePoints = worldPoints.filter(Self.isFinite)
+        guard configurationIsValid else {
+            return PhotoRigidItemMultiplicityEvaluation(
+                assessment: .insufficientEvidence,
+                finitePointCount: finitePoints.count,
+                minimumPointCount: minimumPointCount,
+                usableBinCount: 0,
+                comparableSplitCount: 0,
+                indeterminateReason: .invalidConfiguration
+            )
+        }
+
         guard finitePoints.count >= minimumPointCount else {
-            return .insufficientEvidence
+            return PhotoRigidItemMultiplicityEvaluation(
+                assessment: .insufficientEvidence,
+                finitePointCount: finitePoints.count,
+                minimumPointCount: minimumPointCount,
+                usableBinCount: 0,
+                comparableSplitCount: 0,
+                indeterminateReason: .tooFewPoints
+            )
         }
 
         let verticalCoordinates = finitePoints.map(\.y).sorted()
         guard let lowerY = quantile(0.02, in: verticalCoordinates),
               let upperY = quantile(0.98, in: verticalCoordinates) else {
-            return .insufficientEvidence
+            return PhotoRigidItemMultiplicityEvaluation(
+                assessment: .insufficientEvidence,
+                finitePointCount: finitePoints.count,
+                minimumPointCount: minimumPointCount,
+                usableBinCount: 0,
+                comparableSplitCount: 0,
+                indeterminateReason: .degenerateVerticalSpan
+            )
         }
         let verticalSpan = upperY - lowerY
-        guard verticalSpan > .ulpOfOne else { return .insufficientEvidence }
+        guard verticalSpan > .ulpOfOne else {
+            return PhotoRigidItemMultiplicityEvaluation(
+                assessment: .insufficientEvidence,
+                finitePointCount: finitePoints.count,
+                minimumPointCount: minimumPointCount,
+                usableBinCount: 0,
+                comparableSplitCount: 0,
+                indeterminateReason: .degenerateVerticalSpan
+            )
+        }
 
         let horizontalX = finitePoints.map(\.x).sorted()
         let horizontalZ = finitePoints.map(\.z).sorted()
@@ -64,11 +216,25 @@ struct PhotoRigidItemMultiplicityGuard: Sendable {
               let upperX = quantile(1 - footprintQuantile, in: horizontalX),
               let lowerZ = quantile(footprintQuantile, in: horizontalZ),
               let upperZ = quantile(1 - footprintQuantile, in: horizontalZ) else {
-            return .insufficientEvidence
+            return PhotoRigidItemMultiplicityEvaluation(
+                assessment: .insufficientEvidence,
+                finitePointCount: finitePoints.count,
+                minimumPointCount: minimumPointCount,
+                usableBinCount: 0,
+                comparableSplitCount: 0,
+                indeterminateReason: .footprintBelowMinimum
+            )
         }
         let footprintScale = max(upperX - lowerX, upperZ - lowerZ)
         guard footprintScale >= minimumHorizontalSpanMeters else {
-            return .insufficientEvidence
+            return PhotoRigidItemMultiplicityEvaluation(
+                assessment: .insufficientEvidence,
+                finitePointCount: finitePoints.count,
+                minimumPointCount: minimumPointCount,
+                usableBinCount: 0,
+                comparableSplitCount: 0,
+                indeterminateReason: .footprintBelowMinimum
+            )
         }
 
         var bins = Array(repeating: [SIMD2<Float>](), count: verticalBinCount)
@@ -82,25 +248,68 @@ struct PhotoRigidItemMultiplicityGuard: Sendable {
         }
 
         let signatures = bins.map(signature(for:))
+        let usableBinCount = signatures.reduce(into: 0) { count, signature in
+            if signature != nil { count += 1 }
+        }
+        let minimumEligibleBodyHeightFraction = min(
+            minimumBodyHeightFraction,
+            minimumStrongBodyHeightFraction
+        )
         let minimumSplitBin = max(
             comparisonBinCount,
-            Int(ceil(minimumBodyHeightFraction * Float(verticalBinCount)))
+            Int(ceil(minimumEligibleBodyHeightFraction * Float(verticalBinCount)))
         )
         let maximumSplitBin = min(
             verticalBinCount - comparisonBinCount - 1,
-            Int(floor((1 - minimumBodyHeightFraction) * Float(verticalBinCount))) - 1
+            Int(floor((1 - minimumEligibleBodyHeightFraction) * Float(verticalBinCount))) - 1
         )
         guard minimumSplitBin <= maximumSplitBin else {
-            return .insufficientEvidence
+            return PhotoRigidItemMultiplicityEvaluation(
+                assessment: .insufficientEvidence,
+                finitePointCount: finitePoints.count,
+                minimumPointCount: minimumPointCount,
+                usableBinCount: usableBinCount,
+                comparableSplitCount: 0,
+                indeterminateReason: .noComparableSplit
+            )
         }
 
         let boundaryThreshold = max(
             minimumBoundaryShiftMeters,
             footprintScale * minimumRelativeBoundaryShift
         )
-        var bestEvidence: PhotoRigidItemMultiplicityEvidence?
+        var eligibleSplitCount = 0
+        var bestCorroboratedEvidence: PhotoRigidItemMultiplicityEvidence?
+        var bestOneBoundaryEvidence: PhotoRigidItemMultiplicityEvidence?
+        var comparableSplitCount = 0
 
         for splitBin in minimumSplitBin...maximumSplitBin {
+            let splitFraction = (Float(splitBin) + 0.5) / Float(verticalBinCount)
+            let splitY = lowerY + splitFraction * verticalSpan
+            let lowerPointCount = finitePoints.reduce(into: 0) { count, point in
+                if point.y < splitY { count += 1 }
+            }
+            let lowerPointFraction = Float(lowerPointCount) / Float(finitePoints.count)
+            let upperPointFraction = 1 - lowerPointFraction
+            let lowerHeightFraction = splitFraction
+            let upperHeightFraction = 1 - splitFraction
+            let isStandardBodySplit = lowerHeightFraction >= minimumBodyHeightFraction
+                && upperHeightFraction >= minimumBodyHeightFraction
+                && lowerPointFraction >= minimumBodyPointFraction
+                && upperPointFraction >= minimumBodyPointFraction
+            let isStrongBodySplit = lowerHeightFraction >= minimumStrongBodyHeightFraction
+                && upperHeightFraction >= minimumStrongBodyHeightFraction
+                && lowerPointFraction >= minimumStrongBodyPointFraction
+                && upperPointFraction >= minimumStrongBodyPointFraction
+            guard isStandardBodySplit || isStrongBodySplit else {
+                continue
+            }
+            // A split is eligible only when both candidate bodies meet the
+            // configured height and observed-point support floors. Perspective
+            // can make an outer geometric split ineligible even with dense,
+            // complete coverage; it must not count as a missing profile band.
+            eligibleSplitCount += 1
+
             // One transition bin is intentionally excluded. A real stacking
             // plane can straddle a coarse LiDAR row, while the stable slices
             // immediately beyond it still describe the two rigid bodies.
@@ -115,17 +324,7 @@ struct PhotoRigidItemMultiplicityGuard: Sendable {
                 continue
             }
 
-            let splitFraction = (Float(splitBin) + 0.5) / Float(verticalBinCount)
-            let splitY = lowerY + splitFraction * verticalSpan
-            let lowerPointCount = finitePoints.reduce(into: 0) { count, point in
-                if point.y < splitY { count += 1 }
-            }
-            let lowerPointFraction = Float(lowerPointCount) / Float(finitePoints.count)
-            let upperPointFraction = 1 - lowerPointFraction
-            guard lowerPointFraction >= minimumBodyPointFraction,
-                  upperPointFraction >= minimumBodyPointFraction else {
-                continue
-            }
+            comparableSplitCount += 1
 
             let lowerNoise = maximumDeviations(
                 of: lowerSignatures,
@@ -139,39 +338,157 @@ struct PhotoRigidItemMultiplicityGuard: Sendable {
                 lowerMedian.boundaries,
                 upperMedian.boundaries
             ).map { abs($0 - $1) }
-            let significantBoundaryCount = shifts.indices.reduce(into: 0) { count, index in
+            let significantBoundaryIndices = shifts.indices.filter { index in
                 let localNoise = max(lowerNoise[index], upperNoise[index])
-                if shifts[index] >= boundaryThreshold,
-                   shifts[index] >= localNoise * noiseMultiplier {
-                    count += 1
+                return shifts[index] >= boundaryThreshold
+                    && shifts[index] >= localNoise * noiseMultiplier
+            }
+
+            if isStandardBodySplit,
+               significantBoundaryIndices.count >= minimumSignificantBoundaryCount,
+               let evidence = multiplicityEvidence(
+                    splitFraction: splitFraction,
+                    qualifyingIndices: significantBoundaryIndices,
+                    shifts: shifts,
+                    lowerNoise: lowerNoise,
+                    upperNoise: upperNoise,
+                    footprintScale: footprintScale,
+                    basis: .standardBoundaryPair,
+                    lowerHeightFraction: lowerHeightFraction,
+                    upperHeightFraction: upperHeightFraction,
+                    lowerPointFraction: lowerPointFraction,
+                    upperPointFraction: upperPointFraction
+                )
+            {
+                if isStronger(evidence, than: bestCorroboratedEvidence) {
+                    bestCorroboratedEvidence = evidence
                 }
             }
-            guard significantBoundaryCount >= minimumSignificantBoundaryCount,
-                  let maximumShift = shifts.max() else {
-                continue
-            }
 
-            let evidence = PhotoRigidItemMultiplicityEvidence(
-                splitHeightFraction: splitFraction,
-                maximumBoundaryShiftMeters: maximumShift,
-                normalizedBoundaryShift: maximumShift / footprintScale,
-                significantBoundaryCount: significantBoundaryCount
+            let strongBoundaryThreshold = max(
+                minimumStrongBoundaryShiftMeters,
+                footprintScale * minimumStrongRelativeBoundaryShift
             )
-            if isStronger(evidence, than: bestEvidence) {
-                bestEvidence = evidence
+            let strongBoundaryIndices = shifts.indices.filter { index in
+                let localNoise = max(lowerNoise[index], upperNoise[index])
+                return shifts[index] >= strongBoundaryThreshold
+                    && shifts[index] >= localNoise * strongNoiseMultiplier
+            }
+            if isStrongBodySplit,
+               !strongBoundaryIndices.isEmpty,
+               let evidence = multiplicityEvidence(
+                    splitFraction: splitFraction,
+                    qualifyingIndices: strongBoundaryIndices,
+                    shifts: shifts,
+                    lowerNoise: lowerNoise,
+                    upperNoise: upperNoise,
+                    footprintScale: footprintScale,
+                    basis: strongBoundaryIndices.count >= minimumSignificantBoundaryCount
+                        ? .strongBoundaryPair
+                        : .strongSingleBoundary,
+                    lowerHeightFraction: lowerHeightFraction,
+                    upperHeightFraction: upperHeightFraction,
+                    lowerPointFraction: lowerPointFraction,
+                    upperPointFraction: upperPointFraction
+               )
+            {
+                if strongBoundaryIndices.count >= minimumSignificantBoundaryCount {
+                    if isStronger(evidence, than: bestCorroboratedEvidence) {
+                        bestCorroboratedEvidence = evidence
+                    }
+                } else if isStronger(evidence, than: bestOneBoundaryEvidence) {
+                    bestOneBoundaryEvidence = evidence
+                }
             }
         }
 
-        if let bestEvidence {
-            return .multipleRigidItems(bestEvidence)
+        if let bestCorroboratedEvidence {
+            return PhotoRigidItemMultiplicityEvaluation(
+                assessment: .multipleRigidItems(bestCorroboratedEvidence),
+                finitePointCount: finitePoints.count,
+                minimumPointCount: minimumPointCount,
+                usableBinCount: usableBinCount,
+                comparableSplitCount: comparableSplitCount,
+                indeterminateReason: nil,
+                eligibleSplitCount: eligibleSplitCount
+            )
         }
-        let usableBinCount = signatures.reduce(into: 0) { count, signature in
-            if signature != nil { count += 1 }
+        if let bestOneBoundaryEvidence {
+            return PhotoRigidItemMultiplicityEvaluation(
+                assessment: .insufficientEvidence,
+                finitePointCount: finitePoints.count,
+                minimumPointCount: minimumPointCount,
+                usableBinCount: usableBinCount,
+                comparableSplitCount: comparableSplitCount,
+                indeterminateReason: .oneStrongBoundary,
+                eligibleSplitCount: eligibleSplitCount,
+                candidateEvidence: bestOneBoundaryEvidence
+            )
         }
-        guard usableBinCount >= comparisonBinCount * 2 else {
-            return .insufficientEvidence
+        guard comparableSplitCount > 0 else {
+            return PhotoRigidItemMultiplicityEvaluation(
+                assessment: .insufficientEvidence,
+                finitePointCount: finitePoints.count,
+                minimumPointCount: minimumPointCount,
+                usableBinCount: usableBinCount,
+                comparableSplitCount: 0,
+                indeterminateReason: .noComparableSplit,
+                eligibleSplitCount: eligibleSplitCount
+            )
         }
-        return .singleRigidItem
+        guard comparableSplitCount == eligibleSplitCount else {
+            return PhotoRigidItemMultiplicityEvaluation(
+                assessment: .insufficientEvidence,
+                finitePointCount: finitePoints.count,
+                minimumPointCount: minimumPointCount,
+                usableBinCount: usableBinCount,
+                comparableSplitCount: comparableSplitCount,
+                indeterminateReason: .incompleteProfileCoverage,
+                eligibleSplitCount: eligibleSplitCount
+            )
+        }
+        return PhotoRigidItemMultiplicityEvaluation(
+            assessment: .singleRigidItem,
+            finitePointCount: finitePoints.count,
+            minimumPointCount: minimumPointCount,
+            usableBinCount: usableBinCount,
+            comparableSplitCount: comparableSplitCount,
+            indeterminateReason: nil,
+            eligibleSplitCount: eligibleSplitCount
+        )
+    }
+
+    private func multiplicityEvidence(
+        splitFraction: Float,
+        qualifyingIndices: [Int],
+        shifts: [Float],
+        lowerNoise: [Float],
+        upperNoise: [Float],
+        footprintScale: Float,
+        basis: PhotoRigidItemMultiplicityEvidence.Basis,
+        lowerHeightFraction: Float,
+        upperHeightFraction: Float,
+        lowerPointFraction: Float,
+        upperPointFraction: Float
+    ) -> PhotoRigidItemMultiplicityEvidence? {
+        guard let maximumShift = qualifyingIndices.map({ shifts[$0] }).max(),
+              let maximumNoise = qualifyingIndices.map({
+                  max(lowerNoise[$0], upperNoise[$0])
+              }).max() else {
+            return nil
+        }
+        return PhotoRigidItemMultiplicityEvidence(
+            splitHeightFraction: splitFraction,
+            maximumBoundaryShiftMeters: maximumShift,
+            normalizedBoundaryShift: maximumShift / footprintScale,
+            significantBoundaryCount: qualifyingIndices.count,
+            basis: basis,
+            maximumQualifyingNoiseMeters: maximumNoise,
+            lowerBodyHeightFraction: lowerHeightFraction,
+            upperBodyHeightFraction: upperHeightFraction,
+            lowerBodyPointFraction: lowerPointFraction,
+            upperBodyPointFraction: upperPointFraction
+        )
     }
 
     private var configurationIsValid: Bool {
@@ -190,6 +507,13 @@ struct PhotoRigidItemMultiplicityGuard: Sendable {
             && minimumRelativeBoundaryShift > 0
             && minimumSignificantBoundaryCount >= 2
             && noiseMultiplier > 0
+            && minimumStrongBodyHeightFraction > 0
+            && minimumStrongBodyHeightFraction < 0.5
+            && minimumStrongBodyPointFraction > 0
+            && minimumStrongBodyPointFraction < 0.5
+            && minimumStrongBoundaryShiftMeters > minimumBoundaryShiftMeters
+            && minimumStrongRelativeBoundaryShift > minimumRelativeBoundaryShift
+            && strongNoiseMultiplier >= noiseMultiplier
     }
 
     private func signature(for points: [SIMD2<Float>]) -> FootprintSignature? {

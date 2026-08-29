@@ -263,7 +263,8 @@ extension PhotoObjectMeasurementError {
              .ambiguousForegroundInstances,
              .noReticleDepthSurface,
              .maskAreaTooSmall,
-             .multipleRigidItemsDetected:
+             .multipleRigidItemsDetected,
+             .rigidItemMultiplicityUncertain:
             .isolation
         case .insufficientDepthSamples,
              .insufficientDepthCoverage,
@@ -301,6 +302,8 @@ extension PhotoObjectMeasurementError {
             "F06"
         case .multipleRigidItemsDetected:
             "F08"
+        case .rigidItemMultiplicityUncertain:
+            "F09"
         case .insufficientDepthSamples:
             "D01"
         case .insufficientDepthCoverage:
@@ -356,8 +359,8 @@ extension PhotoObjectMeasurementError {
             "mask_area_too_small,actual=\(Self.metric(actual)),minimum=\(Self.metric(minimum))"
         case let .maskAreaTooLarge(actual, maximum):
             "mask_area_too_large,actual=\(Self.metric(actual)),maximum=\(Self.metric(maximum))"
-        case .maskTouchesImageEdge:
-            "mask_touches_image_edge"
+        case let .maskTouchesImageEdge(stage):
+            "mask_touches_image_edge,stage=\(stage.rawValue)"
         case .maskCalibrationAspectRatioMismatch:
             "mask_calibration_aspect_ratio_mismatch"
         case .depthGridResolutionMismatch:
@@ -374,8 +377,16 @@ extension PhotoObjectMeasurementError {
             "insufficient_horizontal_depth_endpoint_coverage,actual=\(Self.metric(actual)),minimum=\(Self.metric(minimum))"
         case let .insufficientVerticalDepthEndpointCoverage(actual, minimum):
             "insufficient_vertical_depth_endpoint_coverage,actual=\(Self.metric(actual)),minimum=\(Self.metric(minimum))"
-        case let .multipleRigidItemsDetected(evidence):
-            "multiple_rigid_items_detected,split_height_fraction=\(Self.metric(evidence.splitHeightFraction)),maximum_boundary_shift_meters=\(Self.metric(evidence.maximumBoundaryShiftMeters)),normalized_boundary_shift=\(Self.metric(evidence.normalizedBoundaryShift)),significant_boundary_count=\(evidence.significantBoundaryCount)"
+        case let .multipleRigidItemsDetected(evaluation):
+            Self.multiplicityDescription(
+                prefix: "multiple_rigid_items_detected",
+                evaluation: evaluation
+            )
+        case let .rigidItemMultiplicityUncertain(evaluation):
+            Self.multiplicityDescription(
+                prefix: "rigid_item_multiplicity_uncertain",
+                evaluation: evaluation
+            )
         case .invalidCameraCalibration:
             "invalid_camera_calibration"
         case .invalidWorldPoint:
@@ -385,6 +396,62 @@ extension PhotoObjectMeasurementError {
 
     private static func metric(_ value: Float) -> String {
         String(format: "%.6f", value)
+    }
+
+    private static func multiplicityDescription(
+        prefix: String,
+        evaluation: PhotoRigidItemMultiplicityEvaluation
+    ) -> String {
+        var fields = [
+            prefix,
+            "assessment=\(evaluation.assessment.diagnosticLabel)",
+            "assessment_route=\(evaluation.diagnosticRoute)",
+            "finite_points=\(evaluation.finitePointCount)",
+            "minimum_points=\(evaluation.minimumPointCount)",
+            "usable_bins=\(evaluation.usableBinCount)",
+            "eligible_splits=\(evaluation.eligibleSplitCount)",
+            "comparable_splits=\(evaluation.comparableSplitCount)",
+            "comparable_split_fraction=\(metric(evaluation.comparableSplitFraction))",
+            "indeterminate_reason=\(evaluation.indeterminateReason?.rawValue ?? "none")",
+        ]
+        let evidence: PhotoRigidItemMultiplicityEvidence? = if case .multipleRigidItems(
+            let acceptedEvidence
+        ) = evaluation.assessment {
+            acceptedEvidence
+        } else {
+            evaluation.candidateEvidence
+        }
+        if let evidence {
+            fields.append(
+                "split_height_fraction=\(metric(evidence.splitHeightFraction))"
+            )
+            fields.append(
+                "maximum_boundary_shift_meters=\(metric(evidence.maximumBoundaryShiftMeters))"
+            )
+            fields.append(
+                "normalized_boundary_shift=\(metric(evidence.normalizedBoundaryShift))"
+            )
+            fields.append(
+                "significant_boundary_count=\(evidence.significantBoundaryCount)"
+            )
+            fields.append("boundary_basis=\(evidence.basis.rawValue)")
+            fields.append(
+                "maximum_qualifying_noise_meters=\(metric(evidence.maximumQualifyingNoiseMeters))"
+            )
+            fields.append(
+                "lower_body_height_fraction=\(metric(evidence.lowerBodyHeightFraction))"
+            )
+            fields.append(
+                "upper_body_height_fraction=\(metric(evidence.upperBodyHeightFraction))"
+            )
+            fields.append(
+                "lower_body_point_fraction=\(metric(evidence.lowerBodyPointFraction))"
+            )
+            fields.append(
+                "upper_body_point_fraction=\(metric(evidence.upperBodyPointFraction))"
+            )
+        }
+        return fields.joined(separator: ",")
     }
 }
 
@@ -437,7 +504,8 @@ enum SingleShotObjectMeasurement {
              .insufficientVerticalDepthSupport,
              .insufficientHorizontalDepthEndpointCoverage,
              .insufficientVerticalDepthEndpointCoverage,
-             .multipleRigidItemsDetected:
+             .multipleRigidItemsDetected,
+             .rigidItemMultiplicityUncertain:
             return .targetRejected(.insufficientSurfaceEvidence)
         }
     }

@@ -337,7 +337,7 @@ final class PhotoObjectMeasurementTests: XCTestCase {
         }
         var labels = Array(repeating: UInt32.zero, count: width * height)
         for index in ringIndices { labels[index] = 5 }
-        let result = try PhotoObjectMeasurement(policy: permissivePolicy).makePointCloud(
+        let result = try permissiveMeasurement.makePointCloud(
             labelMask: try PhotoInstanceLabelMask(
                 width: width,
                 height: height,
@@ -363,7 +363,7 @@ final class PhotoObjectMeasurementTests: XCTestCase {
 
     func testPointCloudCarriesOutlineFromExactDepthSelection() throws {
         let labels = try lShapeMask(width: 12, height: 12)
-        let result = try PhotoObjectMeasurement(policy: permissivePolicy).makePointCloud(
+        let result = try permissiveMeasurement.makePointCloud(
             labelMask: labels,
             depthGrid: populatedDepthGrid(width: 12, height: 12),
             calibration: calibration(imageWidth: 12, imageHeight: 12)
@@ -461,6 +461,28 @@ final class PhotoObjectMeasurementTests: XCTestCase {
         )
     }
 
+    func testObjectOverlayReportsPreviewStageForVisibleCropFailure() {
+        let overlay = MeasurementObjectOverlay(
+            displayOrientedImageSize: SIMD2<Float>(3, 4),
+            outline: MeasurementObjectOutline(
+                loops: [[
+                    SIMD2<Float>(0, 0),
+                    SIMD2<Float>(1, 0),
+                    SIMD2<Float>(1, 1),
+                    SIMD2<Float>(0, 1),
+                ]]
+            )
+        )
+
+        XCTAssertEqual(
+            overlay.previewFramingFailure(
+                in: SIMD2<Float>(300, 300),
+                protectedInsetFraction: 0.02
+            ),
+            .maskTouchesImageEdge(stage: .previewOutline)
+        )
+    }
+
     func testObjectOverlayRequiresVisibleSpaceAroundEveryContourEdge() throws {
         let bottomEdgeOutline = MeasurementObjectOutline(
             loops: [[
@@ -537,7 +559,7 @@ final class PhotoObjectMeasurementTests: XCTestCase {
             depths: Array(repeating: 1.25, count: 144),
             confidences: Array(repeating: 2, count: 144)
         )
-        let measurement = PhotoObjectMeasurement(policy: permissivePolicy)
+        let measurement = permissiveMeasurement
 
         for labels in masks {
             let result = try measurement.makePointCloud(
@@ -566,7 +588,7 @@ final class PhotoObjectMeasurementTests: XCTestCase {
             }
         }
 
-        let result = try PhotoObjectMeasurement(policy: permissivePolicy).makePointCloud(
+        let result = try permissiveMeasurement.makePointCloud(
             labelMask: try PhotoInstanceLabelMask(
                 width: width,
                 height: height,
@@ -599,7 +621,7 @@ final class PhotoObjectMeasurementTests: XCTestCase {
                 labels[y * width + x] = 5
             }
         }
-        let result = try PhotoObjectMeasurement(policy: permissivePolicy).makePointCloud(
+        let result = try permissiveMeasurement.makePointCloud(
             labelMask: try PhotoInstanceLabelMask(width: width, height: height, labels: labels),
             depthGrid: populatedDepthGrid(width: width, height: height),
             calibration: calibration(imageWidth: width, imageHeight: height)
@@ -632,7 +654,7 @@ final class PhotoObjectMeasurementTests: XCTestCase {
             }
         }
 
-        let result = try PhotoObjectMeasurement(policy: permissivePolicy).makePointCloud(
+        let result = try permissiveMeasurement.makePointCloud(
             labelMask: try PhotoInstanceLabelMask(width: width, height: height, labels: labels),
             depthGrid: depthGrid,
             calibration: calibration(imageWidth: width, imageHeight: height)
@@ -667,7 +689,7 @@ final class PhotoObjectMeasurementTests: XCTestCase {
             }
         }
 
-        let result = try PhotoObjectMeasurement(policy: permissivePolicy).makePointCloud(
+        let result = try permissiveMeasurement.makePointCloud(
             labelMask: try PhotoInstanceLabelMask(width: width, height: height, labels: labels),
             depthGrid: depthGrid,
             calibration: calibration(imageWidth: width, imageHeight: height)
@@ -695,7 +717,7 @@ final class PhotoObjectMeasurementTests: XCTestCase {
             }
         }
 
-        let result = try PhotoObjectMeasurement(policy: permissivePolicy).makePointCloud(
+        let result = try permissiveMeasurement.makePointCloud(
             labelMask: labels,
             depthGrid: depthGrid,
             calibration: calibration(imageWidth: width, imageHeight: height)
@@ -723,7 +745,7 @@ final class PhotoObjectMeasurementTests: XCTestCase {
             }
         }
 
-        let result = try PhotoObjectMeasurement(policy: permissivePolicy).makePointCloud(
+        let result = try permissiveMeasurement.makePointCloud(
             labelMask: labels,
             depthGrid: depthGrid,
             calibration: calibration(imageWidth: width, imageHeight: height)
@@ -744,7 +766,7 @@ final class PhotoObjectMeasurementTests: XCTestCase {
         let depthGrid = populatedDepthGrid(width: width, height: height)
 
         XCTAssertThrowsError(
-            try PhotoObjectMeasurement(policy: permissivePolicy).makePointCloud(
+            try permissiveMeasurement.makePointCloud(
                 labelMask: labels,
                 depthGrid: depthGrid,
                 calibration: calibration(imageWidth: width, imageHeight: height)
@@ -761,7 +783,7 @@ final class PhotoObjectMeasurementTests: XCTestCase {
         var depthGrid = populatedDepthGrid(width: width, height: height)
         depthGrid.confidences[2 * width + 2] = 1
 
-        let result = try PhotoObjectMeasurement(policy: permissivePolicy).makePointCloud(
+        let result = try permissiveMeasurement.makePointCloud(
             labelMask: labels,
             depthGrid: depthGrid,
             calibration: calibration(imageWidth: width, imageHeight: height)
@@ -781,13 +803,16 @@ final class PhotoObjectMeasurementTests: XCTestCase {
         let depthGrid = populatedDepthGrid(width: 10, height: 10)
 
         XCTAssertThrowsError(
-            try PhotoObjectMeasurement(policy: permissivePolicy).makePointCloud(
+            try permissiveMeasurement.makePointCloud(
                 labelMask: labels,
                 depthGrid: depthGrid,
                 calibration: calibration(imageWidth: 10, imageHeight: 10)
             )
         ) { error in
-            XCTAssertEqual(error as? PhotoObjectMeasurementError, .maskTouchesImageEdge)
+            XCTAssertEqual(
+                error as? PhotoObjectMeasurementError,
+                .maskTouchesImageEdge(stage: .sourceMask)
+            )
         }
     }
 
@@ -803,14 +828,17 @@ final class PhotoObjectMeasurementTests: XCTestCase {
         }
 
         XCTAssertThrowsError(
-            try PhotoObjectMeasurement(policy: permissivePolicy).makePointCloud(
+            try permissiveMeasurement.makePointCloud(
                 labelMask: labels,
                 depthGrid: depthGrid,
                 calibration: calibration(imageWidth: width, imageHeight: height),
                 prompt: .target(normalizedImagePoint: SIMD2<Float>(0.35, 0.5))
             )
         ) { error in
-            XCTAssertEqual(error as? PhotoObjectMeasurementError, .maskTouchesImageEdge)
+            XCTAssertEqual(
+                error as? PhotoObjectMeasurementError,
+                .maskTouchesImageEdge(stage: .sourceMask)
+            )
         }
     }
 
@@ -840,7 +868,7 @@ final class PhotoObjectMeasurementTests: XCTestCase {
         }
 
         XCTAssertThrowsError(
-            try PhotoObjectMeasurement(policy: permissivePolicy).makePointCloud(
+            try permissiveMeasurement.makePointCloud(
                 labelMask: PhotoInstanceLabelMask(
                     width: imageWidth,
                     height: imageHeight,
@@ -851,7 +879,10 @@ final class PhotoObjectMeasurementTests: XCTestCase {
                 prompt: .target(normalizedImagePoint: SIMD2<Float>(0.5, 0.5))
             )
         ) { error in
-            XCTAssertEqual(error as? PhotoObjectMeasurementError, .maskTouchesImageEdge)
+            XCTAssertEqual(
+                error as? PhotoObjectMeasurementError,
+                .maskTouchesImageEdge(stage: .sourceMask)
+            )
         }
     }
 
@@ -879,7 +910,7 @@ final class PhotoObjectMeasurementTests: XCTestCase {
         }
 
         XCTAssertThrowsError(
-            try PhotoObjectMeasurement(policy: permissivePolicy).makePointCloud(
+            try permissiveMeasurement.makePointCloud(
                 labelMask: PhotoInstanceLabelMask(
                     width: width,
                     height: height,
@@ -890,7 +921,10 @@ final class PhotoObjectMeasurementTests: XCTestCase {
                 prompt: .target(normalizedImagePoint: SIMD2<Float>(0.35, 0.5))
             )
         ) { error in
-            XCTAssertEqual(error as? PhotoObjectMeasurementError, .maskTouchesImageEdge)
+            XCTAssertEqual(
+                error as? PhotoObjectMeasurementError,
+                .maskTouchesImageEdge(stage: .sourceMask)
+            )
         }
     }
 
@@ -915,7 +949,7 @@ final class PhotoObjectMeasurementTests: XCTestCase {
             depthGrid.depths[index] = 1.5
         }
 
-        let result = try PhotoObjectMeasurement(policy: permissivePolicy).makePointCloud(
+        let result = try permissiveMeasurement.makePointCloud(
             labelMask: PhotoInstanceLabelMask(
                 width: width,
                 height: height,
@@ -958,7 +992,7 @@ final class PhotoObjectMeasurementTests: XCTestCase {
         }
 
         XCTAssertThrowsError(
-            try PhotoObjectMeasurement(policy: permissivePolicy).makePointCloud(
+            try permissiveMeasurement.makePointCloud(
                 labelMask: PhotoInstanceLabelMask(
                     width: width,
                     height: height,
@@ -969,7 +1003,10 @@ final class PhotoObjectMeasurementTests: XCTestCase {
                 prompt: .target(normalizedImagePoint: SIMD2<Float>(0.35, 0.5))
             )
         ) { error in
-            XCTAssertEqual(error as? PhotoObjectMeasurementError, .maskTouchesImageEdge)
+            XCTAssertEqual(
+                error as? PhotoObjectMeasurementError,
+                .maskTouchesImageEdge(stage: .sourceMask)
+            )
         }
     }
 
@@ -997,7 +1034,7 @@ final class PhotoObjectMeasurementTests: XCTestCase {
             }
         }
 
-        let result = try PhotoObjectMeasurement(policy: permissivePolicy).makePointCloud(
+        let result = try permissiveMeasurement.makePointCloud(
             labelMask: PhotoInstanceLabelMask(
                 width: imageWidth,
                 height: imageHeight,
@@ -1033,7 +1070,7 @@ final class PhotoObjectMeasurementTests: XCTestCase {
         )
 
         XCTAssertThrowsError(
-            try PhotoObjectMeasurement(policy: permissivePolicy).makePointCloud(
+            try permissiveMeasurement.makePointCloud(
                 labelMask: labels,
                 depthGrid: depthGrid,
                 calibration: calibration(imageWidth: 8, imageHeight: 8)
@@ -1065,7 +1102,10 @@ final class PhotoObjectMeasurementTests: XCTestCase {
         policy.minimumVerticalDepthSupport = 0.7
 
         XCTAssertThrowsError(
-            try PhotoObjectMeasurement(policy: policy).makePointCloud(
+            try PhotoObjectMeasurement(
+                policy: policy,
+                rigidItemMultiplicityGuard: nil
+            ).makePointCloud(
                 labelMask: labels,
                 depthGrid: depthGrid,
                 calibration: calibration(imageWidth: 8, imageHeight: 8)
@@ -1198,7 +1238,7 @@ final class PhotoObjectMeasurementTests: XCTestCase {
         let depthGrid = populatedDepthGrid(width: 4, height: 2)
 
         XCTAssertThrowsError(
-            try PhotoObjectMeasurement(policy: permissivePolicy).makePointCloud(
+            try permissiveMeasurement.makePointCloud(
                 labelMask: labels,
                 depthGrid: depthGrid,
                 calibration: calibration(imageWidth: 4, imageHeight: 8)
@@ -1250,6 +1290,13 @@ final class PhotoObjectMeasurementTests: XCTestCase {
         XCTAssertEqual(points[3].x, 10.5, accuracy: 0.0001)
         XCTAssertEqual(points[3].y, 19.5, accuracy: 0.0001)
         XCTAssertEqual(points[3].z, 28, accuracy: 0.0001)
+    }
+
+    private var permissiveMeasurement: PhotoObjectMeasurement {
+        PhotoObjectMeasurement(
+            policy: permissivePolicy,
+            rigidItemMultiplicityGuard: nil
+        )
     }
 
     private var permissivePolicy: PhotoObjectMeasurementPolicy {

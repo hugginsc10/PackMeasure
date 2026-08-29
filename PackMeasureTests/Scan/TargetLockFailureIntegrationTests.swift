@@ -24,7 +24,8 @@ struct TargetLockFailureIntegrationTests {
                 for: .targetLock(reason)
             )
 
-            #expect(copy == "\(reason.actionMessage) Diagnostic T03.")
+            #expect(copy == reason.actionMessage)
+            #expect(!copy.localizedCaseInsensitiveContains("diagnostic"))
             #expect(!copy.localizedCaseInsensitiveContains("center-depth fallback"))
         }
     }

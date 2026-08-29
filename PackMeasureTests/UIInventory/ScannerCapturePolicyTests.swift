@@ -84,14 +84,14 @@ struct ScannerCapturePolicyTests {
     }
 
     @Test
-    func photoFailureCopyReportsExactDepthCoverageAndDiagnosticCode() {
+    func photoFailureCopyReportsExactDepthCoverageWithoutInternalCode() {
         let copy = ScannerPhotoFailureCopy.message(
             for: .photo(.insufficientDepthCoverage(actual: 0.42, minimum: 0.60))
         )
 
         #expect(copy.contains("42%"))
         #expect(copy.contains("60%"))
-        #expect(copy.contains("Diagnostic D02"))
+        #expect(!copy.localizedCaseInsensitiveContains("diagnostic"))
         #expect(!copy.localizedCaseInsensitiveContains("isolate one clear object"))
     }
 
@@ -137,12 +137,12 @@ struct ScannerCapturePolicyTests {
         #expect(horizontal.localizedCaseInsensitiveContains("horizontal endpoint band"))
         #expect(horizontal.localizedCaseInsensitiveContains("both horizontal ends"))
         #expect(horizontal.contains("24%"))
-        #expect(horizontal.contains("Diagnostic D05"))
+        #expect(!horizontal.localizedCaseInsensitiveContains("diagnostic"))
         #expect(!horizontal.localizedCaseInsensitiveContains("horizontal span"))
         #expect(vertical.localizedCaseInsensitiveContains("vertical endpoint band"))
         #expect(vertical.localizedCaseInsensitiveContains("both vertical ends"))
         #expect(vertical.contains("31%"))
-        #expect(vertical.contains("Diagnostic D06"))
+        #expect(!vertical.localizedCaseInsensitiveContains("diagnostic"))
         #expect(!vertical.localizedCaseInsensitiveContains("vertical span"))
     }
 
@@ -152,7 +152,7 @@ struct ScannerCapturePolicyTests {
             for: .foreground(.noObservation)
         )
         let framingCopy = ScannerPhotoFailureCopy.message(
-            for: .photo(.maskTouchesImageEdge)
+            for: .photo(.maskTouchesImageEdge(stage: .sourceMask))
         )
 
         #expect(foregroundCopy.localizedCaseInsensitiveContains("couldn't find"))
@@ -160,12 +160,12 @@ struct ScannerCapturePolicyTests {
         #expect(foregroundCopy.localizedCaseInsensitiveContains("keep the item still"))
         #expect(foregroundCopy.localizedCaseInsensitiveContains("move the phone closer"))
         #expect(foregroundCopy.localizedCaseInsensitiveContains("every edge visible"))
-        #expect(foregroundCopy.contains("Diagnostic V02"))
+        #expect(!foregroundCopy.localizedCaseInsensitiveContains("diagnostic"))
         #expect(!foregroundCopy.localizedCaseInsensitiveContains("tap a solid face"))
         #expect(!foregroundCopy.localizedCaseInsensitiveContains("use 4 points"))
         #expect(!foregroundCopy.localizedCaseInsensitiveContains("not enough object depth"))
         #expect(framingCopy.localizedCaseInsensitiveContains("edge"))
-        #expect(framingCopy.contains("Diagnostic F05"))
+        #expect(!framingCopy.localizedCaseInsensitiveContains("diagnostic"))
     }
 
     @Test
@@ -187,8 +187,23 @@ struct ScannerCapturePolicyTests {
         #expect(instanceCopy.localizedCaseInsensitiveContains("three-quarter angle"))
         #expect(!instanceCopy.localizedCaseInsensitiveContains("selected box"))
         #expect(!instanceCopy.localizedCaseInsensitiveContains("use 4 points"))
-        #expect(visionCopy.contains("Diagnostic V02"))
-        #expect(instanceCopy.contains("Diagnostic F01"))
+        #expect(!visionCopy.localizedCaseInsensitiveContains("diagnostic"))
+        #expect(!instanceCopy.localizedCaseInsensitiveContains("diagnostic"))
+    }
+
+    @Test
+    func directForegroundInstanceFailureStaysModeNeutral() {
+        let copy = ScannerPhotoFailureCopy.message(
+            for: .photo(.noForegroundInstance)
+        )
+
+        #expect(copy.localizedCaseInsensitiveContains("selected item"))
+        #expect(copy.localizedCaseInsensitiveContains("solid surface"))
+        #expect(copy.localizedCaseInsensitiveContains("show less floor"))
+        #expect(copy.localizedCaseInsensitiveContains("three-quarter angle"))
+        #expect(!copy.localizedCaseInsensitiveContains("selected box"))
+        #expect(!copy.localizedCaseInsensitiveContains("use 4 points"))
+        #expect(!copy.localizedCaseInsensitiveContains("diagnostic"))
     }
 
     @Test
@@ -209,8 +224,8 @@ struct ScannerCapturePolicyTests {
         #expect(unavailable.localizedCaseInsensitiveContains("wasn't ready"))
         #expect(rejected.localizedCaseInsensitiveContains("center-depth fallback"))
         #expect(rejected.localizedCaseInsensitiveContains("couldn't isolate enough"))
-        #expect(unavailable.contains("Diagnostic F01"))
-        #expect(rejected.contains("Diagnostic F01"))
+        #expect(!unavailable.localizedCaseInsensitiveContains("diagnostic"))
+        #expect(!rejected.localizedCaseInsensitiveContains("diagnostic"))
         #expect(!unavailable.localizedCaseInsensitiveContains("contrasting background"))
         #expect(!rejected.localizedCaseInsensitiveContains("contrasting background"))
     }
@@ -222,7 +237,7 @@ struct ScannerCapturePolicyTests {
         )
 
         #expect(copy.localizedCaseInsensitiveContains("couldn't process"))
-        #expect(copy.contains("Diagnostic C03"))
+        #expect(!copy.localizedCaseInsensitiveContains("diagnostic"))
         #expect(!copy.localizedCaseInsensitiveContains("whole object"))
     }
 

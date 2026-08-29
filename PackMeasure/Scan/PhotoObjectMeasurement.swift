@@ -2,6 +2,11 @@ import CoreVideo
 import Foundation
 import simd
 
+enum PhotoF05Stage: String, Equatable, Sendable {
+    case sourceMask = "source_mask"
+    case previewOutline = "preview_outline"
+}
+
 enum PhotoObjectMeasurementError: Error, Equatable, Sendable {
     case invalidLabelMaskDimensions
     case invalidDepthMaskDimensions
@@ -13,7 +18,7 @@ enum PhotoObjectMeasurementError: Error, Equatable, Sendable {
     case noReticleDepthSurface
     case maskAreaTooSmall(actual: Float, minimum: Float)
     case maskAreaTooLarge(actual: Float, maximum: Float)
-    case maskTouchesImageEdge
+    case maskTouchesImageEdge(stage: PhotoF05Stage)
     case maskCalibrationAspectRatioMismatch
     case depthGridResolutionMismatch
     case insufficientDepthSamples(actual: Int, minimum: Int)
@@ -22,7 +27,8 @@ enum PhotoObjectMeasurementError: Error, Equatable, Sendable {
     case insufficientVerticalDepthSupport(actual: Float, minimum: Float)
     case insufficientHorizontalDepthEndpointCoverage(actual: Float, minimum: Float)
     case insufficientVerticalDepthEndpointCoverage(actual: Float, minimum: Float)
-    case multipleRigidItemsDetected(PhotoRigidItemMultiplicityEvidence)
+    case multipleRigidItemsDetected(PhotoRigidItemMultiplicityEvaluation)
+    case rigidItemMultiplicityUncertain(PhotoRigidItemMultiplicityEvaluation)
     case invalidCameraCalibration
     case invalidWorldPoint
 }
@@ -449,6 +455,16 @@ struct MeasurementObjectOverlay: Equatable, Sendable {
                 && mapped.y >= protectedInsetFraction
                 && mapped.y <= maximum
         }
+    }
+
+    func previewFramingFailure(
+        in viewportSize: SIMD2<Float>,
+        protectedInsetFraction: Float = 0
+    ) -> PhotoObjectMeasurementError? {
+        isFullyVisible(
+            in: viewportSize,
+            protectedInsetFraction: protectedInsetFraction
+        ) ? nil : .maskTouchesImageEdge(stage: .previewOutline)
     }
 }
 
@@ -1520,6 +1536,7 @@ struct PhotoObjectPointCloud: Sendable {
     let maskQuality: PhotoMaskQuality
     let depthSupport: PhotoDepthSupport
     let objectOutline: MeasurementObjectOutline?
+    let rigidItemMultiplicityEvaluation: PhotoRigidItemMultiplicityEvaluation?
 }
 
 /// Deterministic core for the one-shutter path. Platform adapters only need to
@@ -1532,6 +1549,13 @@ struct PhotoObjectMeasurement: Sendable {
     /// by default. General-item mode must explicitly inject `nil`; it must not
     /// apply rigid-body change-point assumptions to arbitrary furniture.
     var rigidItemMultiplicityGuard: PhotoRigidItemMultiplicityGuard? = .init()
+
+    var requiredDepthSampleCount: Int {
+        max(
+            policy.minimumDepthSamples,
+            rigidItemMultiplicityGuard?.minimumPointCount ?? 0
+        )
+    }
 
     func makePointCloud(
         labelMask: PhotoInstanceLabelMask,
@@ -1582,9 +1606,11 @@ struct PhotoObjectMeasurement: Sendable {
             excluding: filteredMasks.provenAlternateDepthMask
         )
         guard !targetQuality.touchesProtectedEdge else {
-            throw PhotoObjectMeasurementError.maskTouchesImageEdge
+            throw PhotoObjectMeasurementError.maskTouchesImageEdge(stage: .sourceMask)
         }
-        let support = try PhotoDepthSupportAnalyzer(policy: policy).analyze(
+        var effectivePolicy = policy
+        effectivePolicy.minimumDepthSamples = requiredDepthSampleCount
+        let support = try PhotoDepthSupportAnalyzer(policy: effectivePolicy).analyze(
             mask: filteredMasks.targetExpectationDepthMask,
             constrainedTo: filteredMasks.retainedDepthMask,
             depthGrid: depthGrid
@@ -1594,11 +1620,25 @@ struct PhotoObjectMeasurement: Sendable {
             depthGrid: depthGrid,
             calibration: calibration
         )
-        if let rigidItemMultiplicityGuard,
-           case .multipleRigidItems(let evidence) = rigidItemMultiplicityGuard.assess(
-               worldPoints: points
-           ) {
-            throw PhotoObjectMeasurementError.multipleRigidItemsDetected(evidence)
+        let multiplicityEvaluation = rigidItemMultiplicityGuard?.evaluate(
+            worldPoints: points
+        )
+        if let multiplicityEvaluation {
+            switch multiplicityEvaluation.assessment {
+            case .multipleRigidItems:
+                throw PhotoObjectMeasurementError.multipleRigidItemsDetected(
+                    multiplicityEvaluation
+                )
+            case .insufficientEvidence:
+                if multiplicityEvaluation.indeterminateReason == .invalidConfiguration {
+                    throw PhotoObjectMeasurementError.invalidPolicy
+                }
+                throw PhotoObjectMeasurementError.rigidItemMultiplicityUncertain(
+                    multiplicityEvaluation
+                )
+            case .singleRigidItem:
+                break
+            }
         }
 
         return PhotoObjectPointCloud(
@@ -1610,7 +1650,8 @@ struct PhotoObjectMeasurement: Sendable {
                 width: filteredMasks.retainedDepthMask.width,
                 height: filteredMasks.retainedDepthMask.height,
                 selectedIndices: support.indices
-            )
+            ),
+            rigidItemMultiplicityEvaluation: multiplicityEvaluation
         )
     }
 

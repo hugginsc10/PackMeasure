@@ -1785,10 +1785,10 @@ enum ScannerPhotoFailureCopy {
         fallbackResult: SingleShotFallbackResult = .notAttempted
     ) -> String {
         if let fallbackMessage = fallbackMessage(for: fallbackResult) {
-            return "\(fallbackMessage) Diagnostic \(failure.diagnosticCode)."
+            return fallbackMessage
         }
-        let message = specificMessage(for: failure) ?? categoryMessage(for: failure.retryCategory)
-        return "\(message) Diagnostic \(failure.diagnosticCode)."
+        return specificMessage(for: failure)
+            ?? categoryMessage(for: failure.retryCategory)
     }
 
     private static func fallbackMessage(
@@ -1817,7 +1817,7 @@ enum ScannerPhotoFailureCopy {
         case .foreground(.photo(_, .noForegroundInstance)):
             "Foreground detection couldn't separate the selected item from its surroundings. Keep the item still, show less floor, and retake from a clearer three-quarter angle."
         case .targetSelection(.noForegroundAtTargetPoint):
-            "PackMeasure couldn't match the selected item in this frame. Retap the same item, or use 4 points if it cannot be isolated."
+            "PackMeasure couldn't match the selected item in this frame. Retap the same item and retake the photo."
         case .targetSelection(.staleTargetSelectionPrompt):
             "That item selection is no longer current. Retap the same item before taking another photo."
         case .targetSelection(.invalidTargetSelectionPoint):
@@ -1840,11 +1840,11 @@ enum ScannerPhotoFailureCopy {
         case .noReticleDepthSurface:
             "PackMeasure couldn't isolate a depth-connected object under the center of the frame. Center the item and retake the photo."
         case let .maskAreaTooSmall(actual, minimum):
-            "The selected box covered only \(percent(actual, rounded: .down))% of the photo; this build needs at least \(percent(minimum, rounded: .up))%. Move closer and keep a solid face under the marker."
+            "The selected item covered only \(percent(actual, rounded: .down))% of the photo; this build needs at least \(percent(minimum, rounded: .up))%. Move closer and keep a solid surface under the marker."
         case let .maskAreaTooLarge(actual, maximum):
-            "The selected box covered \(percent(actual, rounded: .up))% of the photo; this build allows at most \(percent(maximum, rounded: .down))%. Step back until every box edge is visible."
+            "The selected item covered \(percent(actual, rounded: .up))% of the photo; this build allows at most \(percent(maximum, rounded: .down))%. Step back until every item edge is visible."
         case .maskTouchesImageEdge:
-            "The selected box reached the edge of the camera view. Keep every box edge inside the view and retake it."
+            "The selected item reached the edge of the camera view. Keep every item edge inside the view and retake it."
         case let .insufficientDepthSamples(actual, minimum):
             "LiDAR found \(actual) usable depth points on the object; this build needs \(minimum). Hold steady at a three-quarter angle and retake it."
         case let .insufficientDepthCoverage(actual, minimum):
@@ -1859,8 +1859,23 @@ enum ScannerPhotoFailureCopy {
             "LiDAR depth covered \(percent(actual, rounded: .down))% of the least-covered vertical endpoint band in the photo; this build needs \(percent(minimum, rounded: .up))% at both vertical ends. Hold steady at a three-quarter angle and retake it."
         case .multipleRigidItemsDetected:
             "The selected outline appears to include more than one box. Retap a solid face of the one box you want, or use 4 points if the boxes cannot be separated."
+        case let .rigidItemMultiplicityUncertain(evaluation):
+            switch evaluation.indeterminateReason {
+            case .oneStrongBoundary:
+                "The outline may include another box or an obstruction. Retap a solid face of the one box you want, or use 4 points."
+            case .incompleteProfileCoverage, .noComparableSplit:
+                "PackMeasure couldn't confirm enough of the box profile. Hold steady at a three-quarter angle and retake it, or use 4 points."
+            case .footprintBelowMinimum:
+                "This box is too small for automatic photo verification. Use 4 points."
+            case .degenerateVerticalSpan:
+                "LiDAR only saw a flat face. Retake at a three-quarter angle, or use 4 points."
+            case .tooFewPoints:
+                "LiDAR couldn't verify enough of the box. Hold steady at a three-quarter angle and retake it, or use 4 points."
+            case .invalidConfiguration, .none:
+                "PackMeasure couldn't confirm the selected outline is one box. Retap a solid face, or use 4 points."
+            }
         case .noForegroundInstance:
-            "Foreground detection didn't recognize the selected box. Tap a solid face, show less floor, or use 4 points."
+            "Foreground detection didn't recognize the selected item. Tap a solid surface, show less floor, and retake from a clearer three-quarter angle."
         case .invalidLabelMaskDimensions,
              .invalidDepthMaskDimensions,
              .invalidPolicy,
@@ -1879,9 +1894,9 @@ enum ScannerPhotoFailureCopy {
     ) -> String {
         switch category {
         case .framing:
-            "The selected box reached the edge of the camera view. Keep every box edge inside the view and retake it."
+            "The selected item reached the edge of the camera view. Keep every item edge inside the view and retake it."
         case .isolation:
-            "PackMeasure couldn't isolate the selected box. Tap a solid face, retake it, or use 4 points."
+            "PackMeasure couldn't isolate the selected item. Tap a solid surface and retake the photo."
         case .depth:
             "PackMeasure couldn't get enough depth across the object. Hold steady at a three-quarter angle and retake it."
         case .processing:

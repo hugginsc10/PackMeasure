@@ -18,8 +18,8 @@ struct TargetSelectionIntegrationTests {
 
         let copy = ScannerPhotoFailureCopy.message(for: failure)
         #expect(copy.localizedCaseInsensitiveContains("same item"))
-        #expect(copy.localizedCaseInsensitiveContains("4 points"))
-        #expect(copy.contains("Diagnostic F07"))
+        #expect(copy.localizedCaseInsensitiveContains("retake the photo"))
+        #expect(!copy.localizedCaseInsensitiveContains("diagnostic"))
         #expect(!copy.localizedCaseInsensitiveContains("center of the frame"))
     }
 

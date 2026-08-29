@@ -96,7 +96,9 @@ struct MeasurementARFrameIntegrationTests {
             measurement: measurement
         )
 
-        #expect(throws: PhotoObjectMeasurementError.maskTouchesImageEdge) {
+        #expect(
+            throws: PhotoObjectMeasurementError.maskTouchesImageEdge(stage: .sourceMask)
+        ) {
             try processor.makePointCloud(
                 labelMask: PhotoInstanceLabelMask(
                     width: width,
@@ -266,11 +268,11 @@ struct MeasurementARFrameIntegrationTests {
     }
 
     @Test
-    func exactTargetRejectionRetainsDiagnosticCopy() {
+    func exactTargetRejectionUsesHumanReadableCopy() {
         let failure = TargetLockFrameValidationFailure.surfaceOutsideBounds
         let message = ScannerPhotoFailureCopy.message(for: .targetLock(failure))
 
-        #expect(message == "\(failure.actionMessage) Diagnostic T03.")
+        #expect(message == failure.actionMessage)
     }
 
     @Test

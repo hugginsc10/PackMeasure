@@ -23,10 +23,12 @@ struct ScannerOrchestrationTests {
         #expect(state.measurementSubject == .box)
         #expect(state.measurementMode == .automaticPhotos)
         #expect(state.automaticPhotoMeasurement.rigidItemMultiplicityGuard != nil)
+        #expect(state.automaticPhotoMeasurement.requiredDepthSampleCount == 160)
 
         #expect(state.setMeasurementSubject(.generalItem))
         #expect(state.measurementSubject == .generalItem)
         #expect(state.automaticPhotoMeasurement.rigidItemMultiplicityGuard == nil)
+        #expect(state.automaticPhotoMeasurement.requiredDepthSampleCount == 48)
         #expect(!state.enterGuidedCorners(targetID: firstTargetID))
         #expect(state.measurementMode == .automaticPhotos)
     }
