@@ -506,6 +506,52 @@ struct PhotoSelectedInstanceMask: Equatable, Sendable {
         )
     }
 
+    /// Re-evaluates framing in the source-mask coordinate space after depth
+    /// filtering. A source pixel is excluded only when its aligned LiDAR cell
+    /// has usable depth and was positively assigned to a rejected surface.
+    /// Anything depth-unknown remains target-owned so F05 continues to fail
+    /// closed even when a thin edge continuation falls between depth samples.
+    func quality(
+        edgeMarginPixels: Int,
+        excluding provenAlternateDepthMask: PhotoDepthSelectionMask
+    ) -> PhotoMaskQuality {
+        let margin = max(0, edgeMarginPixels)
+        let scaleX = Float(provenAlternateDepthMask.width) / Float(width)
+        let scaleY = Float(provenAlternateDepthMask.height) / Float(height)
+        var count = 0
+        var touchesProtectedEdge = false
+
+        for index in selected.indices where selected[index] {
+            let sourceX = index % width
+            let sourceY = index / width
+            let depthX = min(
+                provenAlternateDepthMask.width - 1,
+                Int((Float(sourceX) + 0.5) * scaleX)
+            )
+            let depthY = min(
+                provenAlternateDepthMask.height - 1,
+                Int((Float(sourceY) + 0.5) * scaleY)
+            )
+            guard !provenAlternateDepthMask.contains(x: depthX, y: depthY) else {
+                continue
+            }
+
+            count += 1
+            if sourceX <= margin
+                || sourceY <= margin
+                || sourceX >= width - 1 - margin
+                || sourceY >= height - 1 - margin {
+                touchesProtectedEdge = true
+            }
+        }
+
+        return PhotoMaskQuality(
+            selectedPixelCount: count,
+            areaFraction: Float(count) / Float(width * height),
+            touchesProtectedEdge: touchesProtectedEdge
+        )
+    }
+
     /// Nearest-neighbor sampling at each depth cell's normalized center keeps
     /// the mask aligned even when image and LiDAR grids have non-integer scale.
     func resampled(toWidth targetWidth: Int, height targetHeight: Int) throws
@@ -771,6 +817,19 @@ struct PhotoDepthSelectionMask: Equatable, Sendable {
     }
 }
 
+struct PhotoReticleDepthMaskFilterResult: Equatable, Sendable {
+    /// Depth-grid cells still plausibly owned by the target's appearance.
+    /// Proven alternate surfaces are removed; depth-unknown or disconnected
+    /// cells remain so framing and completeness checks continue to fail closed.
+    let targetExpectationDepthMask: PhotoDepthSelectionMask
+    /// Usable depth samples connected to the selected target surface.
+    let retainedDepthMask: PhotoDepthSelectionMask
+    /// Candidate samples separated from the target by a directly observed
+    /// local depth discontinuity. Only these samples may be subtracted from
+    /// source-space F05 or the D03/D05 target expectation.
+    let provenAlternateDepthMask: PhotoDepthSelectionMask
+}
+
 /// Refines Vision's appearance mask with the LiDAR surface connected to the
 /// explicit target point, or to the center reticle when no prompt exists. This
 /// prevents a visually merged but depth-separated neighbor from contributing
@@ -788,7 +847,7 @@ struct PhotoReticleDepthMaskFilter: Sendable {
         mask: PhotoDepthSelectionMask,
         depthGrid: DepthGrid,
         normalizedImagePoint: SIMD2<Float>? = nil
-    ) throws -> PhotoDepthSelectionMask {
+    ) throws -> PhotoReticleDepthMaskFilterResult {
         guard mask.width == depthGrid.width,
               mask.height == depthGrid.height else {
             throw PhotoObjectMeasurementError.depthGridResolutionMismatch
@@ -840,15 +899,88 @@ struct PhotoReticleDepthMaskFilter: Sendable {
             }
         }
 
-        var filteredSelection = Array(repeating: false, count: mask.width * mask.height)
-        for index in retained {
-            filteredSelection[index] = true
+        var provenAlternate = Set<Int>()
+        for component in remaining where isDepthProvenAlternate(
+            component,
+            from: retained,
+            grid: constrainedGrid
+        ) {
+            provenAlternate.formUnion(component.indices)
         }
-        return try PhotoDepthSelectionMask(
-            width: mask.width,
-            height: mask.height,
-            selected: filteredSelection
+
+        var retainedDepthSelection = Array(repeating: false, count: mask.width * mask.height)
+        for index in retained {
+            retainedDepthSelection[index] = true
+        }
+
+        // A same-label reflection or neighboring object can remain connected in
+        // Vision's appearance mask while LiDAR proves it belongs to a different
+        // surface. Exclude only those proven alternate-surface pixels. Unknown
+        // depth remains part of the expected target mask so a genuinely clipped
+        // target cannot pass merely because LiDAR dropped out at the image edge.
+        var targetExpectationSelection = Array(
+            repeating: false,
+            count: mask.width * mask.height
         )
+        var provenAlternateDepthSelection = Array(
+            repeating: false,
+            count: mask.width * mask.height
+        )
+        for index in mask.selectedIndices {
+            if provenAlternate.contains(index) {
+                provenAlternateDepthSelection[index] = true
+            } else {
+                // Retained, depth-unknown, and depth-disconnected source pixels
+                // stay in the target expectation. Unknown evidence must never
+                // convert a clipped target into a successful capture.
+                targetExpectationSelection[index] = true
+            }
+        }
+
+        return try PhotoReticleDepthMaskFilterResult(
+            targetExpectationDepthMask: PhotoDepthSelectionMask(
+                width: mask.width,
+                height: mask.height,
+                selected: targetExpectationSelection
+            ),
+            retainedDepthMask: PhotoDepthSelectionMask(
+                width: mask.width,
+                height: mask.height,
+                selected: retainedDepthSelection
+            ),
+            provenAlternateDepthMask: PhotoDepthSelectionMask(
+                width: mask.width,
+                height: mask.height,
+                selected: provenAlternateDepthSelection
+            )
+        )
+    }
+
+    /// A leftover component is proven alternate only when every directly
+    /// observed boundary to the retained target crosses the same local jump
+    /// threshold used by the surface walk. Components separated solely by
+    /// unknown depth remain target-owned and therefore fail closed.
+    private func isDepthProvenAlternate(
+        _ component: SurfaceComponent,
+        from retained: Set<Int>,
+        grid: DepthGrid
+    ) -> Bool {
+        var foundDirectBoundary = false
+        for index in component.indices {
+            for neighbor in neighbors(of: index, width: grid.width, height: grid.height)
+                where retained.contains(neighbor) {
+                foundDirectBoundary = true
+                let retainedDepth = grid.depths[neighbor]
+                let localLimit = max(
+                    segmenter.localJumpMeters,
+                    retainedDepth * segmenter.localJumpFraction
+                )
+                guard abs(grid.depths[index] - retainedDepth) > localLimit else {
+                    return false
+                }
+            }
+        }
+        return foundDirectBoundary
     }
 
     private func targetSurfaceIndices(
@@ -1426,10 +1558,6 @@ struct PhotoObjectMeasurement: Sendable {
                 maximum: policy.maximumMaskAreaFraction
             )
         }
-        guard !quality.touchesProtectedEdge else {
-            throw PhotoObjectMeasurementError.maskTouchesImageEdge
-        }
-
         let candidateDepthMask = try selected.resampled(
             toWidth: depthGrid.width,
             height: depthGrid.height
@@ -1444,14 +1572,21 @@ struct PhotoObjectMeasurement: Sendable {
         } else {
             explicitTargetPoint = nil
         }
-        let depthMask = try configuredDepthMaskFilter.filter(
+        let filteredMasks = try configuredDepthMaskFilter.filter(
             mask: candidateDepthMask,
             depthGrid: depthGrid,
             normalizedImagePoint: explicitTargetPoint
         )
+        let targetQuality = selected.quality(
+            edgeMarginPixels: policy.protectedEdgeMarginPixels,
+            excluding: filteredMasks.provenAlternateDepthMask
+        )
+        guard !targetQuality.touchesProtectedEdge else {
+            throw PhotoObjectMeasurementError.maskTouchesImageEdge
+        }
         let support = try PhotoDepthSupportAnalyzer(policy: policy).analyze(
-            mask: candidateDepthMask,
-            constrainedTo: depthMask,
+            mask: filteredMasks.targetExpectationDepthMask,
+            constrainedTo: filteredMasks.retainedDepthMask,
             depthGrid: depthGrid
         )
         let points = try PhotoWorldPointProjector().project(
@@ -1472,8 +1607,8 @@ struct PhotoObjectMeasurement: Sendable {
             maskQuality: quality,
             depthSupport: support,
             objectOutline: MeasurementObjectOutline(
-                width: depthMask.width,
-                height: depthMask.height,
+                width: filteredMasks.retainedDepthMask.width,
+                height: filteredMasks.retainedDepthMask.height,
                 selectedIndices: support.indices
             )
         )

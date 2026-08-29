@@ -638,8 +638,9 @@ final class PhotoObjectMeasurementTests: XCTestCase {
             calibration: calibration(imageWidth: width, imageHeight: height)
         )
 
-        XCTAssertEqual(result.depthSupport.selectedMaskSampleCount, 49)
+        XCTAssertEqual(result.depthSupport.selectedMaskSampleCount, 40)
         XCTAssertEqual(result.depthSupport.supportedSampleCount, 40)
+        XCTAssertEqual(result.depthSupport.coverage, 1, accuracy: 0.0001)
         XCTAssertEqual(
             Set(result.depthSupport.indices),
             Set((2...9).flatMap { y in (3...7).map { x in y * width + x } })
@@ -672,8 +673,9 @@ final class PhotoObjectMeasurementTests: XCTestCase {
             calibration: calibration(imageWidth: width, imageHeight: height)
         )
 
-        XCTAssertEqual(result.depthSupport.selectedMaskSampleCount, 49)
+        XCTAssertEqual(result.depthSupport.selectedMaskSampleCount, 40)
         XCTAssertEqual(result.depthSupport.supportedSampleCount, 40)
+        XCTAssertEqual(result.depthSupport.coverage, 1, accuracy: 0.0001)
         XCTAssertEqual(
             Set(result.depthSupport.indices),
             Set((2...9).flatMap { y in (3...7).map { x in y * width + x } })
@@ -787,6 +789,235 @@ final class PhotoObjectMeasurementTests: XCTestCase {
         ) { error in
             XCTAssertEqual(error as? PhotoObjectMeasurementError, .maskTouchesImageEdge)
         }
+    }
+
+    func testRejectsClippedMaskWhenImageEdgeDepthIsUnknown() throws {
+        let width = 10
+        let height = 10
+        let labels = try boxMask(width: width, height: height, x: 0...5, y: 2...7)
+        var depthGrid = populatedDepthGrid(width: width, height: height)
+        for y in 2...7 {
+            let index = y * width
+            depthGrid.depths[index] = .nan
+            depthGrid.confidences[index] = 0
+        }
+
+        XCTAssertThrowsError(
+            try PhotoObjectMeasurement(policy: permissivePolicy).makePointCloud(
+                labelMask: labels,
+                depthGrid: depthGrid,
+                calibration: calibration(imageWidth: width, imageHeight: height),
+                prompt: .target(normalizedImagePoint: SIMD2<Float>(0.35, 0.5))
+            )
+        ) { error in
+            XCTAssertEqual(error as? PhotoObjectMeasurementError, .maskTouchesImageEdge)
+        }
+    }
+
+    func testRejectsThinSourceEdgeContinuationMissedByLowerResolutionDepthSampling() throws {
+        let imageWidth = 64
+        let imageHeight = 48
+        let depthWidth = 8
+        let depthHeight = 6
+        var labels = Array(repeating: UInt32.zero, count: imageWidth * imageHeight)
+
+        for y in 16...39 {
+            for x in 16...47 {
+                labels[y * imageWidth + x] = 5
+            }
+        }
+        // This one-source-pixel-high continuation reaches the image edge but
+        // falls between the lower-resolution depth grid's center samples.
+        for x in 0...15 {
+            labels[24 * imageWidth + x] = 5
+        }
+
+        var depthGrid = populatedDepthGrid(width: depthWidth, height: depthHeight)
+        for x in 0...1 {
+            let index = 3 * depthWidth + x
+            depthGrid.depths[index] = .nan
+            depthGrid.confidences[index] = 0
+        }
+
+        XCTAssertThrowsError(
+            try PhotoObjectMeasurement(policy: permissivePolicy).makePointCloud(
+                labelMask: PhotoInstanceLabelMask(
+                    width: imageWidth,
+                    height: imageHeight,
+                    labels: labels
+                ),
+                depthGrid: depthGrid,
+                calibration: calibration(imageWidth: imageWidth, imageHeight: imageHeight),
+                prompt: .target(normalizedImagePoint: SIMD2<Float>(0.5, 0.5))
+            )
+        ) { error in
+            XCTAssertEqual(error as? PhotoObjectMeasurementError, .maskTouchesImageEdge)
+        }
+    }
+
+    func testRejectsDepthDisconnectedEdgeIslandAcrossUnknownBridge() throws {
+        let width = 16
+        let height = 12
+        var labels = Array(repeating: UInt32.zero, count: width * height)
+        var depthGrid = populatedDepthGrid(width: width, height: height)
+
+        for y in 2...9 {
+            for x in 3...8 {
+                labels[y * width + x] = 5
+                depthGrid.depths[y * width + x] = 1
+            }
+        }
+        for y in 4...7 {
+            let bridgeIndex = y * width + 9
+            labels[bridgeIndex] = 5
+            depthGrid.depths[bridgeIndex] = .nan
+            depthGrid.confidences[bridgeIndex] = 0
+            for x in 10...15 {
+                labels[y * width + x] = 5
+                depthGrid.depths[y * width + x] = 1.5
+            }
+        }
+
+        XCTAssertThrowsError(
+            try PhotoObjectMeasurement(policy: permissivePolicy).makePointCloud(
+                labelMask: PhotoInstanceLabelMask(
+                    width: width,
+                    height: height,
+                    labels: labels
+                ),
+                depthGrid: depthGrid,
+                calibration: calibration(imageWidth: width, imageHeight: height),
+                prompt: .target(normalizedImagePoint: SIMD2<Float>(0.35, 0.5))
+            )
+        ) { error in
+            XCTAssertEqual(error as? PhotoObjectMeasurementError, .maskTouchesImageEdge)
+        }
+    }
+
+    func testAcceptsInsetTargetWhenDepthSeparatedAppearanceArtifactTouchesImageEdge() throws {
+        let width = 16
+        let height = 12
+        var labels = Array(repeating: UInt32.zero, count: width * height)
+        var depthGrid = populatedDepthGrid(width: width, height: height)
+        let targetIndices = Set((2...9).flatMap { y in
+            (3...9).map { x in y * width + x }
+        })
+        let edgeArtifactIndices = Set((2...9).flatMap { y in
+            (10...15).map { x in y * width + x }
+        })
+
+        for index in targetIndices {
+            labels[index] = 5
+            depthGrid.depths[index] = 1
+        }
+        for index in edgeArtifactIndices {
+            labels[index] = 5
+            depthGrid.depths[index] = 1.5
+        }
+
+        let result = try PhotoObjectMeasurement(policy: permissivePolicy).makePointCloud(
+            labelMask: PhotoInstanceLabelMask(
+                width: width,
+                height: height,
+                labels: labels
+            ),
+            depthGrid: depthGrid,
+            calibration: calibration(imageWidth: width, imageHeight: height),
+            prompt: .target(normalizedImagePoint: SIMD2<Float>(0.35, 0.5))
+        )
+
+        XCTAssertTrue(result.maskQuality.touchesProtectedEdge)
+        XCTAssertEqual(Set(result.depthSupport.indices), targetIndices)
+        XCTAssertEqual(
+            result.depthSupport.selectedMaskSampleCount,
+            targetIndices.count,
+            "a rejected reflection or neighboring surface must not dilute D03/D05 support"
+        )
+        XCTAssertEqual(result.depthSupport.supportedSampleCount, targetIndices.count)
+        XCTAssertEqual(result.depthSupport.horizontalSupport, 1, accuracy: 0.0001)
+        XCTAssertEqual(
+            result.depthSupport.horizontalEndpointCoverage,
+            1,
+            accuracy: 0.0001
+        )
+        XCTAssertFalse(result.depthSupport.indices.contains { $0 % width == width - 1 })
+    }
+
+    func testRejectsLegitimateMergedBoxFaceThatReachesImageEdge() throws {
+        let width = 16
+        let height = 12
+        var labels = Array(repeating: UInt32.zero, count: width * height)
+        var depthGrid = populatedDepthGrid(width: width, height: height)
+
+        for y in 2...9 {
+            for x in 3...15 {
+                let index = y * width + x
+                labels[index] = 5
+                depthGrid.depths[index] = x <= 8 ? 1 : 1.2
+            }
+        }
+
+        XCTAssertThrowsError(
+            try PhotoObjectMeasurement(policy: permissivePolicy).makePointCloud(
+                labelMask: PhotoInstanceLabelMask(
+                    width: width,
+                    height: height,
+                    labels: labels
+                ),
+                depthGrid: depthGrid,
+                calibration: calibration(imageWidth: width, imageHeight: height),
+                prompt: .target(normalizedImagePoint: SIMD2<Float>(0.35, 0.5))
+            )
+        ) { error in
+            XCTAssertEqual(error as? PhotoObjectMeasurementError, .maskTouchesImageEdge)
+        }
+    }
+
+    func testAcceptsProvenAlternateEdgeArtifactAcrossImageAndDepthResolutions() throws {
+        let imageWidth = 64
+        let imageHeight = 48
+        let depthWidth = 8
+        let depthHeight = 6
+        var labels = Array(repeating: UInt32.zero, count: imageWidth * imageHeight)
+        var depthGrid = populatedDepthGrid(width: depthWidth, height: depthHeight)
+
+        for y in 8...39 {
+            for x in 16...39 {
+                labels[y * imageWidth + x] = 5
+            }
+        }
+        for y in 16...31 {
+            for x in 40...63 {
+                labels[y * imageWidth + x] = 5
+            }
+        }
+        for y in 2...3 {
+            for x in 5...7 {
+                depthGrid.depths[y * depthWidth + x] = 1.5
+            }
+        }
+
+        let result = try PhotoObjectMeasurement(policy: permissivePolicy).makePointCloud(
+            labelMask: PhotoInstanceLabelMask(
+                width: imageWidth,
+                height: imageHeight,
+                labels: labels
+            ),
+            depthGrid: depthGrid,
+            calibration: calibration(imageWidth: imageWidth, imageHeight: imageHeight),
+            prompt: .target(normalizedImagePoint: SIMD2<Float>(0.5, 0.5))
+        )
+
+        let expectedTargetDepthIndices = Set((1...4).flatMap { y in
+            (2...4).map { x in y * depthWidth + x }
+        })
+        XCTAssertTrue(result.maskQuality.touchesProtectedEdge)
+        XCTAssertEqual(Set(result.depthSupport.indices), expectedTargetDepthIndices)
+        XCTAssertEqual(
+            result.depthSupport.selectedMaskSampleCount,
+            expectedTargetDepthIndices.count
+        )
+        XCTAssertFalse(result.depthSupport.indices.contains { $0 % depthWidth >= 5 })
     }
 
     func testRejectsSparseDepthEvidence() throws {
