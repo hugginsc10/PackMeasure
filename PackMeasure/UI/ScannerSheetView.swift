@@ -936,6 +936,12 @@ struct ScannerSheetView: View {
 
                 if let estimate = scannerState.estimate {
                     Form {
+                        if case let .retryRequired(message) = reviewState {
+                            Section(retryPresentation.sectionTitle) {
+                                retryDiagnosticLabel(message)
+                            }
+                        }
+
                         Section(ScannerResultCopy.sizeSectionTitle) {
                             Text(
                                 "\(MeasurementMath.inchString(from: estimate.lengthMeters)) × " +
@@ -966,12 +972,7 @@ struct ScannerSheetView: View {
                             }
                         }
 
-                        if case let .retryRequired(message) = reviewState {
-                            Section("Try another photo") {
-                                Label(message, systemImage: "exclamationmark.triangle.fill")
-                                    .foregroundStyle(.orange)
-                            }
-                        } else {
+                        if reviewState.canSave {
                             Section("Save Item") {
                                 TextField("Item name", text: $draftName)
                                 Stepper("Quantity: \(quantity)", value: $quantity, in: 1...99)
@@ -987,9 +988,20 @@ struct ScannerSheetView: View {
                             }
                         }
                     }
-                    .frame(maxHeight: 360)
+                    .frame(
+                        minHeight: showsRetainedAngleRetry ? 220 : nil,
+                        idealHeight: showsRetainedAngleRetry ? 320 : nil,
+                        maxHeight: 360
+                    )
+                    .layoutPriority(showsRetainedAngleRetry ? 1 : 0)
                 } else if !scannerState.capturedEstimates.isEmpty {
                     Form {
+                        if case let .retryRequired(message) = reviewState {
+                            Section(retryPresentation.sectionTitle) {
+                                retryDiagnosticLabel(message)
+                            }
+                        }
+
                         Section(ScannerResultCopy.capturedAnglesSectionTitle) {
                             ForEach(
                                 Array(scannerState.capturedAngleRecords.enumerated()),
@@ -1012,20 +1024,25 @@ struct ScannerSheetView: View {
                                 Label(message, systemImage: "camera.rotate")
                                     .foregroundStyle(.blue)
                             }
-                        } else if case let .retryRequired(message) = reviewState {
-                            Section("Restart scan") {
-                                Label(message, systemImage: "exclamationmark.triangle.fill")
-                                    .foregroundStyle(.orange)
-                            }
                         }
                     }
-                    .frame(maxHeight: 260)
+                    .frame(
+                        minHeight: showsRetainedAngleRetry ? 220 : nil,
+                        idealHeight: showsRetainedAngleRetry ? 320 : nil,
+                        maxHeight: showsRetainedAngleRetry ? 320 : 260
+                    )
+                    .layoutPriority(showsRetainedAngleRetry ? 1 : 0)
                 } else if case let .retryRequired(message) = reviewState {
-                    Label(message, systemImage: "exclamationmark.triangle.fill")
-                        .font(.footnote)
-                        .foregroundStyle(.orange)
-                        .multilineTextAlignment(.leading)
-                        .padding(.horizontal)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(retryPresentation.sectionTitle)
+                            .font(.headline)
+                            .foregroundStyle(.secondary)
+                        retryDiagnosticLabel(message)
+                            .font(.footnote)
+                            .multilineTextAlignment(.leading)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal)
                 }
 
                 actionBar
@@ -1045,6 +1062,7 @@ struct ScannerSheetView: View {
 
     private var cameraPreview: some View {
         let isReviewingCapture = scannerState.objectOverlay != nil
+        let compactRetryReview = showsRetainedAngleRetry
         let capturedAspectRatio = scannerState.objectOverlay.map {
             CGFloat($0.capturedPreviewAspectRatio)
         }
@@ -1056,9 +1074,9 @@ struct ScannerSheetView: View {
         }
             .frame(maxWidth: .infinity)
             .frame(
-                minHeight: isReviewingCapture ? nil : 260,
-                idealHeight: isReviewingCapture ? nil : 360,
-                maxHeight: isReviewingCapture ? nil : 420
+                minHeight: isReviewingCapture ? nil : (compactRetryReview ? 200 : 260),
+                idealHeight: isReviewingCapture ? nil : (compactRetryReview ? 240 : 360),
+                maxHeight: isReviewingCapture ? nil : (compactRetryReview ? 280 : 420)
             )
     }
 
@@ -1074,26 +1092,30 @@ struct ScannerSheetView: View {
                     }
                 }
             }
-            .overlay(alignment: .topLeading) {
-                if let target = scannerState.activeTargetLock {
-                    ScannerTargetStatusBadge(
-                        ownsAcceptedEvidence: target.ownsAcceptedEvidence
-                    )
-                    .padding()
-                }
-            }
             .overlay(alignment: .top) {
-                Text(statusText)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .background(.black.opacity(0.55), in: Capsule())
-                    .padding()
-            }
-            .overlay(alignment: .topTrailing) {
-                cameraZoomOverlay
-                    .padding()
+                HStack(alignment: .top, spacing: 8) {
+                    if let target = scannerState.activeTargetLock,
+                       ScannerPreviewOverlayPolicy.showsTargetStatus(
+                           phase: scannerState.phase,
+                           hasActiveTarget: true
+                       ) {
+                        ScannerTargetStatusBadge(
+                            ownsAcceptedEvidence: target.ownsAcceptedEvidence
+                        )
+                    } else {
+                        Text(statusText)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .background(.black.opacity(0.55), in: Capsule())
+                    }
+
+                    Spacer(minLength: 8)
+
+                    cameraZoomOverlay
+                }
+                .padding()
             }
             .overlay(alignment: .bottom) {
                 if showsCameraGuide, !scannerState.phase.isCapturing {
@@ -1249,9 +1271,11 @@ struct ScannerSheetView: View {
             Button {
                 prepareForAiming()
             } label: {
-                Label(retryActionTitle, systemImage: "arrow.clockwise")
+                Label(retryPresentation.actionTitle, systemImage: "arrow.clockwise")
             }
             .buttonStyle(.borderedProminent)
+            .accessibilityIdentifier(ScannerBuild33AccessibilityID.retryPrimaryAction)
+            .accessibilityHint(retryPresentation.actionHint)
         }
     }
 
@@ -1303,6 +1327,24 @@ struct ScannerSheetView: View {
             subject: scannerState.measurementSubject,
             mode: scannerState.measurementMode
         )
+    }
+
+    private var retryPresentation: ScannerRetryPresentation {
+        ScannerRetryPresentation.presentation(
+            capturedAngleCount: scannerState.capturedAngleRecords.count,
+            measurementProgress: scannerState.measurementProgress
+        )
+    }
+
+    private var reviewLayoutMode: ScannerReviewLayoutMode {
+        ScannerReviewLayoutPolicy.mode(
+            capturedAngleCount: scannerState.capturedAngleRecords.count,
+            reviewState: reviewState
+        )
+    }
+
+    private var showsRetainedAngleRetry: Bool {
+        reviewLayoutMode == .retainedAngleRetry
     }
 
     private var automaticCapturePresentation: ScannerAutomaticCapturePresentation {
@@ -1506,17 +1548,17 @@ struct ScannerSheetView: View {
             : ScannerGuidanceCopy.additionalAnglePreview
     }
 
-    private var retryActionTitle: String {
-        if case .inconsistent = scannerState.measurementProgress {
-            return ScannerActionCopy.restartScan
-        }
-        return ScannerActionCopy.retryPhoto
-    }
-
     private func dimensionString(_ estimate: MeasurementEstimate) -> String {
         "\(MeasurementMath.inchString(from: estimate.lengthMeters)) × "
             + "\(MeasurementMath.inchString(from: estimate.widthMeters)) × "
             + "\(MeasurementMath.inchString(from: estimate.heightMeters))"
+    }
+
+    private func retryDiagnosticLabel(_ message: String) -> some View {
+        Label(message, systemImage: "exclamationmark.triangle.fill")
+            .foregroundStyle(.orange)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityIdentifier(ScannerBuild33AccessibilityID.retryMessage)
     }
 }
 
@@ -1770,9 +1812,10 @@ enum ScannerPhotoFailureCopy {
             "The LiDAR depth frame wasn't ready. Hold steady for a moment and retake the photo."
         case .depthGridUnreadable:
             "PackMeasure couldn't read the LiDAR depth frame. Retake the photo; if this repeats, close and reopen the scanner."
-        case .foreground(.noObservation),
-             .foreground(.photo(_, .noForegroundInstance)):
-            "Foreground detection didn't recognize the selected box. Tap a solid face, show less floor, or use 4 points."
+        case .foreground(.noObservation):
+            "PackMeasure couldn't find the selected item's outline in this photo. Keep the item still, move the phone closer while keeping every edge visible, and retake."
+        case .foreground(.photo(_, .noForegroundInstance)):
+            "Foreground detection couldn't separate the selected item from its surroundings. Keep the item still, show less floor, and retake from a clearer three-quarter angle."
         case .targetSelection(.noForegroundAtTargetPoint):
             "PackMeasure couldn't match the selected item in this frame. Retap the same item, or use 4 points if it cannot be isolated."
         case .targetSelection(.staleTargetSelectionPrompt):

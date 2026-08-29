@@ -155,11 +155,40 @@ struct ScannerCapturePolicyTests {
             for: .photo(.maskTouchesImageEdge)
         )
 
-        #expect(foregroundCopy.localizedCaseInsensitiveContains("didn't recognize"))
+        #expect(foregroundCopy.localizedCaseInsensitiveContains("couldn't find"))
+        #expect(foregroundCopy.localizedCaseInsensitiveContains("item's outline"))
+        #expect(foregroundCopy.localizedCaseInsensitiveContains("keep the item still"))
+        #expect(foregroundCopy.localizedCaseInsensitiveContains("move the phone closer"))
+        #expect(foregroundCopy.localizedCaseInsensitiveContains("every edge visible"))
         #expect(foregroundCopy.contains("Diagnostic V02"))
+        #expect(!foregroundCopy.localizedCaseInsensitiveContains("tap a solid face"))
+        #expect(!foregroundCopy.localizedCaseInsensitiveContains("use 4 points"))
         #expect(!foregroundCopy.localizedCaseInsensitiveContains("not enough object depth"))
         #expect(framingCopy.localizedCaseInsensitiveContains("edge"))
         #expect(framingCopy.contains("Diagnostic F05"))
+    }
+
+    @Test
+    func visionNoObservationAndForegroundInstanceFailureDoNotShareGuidance() {
+        let visionCopy = ScannerPhotoFailureCopy.message(
+            for: .foreground(.noObservation)
+        )
+        let instanceCopy = ScannerPhotoFailureCopy.message(
+            for: .foreground(
+                .photo(stage: .instanceSelection, error: .noForegroundInstance)
+            )
+        )
+
+        #expect(visionCopy != instanceCopy)
+        #expect(visionCopy.localizedCaseInsensitiveContains("move the phone closer"))
+        #expect(!visionCopy.localizedCaseInsensitiveContains("tap a solid face"))
+        #expect(instanceCopy.localizedCaseInsensitiveContains("selected item"))
+        #expect(instanceCopy.localizedCaseInsensitiveContains("show less floor"))
+        #expect(instanceCopy.localizedCaseInsensitiveContains("three-quarter angle"))
+        #expect(!instanceCopy.localizedCaseInsensitiveContains("selected box"))
+        #expect(!instanceCopy.localizedCaseInsensitiveContains("use 4 points"))
+        #expect(visionCopy.contains("Diagnostic V02"))
+        #expect(instanceCopy.contains("Diagnostic F01"))
     }
 
     @Test

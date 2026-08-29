@@ -73,4 +73,14 @@ struct CrowdedSceneScannerCopyTests {
             }
         }
     }
+
+    @Test
+    func v02KeepsTheItemStillAndMovesTheCameraInstead() {
+        let copy = ScannerPhotoFailureCopy.message(for: .foreground(.noObservation))
+
+        #expect(copy.localizedCaseInsensitiveContains("keep the item still"))
+        #expect(copy.localizedCaseInsensitiveContains("move the phone closer"))
+        #expect(!copy.localizedCaseInsensitiveContains("move the item"))
+        #expect(!copy.localizedCaseInsensitiveContains("clear the scene"))
+    }
 }

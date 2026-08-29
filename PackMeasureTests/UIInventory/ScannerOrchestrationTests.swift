@@ -230,6 +230,36 @@ struct ScannerOrchestrationTests {
     }
 
     @Test @MainActor
+    func failedSecondAngleRetryPreservesFirstAngleAndMeasurementSeries() throws {
+        let state = try acceptedFirstAngleState()
+        let acceptedRecords = state.capturedAngleRecords
+        let seriesID = state.measurementSeriesID
+
+        state.prepareForAiming()
+        #expect(state.previewBecameReady())
+        _ = try #require(
+            state.selectAutomaticTarget(
+                rawCameraNormalizedPoint: SIMD2<Float>(0.69, 0.38),
+                id: secondTargetID
+            )
+        )
+        let failedAuthority = try #require(state.beginAutomaticCapture())
+
+        #expect(state.automaticCaptureFailed(authority: failedAuthority))
+        state.phase = .failed("Diagnostic D03")
+        #expect(state.capturedAngleRecords == acceptedRecords)
+        #expect(state.measurementSeriesID == seriesID)
+
+        state.prepareForAiming()
+
+        #expect(state.capturedAngleRecords == acceptedRecords)
+        #expect(state.measurementSeriesID == seriesID)
+        #expect(state.activeTargetIdentity == nil)
+        #expect(state.pendingAutomaticCaptureAuthority == nil)
+        #expect(state.isPreparingForAiming)
+    }
+
+    @Test @MainActor
     func missingBoundsNoTargetAndStaleRequestFailClosed() throws {
         let noTarget = readyState()
         let fakeIdentity = TargetLockIdentity(

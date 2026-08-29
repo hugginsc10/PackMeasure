@@ -181,6 +181,105 @@ struct Build33ScannerPresentationTests {
         )
     }
 
+    @Test
+    func retryPresentationDistinguishesRetainedAnglesFromARealRestart() {
+        let firstPhoto = ScannerRetryPresentation.presentation(
+            capturedAngleCount: 0,
+            measurementProgress: .awaitingFirstAngle
+        )
+        #expect(firstPhoto.sectionTitle == "Try another photo")
+        #expect(firstPhoto.actionTitle == "Retake photo")
+        #expect(!firstPhoto.discardsAcceptedAngles)
+
+        let secondAngle = ScannerRetryPresentation.presentation(
+            capturedAngleCount: 1,
+            measurementProgress: .needsAnotherAngle(
+                reason: .firstAngleCaptured,
+                acceptedCount: 1
+            )
+        )
+        #expect(secondAngle.sectionTitle == "Retake angle 2")
+        #expect(secondAngle.actionTitle == "Retake photo")
+        #expect(secondAngle.actionHint.localizedCaseInsensitiveContains("keeps Angle 1"))
+        #expect(!secondAngle.discardsAcceptedAngles)
+
+        let thirdAngle = ScannerRetryPresentation.presentation(
+            capturedAngleCount: 2,
+            measurementProgress: .needsAnotherAngle(
+                reason: .thirdAngleRequired,
+                acceptedCount: 2
+            )
+        )
+        #expect(thirdAngle.sectionTitle == "Retake angle 3")
+        #expect(thirdAngle.actionHint.localizedCaseInsensitiveContains("Angles 1 through 2"))
+        #expect(!thirdAngle.discardsAcceptedAngles)
+
+        let restart = ScannerRetryPresentation.presentation(
+            capturedAngleCount: 3,
+            measurementProgress: .inconsistent(.dimensionsInconsistent)
+        )
+        #expect(restart.sectionTitle == "Restart scan")
+        #expect(restart.actionTitle == "Restart scan")
+        #expect(restart.discardsAcceptedAngles)
+        #expect(restart.actionHint.localizedCaseInsensitiveContains("discards"))
+    }
+
+    @Test
+    func retainedAngleRetryGetsPriorityLayoutOnlyForThatFailureState() {
+        #expect(
+            ScannerReviewLayoutPolicy.mode(
+                capturedAngleCount: 1,
+                reviewState: .retryRequired("Diagnostic D03")
+            ) == .retainedAngleRetry
+        )
+        #expect(
+            ScannerReviewLayoutPolicy.mode(
+                capturedAngleCount: 0,
+                reviewState: .retryRequired("Diagnostic V02")
+            ) == .standard
+        )
+        #expect(
+            ScannerReviewLayoutPolicy.mode(
+                capturedAngleCount: 1,
+                reviewState: .needsAnotherAngle("Compare another angle")
+            ) == .standard
+        )
+        #expect(
+            ScannerReviewLayoutPolicy.mode(
+                capturedAngleCount: 1,
+                reviewState: .retryRequired("Low confidence")
+            ) == .retainedAngleRetry
+        )
+    }
+
+    @Test
+    func previewShowsExactlyOnePrimaryStatusWhenATargetIsReady() {
+        #expect(
+            ScannerPreviewOverlayPolicy.showsTargetStatus(
+                phase: .ready,
+                hasActiveTarget: true
+            )
+        )
+        #expect(
+            !ScannerPreviewOverlayPolicy.showsTargetStatus(
+                phase: .ready,
+                hasActiveTarget: false
+            )
+        )
+        #expect(
+            !ScannerPreviewOverlayPolicy.showsTargetStatus(
+                phase: .scanning(progress: 0.5),
+                hasActiveTarget: true
+            )
+        )
+        #expect(
+            !ScannerPreviewOverlayPolicy.showsTargetStatus(
+                phase: .failed("Diagnostic V02"),
+                hasActiveTarget: true
+            )
+        )
+    }
+
     @Test(arguments: [
         (GuidedBoxWorkflowStep.referenceCorner, "1. Reference corner: place the reticle on one visible box corner."),
         (GuidedBoxWorkflowStep.lengthEndpoint, "2. Length endpoint: place the reticle at the other end of the length edge."),

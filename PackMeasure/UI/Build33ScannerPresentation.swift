@@ -80,6 +80,76 @@ enum ScannerTargetStatusPresentation {
     }
 }
 
+struct ScannerRetryPresentation: Equatable, Sendable {
+    let sectionTitle: String
+    let actionTitle: String
+    let actionHint: String
+    let discardsAcceptedAngles: Bool
+
+    static func presentation(
+        capturedAngleCount: Int,
+        measurementProgress: MultiAngleMeasurementProgress
+    ) -> ScannerRetryPresentation {
+        if case .inconsistent = measurementProgress {
+            return ScannerRetryPresentation(
+                sectionTitle: ScannerActionCopy.restartScan,
+                actionTitle: ScannerActionCopy.restartScan,
+                actionHint: "Discards all captured photo angles and starts over.",
+                discardsAcceptedAngles: true
+            )
+        }
+
+        let retainedAngleCount = max(0, capturedAngleCount)
+        guard retainedAngleCount > 0 else {
+            return ScannerRetryPresentation(
+                sectionTitle: "Try another photo",
+                actionTitle: ScannerActionCopy.retryPhoto,
+                actionHint: "Opens the camera to retry the first photo.",
+                discardsAcceptedAngles: false
+            )
+        }
+
+        let retainedDescription = retainedAngleCount == 1
+            ? "Keeps Angle 1"
+            : "Keeps Angles 1 through \(retainedAngleCount)"
+        return ScannerRetryPresentation(
+            sectionTitle: "Retake angle \(retainedAngleCount + 1)",
+            actionTitle: ScannerActionCopy.retryPhoto,
+            actionHint:
+                "\(retainedDescription) and opens the camera to retake Angle "
+                    + "\(retainedAngleCount + 1).",
+            discardsAcceptedAngles: false
+        )
+    }
+}
+
+enum ScannerReviewLayoutMode: Equatable, Sendable {
+    case standard
+    case retainedAngleRetry
+}
+
+enum ScannerReviewLayoutPolicy {
+    static func mode(
+        capturedAngleCount: Int,
+        reviewState: ScannerCaptureReviewState
+    ) -> ScannerReviewLayoutMode {
+        guard capturedAngleCount > 0,
+              case .retryRequired = reviewState else {
+            return .standard
+        }
+        return .retainedAngleRetry
+    }
+}
+
+enum ScannerPreviewOverlayPolicy {
+    static func showsTargetStatus(
+        phase: ScannerPhase,
+        hasActiveTarget: Bool
+    ) -> Bool {
+        hasActiveTarget && phase == .ready
+    }
+}
+
 enum ScannerGuidedAction: String, CaseIterable, Equatable, Sendable {
     case back
     case takePoint
@@ -367,6 +437,8 @@ enum ScannerBuild33AccessibilityID {
     static let modeGuidedCorners = "scanner.mode.guided-four-points"
     static let guidedEntry = "scanner.guided.entry"
     static let targetStatus = "scanner.target.status"
+    static let retryMessage = "scanner.retry.message"
+    static let retryPrimaryAction = "scanner.retry.primary-action"
     static let guidedPrompt = "scanner.guided.prompt"
     static let guidedFeedback = "scanner.guided.feedback"
 
