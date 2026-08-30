@@ -1,3 +1,4 @@
+import CoreGraphics
 import Testing
 import simd
 @testable import PackMeasure
@@ -81,6 +82,133 @@ struct ScannerCapturePolicyTests {
         #expect(agreeingPairCopy.localizedCaseInsensitiveContains("higher or lower"))
         #expect(flatThirdViewCopy.localizedCaseInsensitiveContains("camera height"))
         #expect(flatThirdViewCopy.localizedCaseInsensitiveContains("raise or lower"))
+    }
+
+    @Test
+    func liveCameraUsesPortraitFramingAndSuppressesCompetingReviewContent() {
+        #expect(ScannerPreviewLayoutPolicy.fallbackLiveCameraAspectRatio == 0.75)
+        #expect(
+            ScannerPreviewLayoutPolicy.preferredAspectRatio(
+                showsLiveCamera: true,
+                liveCameraAspectRatio: 0.5625,
+                capturedAspectRatio: 1.20
+            ) == 0.5625
+        )
+        #expect(
+            ScannerPreviewLayoutPolicy.preferredAspectRatio(
+                showsLiveCamera: false,
+                liveCameraAspectRatio: 0.5625,
+                capturedAspectRatio: 1.20
+            ) == 1.20
+        )
+        #expect(
+            !ScannerPreviewLayoutPolicy.showsReviewContent(
+                showsLiveCamera: true
+            )
+        )
+        #expect(
+            ScannerPreviewLayoutPolicy.showsReviewContent(
+                showsLiveCamera: false
+            )
+        )
+        #expect(ScannerPreviewFramingPolicy.protectedInsetFraction == 0.02)
+        #expect(
+            ScannerPreviewLayoutPolicy.orientedLiveCameraAspectRatio(
+                imageWidth: 1_920,
+                imageHeight: 1_080
+            ) == 0.5625
+        )
+    }
+
+    @Test
+    func liveCameraSizingRespectsCompactAndUnspecifiedProposals() {
+        let fallback = CGSize(width: 240, height: 320)
+
+        #expect(
+            ScannerPreviewLayoutPolicy.fittedSize(
+                proposedWidth: 390,
+                proposedHeight: nil,
+                fallbackSize: fallback,
+                preferredAspectRatio: 0.75
+            ) == CGSize(width: 390, height: 520)
+        )
+        #expect(
+            ScannerPreviewLayoutPolicy.fittedSize(
+                proposedWidth: 390,
+                proposedHeight: 300,
+                fallbackSize: fallback,
+                preferredAspectRatio: 0.75
+            ) == CGSize(width: 225, height: 300)
+        )
+        #expect(
+            ScannerPreviewLayoutPolicy.fittedSize(
+                proposedWidth: 390,
+                proposedHeight: 0,
+                fallbackSize: fallback,
+                preferredAspectRatio: 0.75
+            ) == .zero
+        )
+        #expect(
+            ScannerPreviewLayoutPolicy.fittedSize(
+                proposedWidth: nil,
+                proposedHeight: 300,
+                fallbackSize: fallback,
+                preferredAspectRatio: 0.75
+            ) == CGSize(width: 225, height: 300)
+        )
+        #expect(
+            ScannerPreviewLayoutPolicy.fittedSize(
+                proposedWidth: nil,
+                proposedHeight: nil,
+                fallbackSize: fallback,
+                preferredAspectRatio: 0.75
+            ) == fallback
+        )
+        let invalid = ScannerPreviewLayoutPolicy.fittedSize(
+            proposedWidth: CGFloat.infinity,
+            proposedHeight: CGFloat.nan,
+            fallbackSize: CGSize(
+                width: CGFloat.infinity,
+                height: CGFloat.nan
+            ),
+            preferredAspectRatio: 0.75
+        )
+        #expect(invalid == .zero)
+    }
+
+    @Test
+    func protectedGuideCornersRemainInsideTheRoundedPreview() {
+        #expect(
+            ScannerPreviewFramingPolicy.safePreviewCornerRadius(
+                in: CGSize(width: 390, height: 520)
+            ) == 24
+        )
+        let compactRadius = ScannerPreviewFramingPolicy.safePreviewCornerRadius(
+            in: CGSize(width: 200, height: 200)
+        )
+        let protectedInset = 200
+            * CGFloat(ScannerPreviewFramingPolicy.protectedInsetFraction)
+        let maximumSafeRadius = protectedInset / (1 - 1 / sqrt(CGFloat(2)))
+        #expect(compactRadius <= maximumSafeRadius)
+    }
+
+    @Test
+    func f05CopyDistinguishesVisibleCropFromSourceOutlineLeakage() {
+        let visibleCrop = ScannerPhotoFailureCopy.message(
+            for: .photo(.maskTouchesImageEdge(stage: .previewOutline))
+        )
+        let sourceOutline = ScannerPhotoFailureCopy.message(
+            for: .photo(.maskTouchesImageEdge(stage: .sourceMask))
+        )
+
+        #expect(visibleCrop != sourceOutline)
+        #expect(visibleCrop.localizedCaseInsensitiveContains("cropped"))
+        #expect(visibleCrop.contains("0.5×"))
+        #expect(visibleCrop.localizedCaseInsensitiveContains("step back"))
+        #expect(sourceOutline.localizedCaseInsensitiveContains("outline"))
+        #expect(sourceOutline.localizedCaseInsensitiveContains("solid surface"))
+        #expect(!visibleCrop.localizedCaseInsensitiveContains("diagnostic"))
+        #expect(!sourceOutline.localizedCaseInsensitiveContains("diagnostic"))
     }
 
     @Test

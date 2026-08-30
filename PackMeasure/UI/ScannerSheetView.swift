@@ -1,11 +1,10 @@
 import SwiftUI
 
-/// Keeps the AR representable at one stable SwiftUI identity while allowing a
-/// captured result to use the exact viewport aspect ratio from its live frame.
-/// The live preview retains its flexible 260...420 point height instead of
-/// passing a nil aspect ratio, which can collapse a UIViewRepresentable.
+/// Keeps the AR representable at one stable SwiftUI identity while allowing the
+/// live camera to use its portrait ratio and a captured result to retain the
+/// exact viewport aspect ratio from its measured frame.
 private struct ScannerPreviewSizingLayout: Layout {
-    let capturedAspectRatio: CGFloat?
+    let preferredAspectRatio: CGFloat?
 
     func sizeThatFits(
         proposal: ProposedViewSize,
@@ -13,15 +12,12 @@ private struct ScannerPreviewSizingLayout: Layout {
         cache: inout ()
     ) -> CGSize {
         guard let subview = subviews.first else { return .zero }
-        guard let capturedAspectRatio,
-              capturedAspectRatio.isFinite,
-              capturedAspectRatio > 0,
-              let width = proposal.width,
-              width.isFinite,
-              width > 0 else {
-            return subview.sizeThatFits(proposal)
-        }
-        return CGSize(width: width, height: width / capturedAspectRatio)
+        return ScannerPreviewLayoutPolicy.fittedSize(
+            proposedWidth: proposal.width,
+            proposedHeight: proposal.height,
+            fallbackSize: subview.sizeThatFits(proposal),
+            preferredAspectRatio: preferredAspectRatio
+        )
     }
 
     func placeSubviews(
@@ -36,6 +32,87 @@ private struct ScannerPreviewSizingLayout: Layout {
             anchor: .center,
             proposal: ProposedViewSize(width: bounds.width, height: bounds.height)
         )
+    }
+}
+
+enum ScannerPreviewLayoutPolicy {
+    /// Used only until the first eligible AR frame publishes the active camera
+    /// format. The live ratio is then derived from that frame rather than
+    /// assuming every supported device selected a 4:3 format.
+    static let fallbackLiveCameraAspectRatio: CGFloat = 3.0 / 4.0
+
+    static func preferredAspectRatio(
+        showsLiveCamera: Bool,
+        liveCameraAspectRatio: CGFloat,
+        capturedAspectRatio: CGFloat?
+    ) -> CGFloat? {
+        if showsLiveCamera {
+            return liveCameraAspectRatio
+        }
+        return capturedAspectRatio
+    }
+
+    static func orientedLiveCameraAspectRatio(
+        imageWidth: CGFloat,
+        imageHeight: CGFloat
+    ) -> CGFloat? {
+        guard imageWidth.isFinite,
+              imageHeight.isFinite,
+              imageWidth > 0,
+              imageHeight > 0 else {
+            return nil
+        }
+        return imageHeight / imageWidth
+    }
+
+    static func fittedSize(
+        proposedWidth: CGFloat?,
+        proposedHeight: CGFloat?,
+        fallbackSize: CGSize,
+        preferredAspectRatio: CGFloat?
+    ) -> CGSize {
+        let fallback = CGSize(
+            width: fallbackSize.width.isFinite && fallbackSize.width >= 0
+                ? fallbackSize.width
+                : 0,
+            height: fallbackSize.height.isFinite && fallbackSize.height >= 0
+                ? fallbackSize.height
+                : 0
+        )
+        guard let preferredAspectRatio,
+              preferredAspectRatio.isFinite,
+              preferredAspectRatio > 0 else {
+            return fallback
+        }
+
+        let width = proposedWidth.flatMap { value in
+            value.isFinite && value >= 0 ? value : nil
+        }
+        let height = proposedHeight.flatMap { value in
+            value.isFinite && value >= 0 ? value : nil
+        }
+        if width == 0 || height == 0 {
+            return .zero
+        }
+
+        switch (width, height) {
+        case let (.some(width), .some(height)):
+            let fittedWidth = min(width, height * preferredAspectRatio)
+            return CGSize(
+                width: fittedWidth,
+                height: fittedWidth / preferredAspectRatio
+            )
+        case let (.some(width), .none):
+            return CGSize(width: width, height: width / preferredAspectRatio)
+        case let (.none, .some(height)):
+            return CGSize(width: height * preferredAspectRatio, height: height)
+        case (.none, .none):
+            return fallback
+        }
+    }
+
+    static func showsReviewContent(showsLiveCamera: Bool) -> Bool {
+        !showsLiveCamera
     }
 }
 
@@ -78,6 +155,9 @@ struct ScannerSheetView: View {
         private(set) var hasResolvedCameraZoomAvailability = false
         private(set) var hasConfirmedExplicitCameraZoom = false
         private(set) var isApplyingCameraZoom = false
+        private(set) var pendingFinalAngleFramingZoom: ScannerCameraZoom?
+        private(set) var liveCameraAspectRatio =
+            ScannerPreviewLayoutPolicy.fallbackLiveCameraAspectRatio
         private(set) var isPreparingForAiming = false
         private(set) var requiresFreshCameraEvidence = false
         private(set) var measurementSeriesID = 0
@@ -198,6 +278,18 @@ struct ScannerSheetView: View {
         var shouldReapplyCameraZoomAfterSessionRun: Bool {
             cameraZoomUsesConfigurableDevice
                 && hasConfirmedExplicitCameraZoom
+        }
+
+        var showsLiveCameraPreview: Bool {
+            guard objectOverlay == nil else { return false }
+            return switch phase {
+            case .checkingSupport, .ready, .scanning:
+                true
+            case .measured, .failed:
+                isPreparingForAiming
+            case .unsupported:
+                false
+            }
         }
 
         var showsCameraGuide: Bool {
@@ -452,12 +544,17 @@ struct ScannerSheetView: View {
                 hasConfirmedExplicitCameraZoom = true
             }
             isApplyingCameraZoom = false
+            if confirmsExplicitSelection {
+                applyPendingFinalAngleFramingZoomIfPossible()
+            }
         }
 
         func cameraZoomApplicationFailed(message: String? = nil) {
             cameraZoom = lastConfirmedCameraZoom
             hasConfirmedExplicitCameraZoom = false
             isApplyingCameraZoom = false
+            pendingFinalAngleFramingZoom = nil
+            isPreparingForAiming = false
             requiresFreshCameraEvidence = true
             if let message {
                 estimate = nil
@@ -628,6 +725,7 @@ struct ScannerSheetView: View {
             estimate = nil
             objectOverlay = nil
             isApplyingCameraZoom = false
+            pendingFinalAngleFramingZoom = nil
             isPreparingForAiming = false
             requiresFreshCameraEvidence = false
             guidedCaptureFeedback = nil
@@ -638,12 +736,18 @@ struct ScannerSheetView: View {
                   !isPreparingForAiming else {
                 return
             }
+            let isMeasuredTransition: Bool
             switch phase {
-            case .measured, .failed:
-                break
+            case .measured:
+                isMeasuredTransition = true
+            case .failed:
+                isMeasuredTransition = false
             default:
                 return
             }
+            pendingFinalAngleFramingZoom = isMeasuredTransition
+                ? preferredFinalAngleFramingZoom()
+                : nil
             switch measurementWorkflow.progress {
             case .accepted, .inconsistent:
                 resetMeasurementSeries()
@@ -673,7 +777,47 @@ struct ScannerSheetView: View {
             isPreparingForAiming = false
             requiresFreshCameraEvidence = false
             phase = .ready
+            applyPendingFinalAngleFramingZoomIfPossible()
             return true
+        }
+
+        @discardableResult
+        func updateLiveCameraAspectRatio(_ aspectRatio: CGFloat) -> Bool {
+            guard aspectRatio.isFinite, aspectRatio > 0 else { return false }
+            guard abs(liveCameraAspectRatio - aspectRatio) > 0.000_1 else {
+                return false
+            }
+            liveCameraAspectRatio = aspectRatio
+            return true
+        }
+
+        private func applyPendingFinalAngleFramingZoomIfPossible() {
+            guard phase == .ready,
+                  let pendingFinalAngleFramingZoom else {
+                return
+            }
+            guard availableCameraZooms.contains(pendingFinalAngleFramingZoom) else {
+                self.pendingFinalAngleFramingZoom = nil
+                return
+            }
+            if cameraZoom == pendingFinalAngleFramingZoom {
+                self.pendingFinalAngleFramingZoom = nil
+                return
+            }
+            if selectCameraZoom(pendingFinalAngleFramingZoom) {
+                self.pendingFinalAngleFramingZoom = nil
+            }
+        }
+
+        private func preferredFinalAngleFramingZoom() -> ScannerCameraZoom? {
+            guard capturedAngleRecords.count == 2,
+                  case .needsAnotherAngle(_, acceptedCount: 2) =
+                    measurementWorkflow.progress else {
+                return nil
+            }
+            return availableCameraZooms
+                .filter { $0.rawValue < cameraZoom.rawValue }
+                .min { $0.rawValue < $1.rawValue }
         }
 
         func startMeasurement() {
@@ -934,8 +1078,11 @@ struct ScannerSheetView: View {
                     )
                 }
 
-                if let estimate = scannerState.estimate {
-                    Form {
+                if ScannerPreviewLayoutPolicy.showsReviewContent(
+                    showsLiveCamera: scannerState.showsLiveCameraPreview
+                ) {
+                    if let estimate = scannerState.estimate {
+                        Form {
                         if case let .retryRequired(message) = reviewState {
                             Section(retryPresentation.sectionTitle) {
                                 retryDiagnosticLabel(message)
@@ -987,15 +1134,15 @@ struct ScannerSheetView: View {
                                 Toggle("Safe to turn on its side", isOn: $mayRotate)
                             }
                         }
-                    }
-                    .frame(
-                        minHeight: showsRetainedAngleRetry ? 220 : nil,
-                        idealHeight: showsRetainedAngleRetry ? 320 : nil,
-                        maxHeight: 360
-                    )
-                    .layoutPriority(showsRetainedAngleRetry ? 1 : 0)
-                } else if !scannerState.capturedEstimates.isEmpty {
-                    Form {
+                        }
+                        .frame(
+                            minHeight: showsRetainedAngleRetry ? 220 : nil,
+                            idealHeight: showsRetainedAngleRetry ? 320 : nil,
+                            maxHeight: 360
+                        )
+                        .layoutPriority(showsRetainedAngleRetry ? 1 : 0)
+                    } else if !scannerState.capturedEstimates.isEmpty {
+                        Form {
                         if case let .retryRequired(message) = reviewState {
                             Section(retryPresentation.sectionTitle) {
                                 retryDiagnosticLabel(message)
@@ -1025,24 +1172,25 @@ struct ScannerSheetView: View {
                                     .foregroundStyle(.blue)
                             }
                         }
+                        }
+                        .frame(
+                            minHeight: showsRetainedAngleRetry ? 220 : nil,
+                            idealHeight: showsRetainedAngleRetry ? 320 : nil,
+                            maxHeight: showsRetainedAngleRetry ? 320 : 260
+                        )
+                        .layoutPriority(showsRetainedAngleRetry ? 1 : 0)
+                    } else if case let .retryRequired(message) = reviewState {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(retryPresentation.sectionTitle)
+                                .font(.headline)
+                                .foregroundStyle(.secondary)
+                            retryDiagnosticLabel(message)
+                                .font(.footnote)
+                                .multilineTextAlignment(.leading)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal)
                     }
-                    .frame(
-                        minHeight: showsRetainedAngleRetry ? 220 : nil,
-                        idealHeight: showsRetainedAngleRetry ? 320 : nil,
-                        maxHeight: showsRetainedAngleRetry ? 320 : 260
-                    )
-                    .layoutPriority(showsRetainedAngleRetry ? 1 : 0)
-                } else if case let .retryRequired(message) = reviewState {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(retryPresentation.sectionTitle)
-                            .font(.headline)
-                            .foregroundStyle(.secondary)
-                        retryDiagnosticLabel(message)
-                            .font(.footnote)
-                            .multilineTextAlignment(.leading)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal)
                 }
 
                 actionBar
@@ -1066,23 +1214,35 @@ struct ScannerSheetView: View {
         let capturedAspectRatio = scannerState.objectOverlay.map {
             CGFloat($0.capturedPreviewAspectRatio)
         }
+        let preferredAspectRatio = ScannerPreviewLayoutPolicy.preferredAspectRatio(
+            showsLiveCamera: scannerState.showsLiveCameraPreview,
+            liveCameraAspectRatio: scannerState.liveCameraAspectRatio,
+            capturedAspectRatio: capturedAspectRatio
+        )
 
         return ScannerPreviewSizingLayout(
-            capturedAspectRatio: capturedAspectRatio
+            preferredAspectRatio: preferredAspectRatio
         ) {
             cameraPreviewSurface
         }
             .frame(maxWidth: .infinity)
             .frame(
-                minHeight: isReviewingCapture ? nil : (compactRetryReview ? 200 : 260),
-                idealHeight: isReviewingCapture ? nil : (compactRetryReview ? 240 : 360),
-                maxHeight: isReviewingCapture ? nil : (compactRetryReview ? 280 : 420)
+                minHeight: isReviewingCapture || scannerState.showsLiveCameraPreview
+                    ? nil
+                    : (compactRetryReview ? 200 : 260),
+                idealHeight: isReviewingCapture || scannerState.showsLiveCameraPreview
+                    ? nil
+                    : (compactRetryReview ? 240 : 360),
+                maxHeight: isReviewingCapture || scannerState.showsLiveCameraPreview
+                    ? nil
+                    : (compactRetryReview ? 280 : 420)
             )
+            .layoutPriority(scannerState.showsLiveCameraPreview ? 1 : 0)
     }
 
     private var cameraPreviewSurface: some View {
         MeasurementARView(scannerState: scannerState)
-            .clipShape(RoundedRectangle(cornerRadius: 24))
+            .clipShape(ScannerPreviewClipShape())
             .overlay {
                 if showsCameraGuide, scannerState.objectOverlay == nil {
                     if scannerState.measurementMode == .guidedCorners {
@@ -1640,13 +1800,33 @@ private struct CameraZoomStatusBadge: View {
 
 private struct CameraObjectFrame: View {
     var body: some View {
-        RoundedRectangle(cornerRadius: 24)
-            .strokeBorder(.white.opacity(0.78), lineWidth: 2)
-            .padding(.horizontal, 28)
-            .padding(.vertical, 36)
-            .shadow(color: .black.opacity(0.45), radius: 2)
-            .allowsHitTesting(false)
-            .accessibilityHidden(true)
+        GeometryReader { proxy in
+            Rectangle()
+                .strokeBorder(.white.opacity(0.78), lineWidth: 2)
+                .padding(.horizontal, proxy.size.width * CGFloat(
+                    ScannerPreviewFramingPolicy.protectedInsetFraction
+                ))
+                .padding(.vertical, proxy.size.height * CGFloat(
+                    ScannerPreviewFramingPolicy.protectedInsetFraction
+                ))
+                .shadow(color: .black.opacity(0.45), radius: 2)
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
+/// The protected rectangular guide is always fully visible. On normal phone
+/// sizes this retains the 24-point camera corners; on a highly compressed
+/// preview it reduces the outer radius rather than hiding a guide corner that
+/// the rectangular framing validator would still accept.
+private struct ScannerPreviewClipShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        RoundedRectangle(
+            cornerRadius: ScannerPreviewFramingPolicy.safePreviewCornerRadius(
+                in: rect.size
+            )
+        ).path(in: rect)
     }
 }
 
@@ -1843,8 +2023,10 @@ enum ScannerPhotoFailureCopy {
             "The selected item covered only \(percent(actual, rounded: .down))% of the photo; this build needs at least \(percent(minimum, rounded: .up))%. Move closer and keep a solid surface under the marker."
         case let .maskAreaTooLarge(actual, maximum):
             "The selected item covered \(percent(actual, rounded: .up))% of the photo; this build allows at most \(percent(maximum, rounded: .down))%. Step back until every item edge is visible."
-        case .maskTouchesImageEdge:
-            "The selected item reached the edge of the camera view. Keep every item edge inside the view and retake it."
+        case .maskTouchesImageEdge(stage: .previewOutline):
+            "The item was cropped by the visible camera frame. Switch to 0.5× if available, or step back until every edge is visible."
+        case .maskTouchesImageEdge(stage: .sourceMask):
+            "The detected outline ran into the photo edge. Step back, or retap a solid surface of the item and retake the photo."
         case let .insufficientDepthSamples(actual, minimum):
             "LiDAR found \(actual) usable depth points on the object; this build needs \(minimum). Hold steady at a three-quarter angle and retake it."
         case let .insufficientDepthCoverage(actual, minimum):

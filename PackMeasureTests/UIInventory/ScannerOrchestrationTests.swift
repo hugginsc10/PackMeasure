@@ -11,6 +11,9 @@ struct ScannerOrchestrationTests {
     private let secondTargetID = UUID(
         uuidString: "22222222-2222-2222-2222-222222222222"
     )!
+    private let thirdTargetID = UUID(
+        uuidString: "33333333-3333-3333-3333-333333333333"
+    )!
     private let stablePose = GuidedBoxCapturePose(
         position: SIMD3<Float>(0.1, 1.2, -0.4),
         orientation: SIMD4<Float>(0, 0, 0, 1)
@@ -213,6 +216,135 @@ struct ScannerOrchestrationTests {
         )
         #expect(state.pendingAutomaticCaptureAuthority == secondAuthority)
         #expect(state.capturedAngleRecords == acceptedRecords)
+    }
+
+    @Test @MainActor
+    func finalAngleAutoZoomRequiresFreshPostZoomTargetAuthority() throws {
+        let state = readyState()
+        state.updateCameraZoomAvailability(
+            [.half, .standard],
+            selected: .standard,
+            usesConfigurableDevice: true,
+            confirmsExplicitSelection: true
+        )
+
+        let firstIdentity = try #require(
+            state.selectAutomaticTarget(
+                rawCameraNormalizedPoint: SIMD2<Float>(0.31, 0.57),
+                id: firstTargetID
+            )
+        )
+        let firstAuthority = try #require(state.beginAutomaticCapture())
+        _ = try #require(
+            state.receiveAutomaticMeasurement(
+                automaticCapture(
+                    center: SIMD3<Float>(0.2, 0.4, -1.1),
+                    viewpointPosition: SIMD3<Float>(0, 0, 2),
+                    horizontalForward: SIMD2<Float>(0, -1)
+                ),
+                authority: firstAuthority
+            )
+        )
+
+        state.prepareForAiming()
+        #expect(state.previewBecameReady())
+        let secondIdentity = try #require(
+            state.selectAutomaticTarget(
+                rawCameraNormalizedPoint: SIMD2<Float>(0.68, 0.44),
+                id: secondTargetID
+            )
+        )
+        let secondAuthority = try #require(state.beginAutomaticCapture())
+        _ = try #require(
+            state.receiveAutomaticMeasurement(
+                automaticCapture(
+                    center: SIMD3<Float>(0.2, 0.4, -1.1),
+                    viewpointPosition: SIMD3<Float>(2, 0, 0),
+                    horizontalForward: SIMD2<Float>(-1, 0)
+                ),
+                authority: secondAuthority
+            )
+        )
+        let acceptedRecords = state.capturedAngleRecords
+        let seriesID = state.measurementSeriesID
+        let reacquisitionID = state.cameraEvidenceReacquisitionID
+        #expect(acceptedRecords.count == 2)
+
+        state.prepareForAiming()
+        state.beginCameraZoomApplication()
+        #expect(state.previewBecameReady())
+        state.updateCameraZoomAvailability(
+            [.half, .standard],
+            selected: .standard,
+            usesConfigurableDevice: true,
+            confirmsExplicitSelection: true
+        )
+
+        #expect(state.cameraZoom == .half)
+        #expect(
+            state.cameraEvidenceReacquisitionID == reacquisitionID + 1
+        )
+        #expect(state.capturedAngleRecords == acceptedRecords)
+        #expect(state.measurementSeriesID == seriesID)
+        #expect(state.activeTargetIdentity == nil)
+        #expect(
+            state.observeAutomaticTargetValidation(
+                .valid,
+                identity: secondIdentity
+            ) == .ignoredStaleIdentity
+        )
+
+        state.updateCameraZoomAvailability(
+            [.half, .standard],
+            selected: .half,
+            usesConfigurableDevice: true,
+            confirmsExplicitSelection: true
+        )
+        #expect(state.previewBecameReady())
+
+        let thirdIdentity = try #require(
+            state.selectAutomaticTarget(
+                rawCameraNormalizedPoint: SIMD2<Float>(0.49, 0.52),
+                id: thirdTargetID
+            )
+        )
+        #expect(thirdIdentity != firstIdentity)
+        #expect(thirdIdentity != secondIdentity)
+        let thirdAuthority = try #require(state.beginAutomaticCapture())
+        #expect(
+            thirdAuthority.cameraEvidenceReacquisitionID
+                == reacquisitionID + 1
+        )
+        #expect(thirdAuthority.identity == thirdIdentity)
+        #expect(
+            state.receiveAutomaticMeasurement(
+                automaticCapture(center: SIMD3<Float>(8, 0, -3)),
+                authority: secondAuthority
+            ) == nil
+        )
+        #expect(state.pendingAutomaticCaptureAuthority == thirdAuthority)
+        #expect(state.capturedAngleRecords == acceptedRecords)
+
+        let finalProgress = try #require(
+            state.receiveAutomaticMeasurement(
+                automaticCapture(
+                    center: SIMD3<Float>(0.2, 0.4, -1.1),
+                    viewpointPosition: SIMD3<Float>(0, 0.21, -1),
+                    horizontalForward: SIMD2<Float>(0, 1),
+                    cameraZoom: .half
+                ),
+                authority: thirdAuthority
+            )
+        )
+        guard case .accepted = finalProgress else {
+            Issue.record("expected the elevated third angle to resolve consensus")
+            return
+        }
+        #expect(state.capturedAngleRecords.count == 3)
+        #expect(
+            state.capturedAngleRecords.map(\.cameraProvenance.cameraZoom)
+                == [.standard, .standard, .half]
+        )
     }
 
     @Test @MainActor
@@ -902,7 +1034,10 @@ struct ScannerOrchestrationTests {
 
     private func automaticCapture(
         center: SIMD3<Float>,
-        includesBounds: Bool = true
+        includesBounds: Bool = true,
+        viewpointPosition: SIMD3<Float> = SIMD3<Float>(0, 0, 2),
+        horizontalForward: SIMD2<Float> = SIMD2<Float>(0, -1),
+        cameraZoom: ScannerCameraZoom = .standard
     ) -> ScannerRecordedAngleCapture {
         ScannerRecordedAngleCapture(
             measurement: MeasurementAngleCapture(
@@ -922,13 +1057,13 @@ struct ScannerOrchestrationTests {
                         : nil
                 ),
                 viewpoint: MeasurementCameraViewpoint(
-                    position: SIMD3<Float>(0, 0, 2),
-                    horizontalForward: SIMD2<Float>(0, -1)
+                    position: viewpointPosition,
+                    horizontalForward: horizontalForward
                 )
             ),
             cameraProvenance: ScannerCameraCaptureProvenance(
-                cameraZoom: .standard,
-                appliedDisplayZoomFactor: 1,
+                cameraZoom: cameraZoom,
+                appliedDisplayZoomFactor: cameraZoom.rawValue,
                 intrinsics: simd_float3x3(columns: (
                     SIMD3<Float>(1_000, 0, 0),
                     SIMD3<Float>(0, 1_000, 0),

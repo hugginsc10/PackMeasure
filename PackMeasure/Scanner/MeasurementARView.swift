@@ -38,6 +38,28 @@ enum ScannerCameraZoom: Double, CaseIterable, Identifiable, Sendable {
     }
 }
 
+enum ScannerPreviewFramingPolicy {
+    static let protectedInsetFraction: Float = 0.02
+
+    static func safePreviewCornerRadius(
+        in viewportSize: CGSize,
+        preferredRadius: CGFloat = 24
+    ) -> CGFloat {
+        guard viewportSize.width.isFinite,
+              viewportSize.height.isFinite,
+              preferredRadius.isFinite,
+              viewportSize.width > 0,
+              viewportSize.height > 0,
+              preferredRadius >= 0 else {
+            return 0
+        }
+        let inset = min(viewportSize.width, viewportSize.height)
+            * CGFloat(protectedInsetFraction)
+        let roundedCornerInsetFactor = 1 - 1 / sqrt(CGFloat(2))
+        return min(preferredRadius, inset / roundedCornerInsetFactor)
+    }
+}
+
 /// Camera calibration retained with one accepted angle. Mixed-zoom series are
 /// valid only when every measurement remains attributable to the exact lens
 /// state and AR-frame calibration that produced its point cloud.
@@ -900,7 +922,6 @@ struct MeasurementARView: UIViewRepresentable {
         private static let maximumRegionCoverage = 0.94
         private static let peripheralSampleTarget = 1_200
         private static let edgeMarginPixels = 2
-        private static let protectedPreviewInsetFraction: Float = 0.02
         private static let minimumTargetElevationForFloorFiltering: Float = 0.08
 
         private let processingQueue = DispatchQueue(
@@ -1746,7 +1767,8 @@ struct MeasurementARView: UIViewRepresentable {
                 if let objectOverlay,
                    let previewFramingFailure = objectOverlay.previewFramingFailure(
                        in: settledPreviewViewportSize,
-                       protectedInsetFraction: Self.protectedPreviewInsetFraction
+                       protectedInsetFraction:
+                        ScannerPreviewFramingPolicy.protectedInsetFraction
                    ) {
                     let photoFailure = SingleShotCaptureFailure.photo(
                         previewFramingFailure
@@ -3038,6 +3060,14 @@ struct MeasurementARView: UIViewRepresentable {
             }
             let hasDepth = frame.smoothedSceneDepth != nil || frame.sceneDepth != nil
             guard trackingIsNormal, hasDepth else { return }
+            let imageResolution = frame.camera.imageResolution
+            guard let liveCameraAspectRatio =
+                    ScannerPreviewLayoutPolicy.orientedLiveCameraAspectRatio(
+                        imageWidth: imageResolution.width,
+                        imageHeight: imageResolution.height
+                    ) else {
+                return
+            }
 
             previewReadinessNeeded = false
             Task { @MainActor [weak self] in
@@ -3054,12 +3084,20 @@ struct MeasurementARView: UIViewRepresentable {
                     Float(arView.bounds.width),
                     Float(arView.bounds.height)
                 )
+                if state.updateLiveCameraAspectRatio(liveCameraAspectRatio) {
+                    markPreviewNeedsReadiness()
+                    return
+                }
+                let viewportAspectRatio = CGFloat(viewportSize.x / viewportSize.y)
                 guard
                       ScannerPreviewReadinessPolicy.isReady(
                           trackingIsNormal: trackingIsNormal,
                           hasDepth: hasDepth,
                           viewportSize: viewportSize
-                ) else {
+                      ),
+                      viewportAspectRatio.isFinite,
+                      abs(viewportAspectRatio / liveCameraAspectRatio - 1) <= 0.01
+                else {
                     markPreviewNeedsReadiness()
                     return
                 }

@@ -629,6 +629,234 @@ struct ScannerCameraZoomTests {
     }
 
     @Test @MainActor
+    func finalAngleAutomaticallyQueuesAndConfirmsTheWidestSupportedZoom() {
+        let state = ScannerSheetView.ScannerStateModel()
+        state.phase = .ready
+        state.updateCameraZoomAvailability(
+            [.half, .standard, .double],
+            selected: .standard,
+            usesConfigurableDevice: true
+        )
+        state.receiveMeasurement(
+            angleCapture(position: SIMD3<Float>(0, 0, 1), cameraZoom: .standard)
+        )
+        state.receiveMeasurement(
+            angleCapture(position: SIMD3<Float>(1, 0, 0), cameraZoom: .standard)
+        )
+        let acceptedAngles = state.capturedAngleRecords
+        let measurementSeriesID = state.measurementSeriesID
+        let zoomRequestID = state.cameraZoomRequestID
+        let cameraEvidenceReacquisitionID = state.cameraEvidenceReacquisitionID
+
+        #expect(state.capturedAngleRecords.count == 2)
+        state.prepareForAiming()
+
+        #expect(state.pendingFinalAngleFramingZoom == .half)
+        #expect(state.cameraZoom == .standard)
+        #expect(state.showsLiveCameraPreview)
+        #expect(!state.canChangeCameraZoom)
+
+        #expect(state.previewBecameReady())
+
+        #expect(state.pendingFinalAngleFramingZoom == nil)
+        #expect(state.cameraZoom == .half)
+        #expect(state.cameraZoomRequestID == zoomRequestID + 1)
+        #expect(
+            state.cameraEvidenceReacquisitionID
+                == cameraEvidenceReacquisitionID + 1
+        )
+        #expect(state.isApplyingCameraZoom)
+        #expect(state.requiresFreshCameraEvidence)
+        #expect(state.phase == .checkingSupport)
+        #expect(state.capturedAngleRecords == acceptedAngles)
+        #expect(state.measurementSeriesID == measurementSeriesID)
+        #expect(
+            state.selectAutomaticTarget(
+                rawCameraNormalizedPoint: SIMD2<Float>(0.5, 0.5)
+            ) == nil
+        )
+
+        state.updateCameraZoomAvailability(
+            [.half, .standard, .double],
+            selected: .half,
+            usesConfigurableDevice: true,
+            confirmsExplicitSelection: true
+        )
+
+        #expect(state.previewBecameReady())
+        #expect(state.phase == .ready)
+        #expect(!state.requiresFreshCameraEvidence)
+        #expect(!state.isApplyingCameraZoom)
+        #expect(state.capturedAngleRecords == acceptedAngles)
+    }
+
+    @Test @MainActor
+    func finalAngleZoomSurvivesReadinessBeforeSessionReapplyConfirmation() {
+        let state = stateReadyForAutomaticFinalAngleZoom()
+        let acceptedAngles = state.capturedAngleRecords
+        let measurementSeriesID = state.measurementSeriesID
+        let zoomRequestID = state.cameraZoomRequestID
+
+        state.prepareForAiming()
+        state.beginCameraZoomApplication()
+        #expect(state.previewBecameReady())
+
+        #expect(state.pendingFinalAngleFramingZoom == .half)
+        #expect(state.cameraZoomRequestID == zoomRequestID)
+
+        state.updateCameraZoomAvailability(
+            [.half, .standard],
+            selected: .standard,
+            usesConfigurableDevice: true,
+            confirmsExplicitSelection: true
+        )
+
+        #expect(state.pendingFinalAngleFramingZoom == nil)
+        #expect(state.cameraZoom == .half)
+        #expect(state.cameraZoomRequestID == zoomRequestID + 1)
+        #expect(state.isApplyingCameraZoom)
+        #expect(state.requiresFreshCameraEvidence)
+        #expect(state.phase == .checkingSupport)
+        #expect(state.capturedAngleRecords == acceptedAngles)
+        #expect(state.measurementSeriesID == measurementSeriesID)
+    }
+
+    @Test @MainActor
+    func finalAngleZoomSurvivesSessionReapplyConfirmationBeforeReadiness() {
+        let state = stateReadyForAutomaticFinalAngleZoom()
+        let acceptedAngles = state.capturedAngleRecords
+        let measurementSeriesID = state.measurementSeriesID
+        let zoomRequestID = state.cameraZoomRequestID
+
+        state.prepareForAiming()
+        state.beginCameraZoomApplication()
+        state.updateCameraZoomAvailability(
+            [.half, .standard],
+            selected: .standard,
+            usesConfigurableDevice: true,
+            confirmsExplicitSelection: true
+        )
+
+        #expect(state.pendingFinalAngleFramingZoom == .half)
+        #expect(state.cameraZoomRequestID == zoomRequestID)
+        #expect(state.previewBecameReady())
+
+        #expect(state.pendingFinalAngleFramingZoom == nil)
+        #expect(state.cameraZoom == .half)
+        #expect(state.cameraZoomRequestID == zoomRequestID + 1)
+        #expect(state.isApplyingCameraZoom)
+        #expect(state.requiresFreshCameraEvidence)
+        #expect(state.phase == .checkingSupport)
+        #expect(state.capturedAngleRecords == acceptedAngles)
+        #expect(state.measurementSeriesID == measurementSeriesID)
+    }
+
+    @Test @MainActor
+    func failedSessionReapplyRestoresTheRetakePath() {
+        let state = stateReadyForAutomaticFinalAngleZoom()
+        let acceptedAngles = state.capturedAngleRecords
+
+        state.prepareForAiming()
+        state.beginCameraZoomApplication()
+        state.cameraZoomApplicationFailed(
+            message: "Camera zoom could not be confirmed with depth."
+        )
+
+        #expect(state.pendingFinalAngleFramingZoom == nil)
+        #expect(!state.isPreparingForAiming)
+        #expect(!state.showsLiveCameraPreview)
+        #expect(
+            state.phase
+                == .failed("Camera zoom could not be confirmed with depth.")
+        )
+        #expect(state.capturedAngleRecords == acceptedAngles)
+    }
+
+    @Test @MainActor
+    func finalAngleDoesNotFakeAWiderZoomWhenTheDeviceDoesNotOfferOne() {
+        let state = ScannerSheetView.ScannerStateModel()
+        state.phase = .ready
+        state.updateCameraZoomAvailability(
+            [.standard, .double],
+            selected: .standard,
+            usesConfigurableDevice: true
+        )
+        state.receiveMeasurement(angleCapture(position: SIMD3<Float>(0, 0, 1)))
+        state.receiveMeasurement(angleCapture(position: SIMD3<Float>(1, 0, 0)))
+        let zoomRequestID = state.cameraZoomRequestID
+
+        state.prepareForAiming()
+
+        #expect(state.pendingFinalAngleFramingZoom == nil)
+        #expect(state.previewBecameReady())
+        #expect(state.cameraZoom == .standard)
+        #expect(state.cameraZoomRequestID == zoomRequestID)
+        #expect(state.phase == .ready)
+        #expect(!state.isApplyingCameraZoom)
+    }
+
+    @Test @MainActor
+    func finalAngleAlreadyAtWidestZoomDoesNotRequestItAgain() {
+        let state = ScannerSheetView.ScannerStateModel()
+        state.phase = .ready
+        state.updateCameraZoomAvailability(
+            [.half, .standard],
+            selected: .half,
+            usesConfigurableDevice: true
+        )
+        state.receiveMeasurement(
+            angleCapture(position: SIMD3<Float>(0, 0, 1), cameraZoom: .half)
+        )
+        state.receiveMeasurement(
+            angleCapture(position: SIMD3<Float>(1, 0, 0), cameraZoom: .half)
+        )
+        let zoomRequestID = state.cameraZoomRequestID
+
+        state.prepareForAiming()
+
+        #expect(state.pendingFinalAngleFramingZoom == nil)
+        #expect(state.previewBecameReady())
+        #expect(state.cameraZoom == .half)
+        #expect(state.cameraZoomRequestID == zoomRequestID)
+        #expect(state.phase == .ready)
+    }
+
+    @Test @MainActor
+    func failedAutomaticFinalAngleZoomIsNotRequeuedByRetake() {
+        let state = ScannerSheetView.ScannerStateModel()
+        state.phase = .ready
+        state.updateCameraZoomAvailability(
+            [.half, .standard],
+            selected: .standard,
+            usesConfigurableDevice: true
+        )
+        state.receiveMeasurement(angleCapture(position: SIMD3<Float>(0, 0, 1)))
+        state.receiveMeasurement(angleCapture(position: SIMD3<Float>(1, 0, 0)))
+        let acceptedAngles = state.capturedAngleRecords
+        let measurementSeriesID = state.measurementSeriesID
+
+        state.prepareForAiming()
+        #expect(state.previewBecameReady())
+        #expect(state.cameraZoom == .half)
+        state.cameraZoomApplicationFailed(
+            message: "Camera zoom could not be confirmed with depth."
+        )
+        let failedZoomRequestID = state.cameraZoomRequestID
+
+        #expect(state.cameraZoom == .standard)
+        #expect(state.pendingFinalAngleFramingZoom == nil)
+        state.prepareForAiming()
+
+        #expect(state.pendingFinalAngleFramingZoom == nil)
+        #expect(state.previewBecameReady())
+        #expect(state.cameraZoom == .standard)
+        #expect(state.cameraZoomRequestID == failedZoomRequestID)
+        #expect(state.phase == .ready)
+        #expect(state.capturedAngleRecords == acceptedAngles)
+        #expect(state.measurementSeriesID == measurementSeriesID)
+    }
+
+    @Test @MainActor
     func resettingSeriesReenablesZoomWithoutChangingTheSelectedLens() {
         let state = ScannerSheetView.ScannerStateModel()
         state.phase = .ready
@@ -867,5 +1095,25 @@ struct ScannerCameraZoomTests {
                 imageResolutionPixels: SIMD2<Int>(2_000, 1_000)
             )!
         )
+    }
+
+    @MainActor
+    private func stateReadyForAutomaticFinalAngleZoom()
+        -> ScannerSheetView.ScannerStateModel {
+        let state = ScannerSheetView.ScannerStateModel()
+        state.phase = .ready
+        state.updateCameraZoomAvailability(
+            [.half, .standard],
+            selected: .standard,
+            usesConfigurableDevice: true,
+            confirmsExplicitSelection: true
+        )
+        state.receiveMeasurement(
+            angleCapture(position: SIMD3<Float>(0, 0, 1), cameraZoom: .standard)
+        )
+        state.receiveMeasurement(
+            angleCapture(position: SIMD3<Float>(1, 0, 0), cameraZoom: .standard)
+        )
+        return state
     }
 }
