@@ -25,15 +25,91 @@ struct ScannerOrchestrationTests {
 
         #expect(state.measurementSubject == .box)
         #expect(state.measurementMode == .automaticPhotos)
+        #expect(state.automaticPhotoMeasurement.targetOwnershipGuard != nil)
         #expect(state.automaticPhotoMeasurement.rigidItemMultiplicityGuard != nil)
         #expect(state.automaticPhotoMeasurement.requiredDepthSampleCount == 160)
 
         #expect(state.setMeasurementSubject(.generalItem))
         #expect(state.measurementSubject == .generalItem)
+        #expect(state.automaticPhotoMeasurement.targetOwnershipGuard != nil)
         #expect(state.automaticPhotoMeasurement.rigidItemMultiplicityGuard == nil)
         #expect(state.automaticPhotoMeasurement.requiredDepthSampleCount == 48)
         #expect(!state.enterGuidedCorners(targetID: firstTargetID))
         #expect(state.measurementMode == .automaticPhotos)
+    }
+
+    @Test @MainActor
+    func boxAndGeneralItemBothRejectGradualBridgeOwnership() throws {
+        let width = 40
+        let height = 48
+        var labels = Array(repeating: UInt32.zero, count: width * height)
+        var depths = Array(repeating: Float(1), count: width * height)
+
+        for y in 4...37 {
+            for x in 6...22 {
+                labels[y * width + x] = 5
+            }
+        }
+        for y in 35...44 {
+            for x in 25...36 {
+                let index = y * width + x
+                labels[index] = 5
+                depths[index] = 1.12
+            }
+        }
+        for (x, depth) in [(23, Float(1.04)), (24, 1.08), (25, 1.12)] {
+            let index = 37 * width + x
+            labels[index] = 5
+            depths[index] = depth
+        }
+
+        let mask = try PhotoInstanceLabelMask(
+            width: width,
+            height: height,
+            labels: labels
+        )
+        let depthGrid = DepthGrid(
+            width: width,
+            height: height,
+            depths: depths,
+            confidences: Array(repeating: 2, count: width * height)
+        )
+        let calibration = PhotoCameraCalibration(
+            imageWidth: width,
+            imageHeight: height,
+            intrinsics: simd_float3x3(
+                SIMD3<Float>(Float(width), 0, 0),
+                SIMD3<Float>(0, Float(height), 0),
+                SIMD3<Float>(Float(width) / 2, Float(height) / 2, 1)
+            ),
+            cameraTransform: matrix_identity_float4x4
+        )
+
+        for subject in [TargetLockSubject.box, .generalItem] {
+            let state = ScannerSheetView.ScannerStateModel()
+            if subject == .generalItem {
+                #expect(state.setMeasurementSubject(.generalItem))
+            }
+
+            do {
+                _ = try state.automaticPhotoMeasurement.makePointCloud(
+                    labelMask: mask,
+                    depthGrid: depthGrid,
+                    calibration: calibration,
+                    prompt: .target(
+                        normalizedImagePoint: SIMD2<Float>(14.5 / Float(width), 12.5 / Float(height))
+                    )
+                )
+                Issue.record("\(subject) accepted a macroscopic secondary lobe")
+            } catch let error as PhotoObjectMeasurementError {
+                guard case .targetOwnershipAmbiguous = error else {
+                    Issue.record("\(subject) failed for the wrong reason: \(error)")
+                    continue
+                }
+            } catch {
+                Issue.record("\(subject) failed with an unexpected error: \(error)")
+            }
+        }
     }
 
     @Test @MainActor

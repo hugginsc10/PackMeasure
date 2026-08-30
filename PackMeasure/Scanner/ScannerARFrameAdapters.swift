@@ -35,6 +35,17 @@ struct ScannerAutomaticPhotoFrameProcessor: Sendable {
     }
 }
 
+/// Production seam between Vision's label-wide scaled mask and the exact
+/// connected-component authority selected from its low-resolution mask.
+struct ScannerForegroundScaledMaskOwnershipAdapter: Sendable {
+    func validate(
+        scaledMask: PhotoInstanceLabelMask,
+        against selection: PhotoSelectedInstanceMask
+    ) throws -> PhotoInstanceLabelMask {
+        try selection.validatingOwnership(of: scaledMask)
+    }
+}
+
 /// Terminates only the state model's exact pending automatic authority when
 /// the AR coordinator cannot proceed from the capture-start command.
 @MainActor

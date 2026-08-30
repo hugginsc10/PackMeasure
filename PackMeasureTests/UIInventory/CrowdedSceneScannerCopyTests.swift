@@ -44,6 +44,19 @@ struct CrowdedSceneScannerCopyTests {
             .photo(.maskAreaTooLarge(actual: 0.90, maximum: 0.85)),
             .photo(.maskTouchesImageEdge(stage: .sourceMask)),
             .photo(
+                .targetOwnershipAmbiguous(
+                    .narrowBridge(
+                        PhotoNarrowBridgeOwnershipEvidence(
+                            erosionRadiusPixels: 2,
+                            primaryRegionPixelCount: 240,
+                            secondaryRegionPixelCount: 80,
+                            selectedPixelCount: 344,
+                            exteriorExcursionPixels: 12
+                        )
+                    )
+                )
+            ),
+            .photo(
                 .multipleRigidItemsDetected(
                     PhotoRigidItemMultiplicityEvaluation(
                         assessment: .multipleRigidItems(
@@ -103,6 +116,32 @@ struct CrowdedSceneScannerCopyTests {
         #expect(copy.localizedCaseInsensitiveContains("move the phone closer"))
         #expect(!copy.localizedCaseInsensitiveContains("move the item"))
         #expect(!copy.localizedCaseInsensitiveContains("clear the scene"))
+    }
+
+    @Test
+    func ownershipAmbiguityExplainsTouchingItemWithoutExposingDiagnosticCode() {
+        let copy = ScannerPhotoFailureCopy.message(
+            for: .photo(
+                .targetOwnershipAmbiguous(
+                    .narrowBridge(
+                        PhotoNarrowBridgeOwnershipEvidence(
+                            erosionRadiusPixels: 2,
+                            primaryRegionPixelCount: 240,
+                            secondaryRegionPixelCount: 80,
+                            selectedPixelCount: 344,
+                            exteriorExcursionPixels: 12
+                        )
+                    )
+                )
+            )
+        )
+
+        #expect(copy.localizedCaseInsensitiveContains("something touching it"))
+        #expect(copy.localizedCaseInsensitiveContains("retap a solid area"))
+        #expect(copy.localizedCaseInsensitiveContains("4 points"))
+        for implementationTerm in ["F10", "diagnostic", "mask", "erosion", "core"] {
+            #expect(!copy.localizedCaseInsensitiveContains(implementationTerm))
+        }
     }
 
     @Test

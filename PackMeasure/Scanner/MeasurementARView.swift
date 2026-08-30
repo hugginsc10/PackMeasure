@@ -3268,7 +3268,14 @@ struct MeasurementARView: UIViewRepresentable {
                 }
 
                 do {
-                    return try PhotoInstanceLabelMask(pixelBuffer: scaledMask)
+                    let decodedScaledMask = try PhotoInstanceLabelMask(
+                        pixelBuffer: scaledMask
+                    )
+                    return try ScannerForegroundScaledMaskOwnershipAdapter()
+                        .validate(
+                            scaledMask: decodedScaledMask,
+                            against: selected
+                        )
                 } catch let error as PhotoObjectMeasurementError {
                     throw ForegroundMaskAdapterError.photo(
                         stage: .scaledMaskDecode,

@@ -61,6 +61,42 @@ struct MeasurementARFrameIntegrationTests {
     }
 
     @Test
+    func productionScaledMaskAdapterRejectsReclaimedUntappedInstance() throws {
+        let lowResolutionMask = try PhotoInstanceLabelMask(
+            width: 7,
+            height: 4,
+            labels: [
+                0, 0, 0, 0, 0, 0, 0,
+                0, 5, 5, 0, 5, 5, 0,
+                0, 5, 5, 0, 5, 5, 0,
+                0, 0, 0, 0, 0, 0, 0,
+            ]
+        )
+        let processor = ScannerAutomaticPhotoFrameProcessor(
+            prompt: .target(normalizedImagePoint: SIMD2<Float>(0.2, 0.5)),
+            measurement: PhotoObjectMeasurement()
+        )
+        let selection = try processor.selectForeground(in: lowResolutionMask)
+        let labelWideScaledMask = try PhotoInstanceLabelMask(
+            width: 7,
+            height: 4,
+            labels: [
+                0, 0, 0, 0, 0, 0, 0,
+                0, 1, 1, 1, 1, 1, 0,
+                0, 1, 1, 1, 1, 1, 0,
+                0, 0, 0, 0, 0, 0, 0,
+            ]
+        )
+
+        #expect(throws: PhotoObjectMeasurementError.self) {
+            try ScannerForegroundScaledMaskOwnershipAdapter().validate(
+                scaledMask: labelWideScaledMask,
+                against: selection
+            )
+        }
+    }
+
+    @Test
     func staleExplicitPromptFailsBeforeEitherStageCanUseCenter() throws {
         let mask = try PhotoInstanceLabelMask(
             width: 3,

@@ -2027,6 +2027,8 @@ enum ScannerPhotoFailureCopy {
             "The item was cropped by the visible camera frame. Switch to 0.5× if available, or step back until every edge is visible."
         case .maskTouchesImageEdge(stage: .sourceMask):
             "The detected outline ran into the photo edge. Step back, or retap a solid surface of the item and retake the photo."
+        case .targetOwnershipAmbiguous:
+            "PackMeasure couldn't separate the selected item from something touching it. Move the nearby item if practical, then retap a solid area—or use 4 points."
         case let .insufficientDepthSamples(actual, minimum):
             "LiDAR found \(actual) usable depth points on the object; this build needs \(minimum). Hold steady at a three-quarter angle and retake it."
         case let .insufficientDepthCoverage(actual, minimum):

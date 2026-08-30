@@ -263,6 +263,7 @@ extension PhotoObjectMeasurementError {
              .ambiguousForegroundInstances,
              .noReticleDepthSurface,
              .maskAreaTooSmall,
+             .targetOwnershipAmbiguous,
              .multipleRigidItemsDetected,
              .rigidItemMultiplicityUncertain:
             .isolation
@@ -300,6 +301,8 @@ extension PhotoObjectMeasurementError {
             "F05"
         case .noReticleDepthSurface:
             "F06"
+        case .targetOwnershipAmbiguous:
+            "F10"
         case .multipleRigidItemsDetected:
             "F08"
         case .rigidItemMultiplicityUncertain:
@@ -361,6 +364,16 @@ extension PhotoObjectMeasurementError {
             "mask_area_too_large,actual=\(Self.metric(actual)),maximum=\(Self.metric(maximum))"
         case let .maskTouchesImageEdge(stage):
             "mask_touches_image_edge,stage=\(stage.rawValue)"
+        case let .targetOwnershipAmbiguous(ambiguity):
+            switch ambiguity {
+            case let .scaledMaskBroadened(
+                unselectedSourcePixelCount,
+                overlappingScaledPixelCount
+            ):
+                "target_ownership_ambiguous,reason=scaled_mask_broadened,unselected_source_pixels=\(unselectedSourcePixelCount),overlapping_scaled_pixels=\(overlappingScaledPixelCount)"
+            case let .narrowBridge(evidence):
+                "target_ownership_ambiguous,reason=narrow_bridge,erosion_radius_pixels=\(evidence.erosionRadiusPixels),primary_region_pixels=\(evidence.primaryRegionPixelCount),secondary_region_pixels=\(evidence.secondaryRegionPixelCount),selected_pixels=\(evidence.selectedPixelCount),exterior_excursion_pixels=\(evidence.exteriorExcursionPixels)"
+            }
         case .maskCalibrationAspectRatioMismatch:
             "mask_calibration_aspect_ratio_mismatch"
         case .depthGridResolutionMismatch:
@@ -498,6 +511,7 @@ enum SingleShotObjectMeasurement {
              .maskAreaTooSmall,
              .maskAreaTooLarge,
              .maskTouchesImageEdge,
+             .targetOwnershipAmbiguous,
              .insufficientDepthSamples,
              .insufficientDepthCoverage,
              .insufficientHorizontalDepthSupport,

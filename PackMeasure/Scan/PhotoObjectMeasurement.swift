@@ -7,6 +7,22 @@ enum PhotoF05Stage: String, Equatable, Sendable {
     case previewOutline = "preview_outline"
 }
 
+struct PhotoNarrowBridgeOwnershipEvidence: Equatable, Sendable {
+    let erosionRadiusPixels: Int
+    let primaryRegionPixelCount: Int
+    let secondaryRegionPixelCount: Int
+    let selectedPixelCount: Int
+    let exteriorExcursionPixels: Int
+}
+
+enum PhotoTargetOwnershipAmbiguity: Equatable, Sendable {
+    case scaledMaskBroadened(
+        unselectedSourcePixelCount: Int,
+        overlappingScaledPixelCount: Int
+    )
+    case narrowBridge(PhotoNarrowBridgeOwnershipEvidence)
+}
+
 enum PhotoObjectMeasurementError: Error, Equatable, Sendable {
     case invalidLabelMaskDimensions
     case invalidDepthMaskDimensions
@@ -19,6 +35,7 @@ enum PhotoObjectMeasurementError: Error, Equatable, Sendable {
     case maskAreaTooSmall(actual: Float, minimum: Float)
     case maskAreaTooLarge(actual: Float, maximum: Float)
     case maskTouchesImageEdge(stage: PhotoF05Stage)
+    case targetOwnershipAmbiguous(PhotoTargetOwnershipAmbiguity)
     case maskCalibrationAspectRatioMismatch
     case depthGridResolutionMismatch
     case insufficientDepthSamples(actual: Int, minimum: Int)
@@ -479,12 +496,20 @@ struct PhotoSelectedInstanceMask: Equatable, Sendable {
     let height: Int
     let label: UInt32
     private let selected: [Bool]
+    private let unselectedSameLabel: [Bool]
 
-    fileprivate init(width: Int, height: Int, label: UInt32, selected: [Bool]) {
+    fileprivate init(
+        width: Int,
+        height: Int,
+        label: UInt32,
+        selected: [Bool],
+        unselectedSameLabel: [Bool]
+    ) {
         self.width = width
         self.height = height
         self.label = label
         self.selected = selected
+        self.unselectedSameLabel = unselectedSameLabel
     }
 
     var selectedPixelCount: Int {
@@ -593,6 +618,48 @@ struct PhotoSelectedInstanceMask: Equatable, Sendable {
             selected: depthSelection
         )
     }
+
+    /// Verifies that Vision's full-resolution mask did not reclaim a source
+    /// component that the user's tap explicitly left unselected.
+    ///
+    /// `generateScaledMaskForImage` accepts instance labels rather than the
+    /// exact connected component selected by the user. If Vision reused one
+    /// label for two objects, asking it to scale that label can therefore
+    /// reintroduce an untapped island. Reject that broadened authority without
+    /// clipping legitimate full-resolution boundary detail that was absent
+    /// from the coarse source mask.
+    func validatingOwnership(of scaledMask: PhotoInstanceLabelMask) throws
+        -> PhotoInstanceLabelMask {
+        let unselectedSourcePixelCount = unselectedSameLabel.reduce(into: 0) {
+            count, isUnselected in
+            if isUnselected { count += 1 }
+        }
+        guard unselectedSourcePixelCount > 0 else { return scaledMask }
+
+        let scaleX = Float(width) / Float(scaledMask.width)
+        let scaleY = Float(height) / Float(scaledMask.height)
+        var overlappingScaledPixelCount = 0
+        for y in 0..<scaledMask.height {
+            let sourceY = min(height - 1, Int((Float(y) + 0.5) * scaleY))
+            for x in 0..<scaledMask.width {
+                let scaledIndex = y * scaledMask.width + x
+                guard scaledMask.labels[scaledIndex] != 0 else { continue }
+                let sourceX = min(width - 1, Int((Float(x) + 0.5) * scaleX))
+                if unselectedSameLabel[sourceY * width + sourceX] {
+                    overlappingScaledPixelCount += 1
+                }
+            }
+        }
+        guard overlappingScaledPixelCount == 0 else {
+            throw PhotoObjectMeasurementError.targetOwnershipAmbiguous(
+                .scaledMaskBroadened(
+                    unselectedSourcePixelCount: unselectedSourcePixelCount,
+                    overlappingScaledPixelCount: overlappingScaledPixelCount
+                )
+            )
+        }
+        return scaledMask
+    }
 }
 
 struct PhotoForegroundInstanceSelector: Sendable {
@@ -661,12 +728,17 @@ struct PhotoForegroundInstanceSelector: Sendable {
         for index in selectedComponent {
             isolatedSelection[index] = true
         }
+        let unselectedSameLabel = zip(matchingSelection, isolatedSelection).map {
+            isMatching, isSelected in
+            isMatching && !isSelected
+        }
 
         return PhotoSelectedInstanceMask(
             width: mask.width,
             height: mask.height,
             label: selectedLabel,
-            selected: isolatedSelection
+            selected: isolatedSelection,
+            unselectedSameLabel: unselectedSameLabel
         )
     }
 
@@ -844,6 +916,415 @@ struct PhotoReticleDepthMaskFilterResult: Equatable, Sendable {
     /// local depth discontinuity. Only these samples may be subtracted from
     /// source-space F05 or the D03/D05 target expectation.
     let provenAlternateDepthMask: PhotoDepthSelectionMask
+}
+
+/// Detects a macroscopic secondary lobe that is connected to the tapped item
+/// only through a narrow appearance bridge. Equal-depth or depth-unknown
+/// neighbors cannot be safely auto-trimmed, so this guard reports uncertainty
+/// instead of allowing their pixels into the outline and dimensions.
+struct PhotoNarrowBridgeOwnershipGuard: Sendable {
+    private struct Bounds {
+        let minX: Int
+        let minY: Int
+        let maxX: Int
+        let maxY: Int
+
+        var width: Int { maxX - minX + 1 }
+        var height: Int { maxY - minY + 1 }
+    }
+
+    private let maximumErosionRadiusPixels = 16
+    private let erosionRadiusFraction: Float = 0.10
+    private let minimumSecondaryFraction: Float = 0.08
+    private let minimumSecondaryPixels = 24
+    private let minimumExteriorFraction: Float = 0.05
+    private let minimumExteriorPixels = 3
+    private let targetSearchRadiusPixels = 3
+
+    init() {}
+
+    func ambiguity(
+        in mask: PhotoDepthSelectionMask,
+        normalizedTargetPoint: SIMD2<Float>
+    ) -> PhotoTargetOwnershipAmbiguity? {
+        let selected = Set(mask.selectedIndices)
+        guard !selected.isEmpty,
+              let seed = nearestSelectedIndex(
+                to: normalizedTargetPoint,
+                in: selected,
+                width: mask.width,
+                height: mask.height
+              ) else {
+            return nil
+        }
+
+        let ownedComponent = component(
+            containing: seed,
+            in: selected,
+            width: mask.width,
+            height: mask.height
+        )
+        guard let ownedBounds = bounds(of: ownedComponent, width: mask.width) else {
+            return nil
+        }
+        let scaledMaximumRadius = max(
+            1,
+            Int(
+                ceil(
+                    erosionRadiusFraction
+                        * Float(min(ownedBounds.width, ownedBounds.height))
+                )
+            )
+        )
+        let maximumRadius = min(maximumErosionRadiusPixels, scaledMaximumRadius)
+        guard maximumRadius > 0 else { return nil }
+
+        let minimumSecondaryCount = max(
+            minimumSecondaryPixels,
+            Int(ceil(minimumSecondaryFraction * Float(ownedComponent.count)))
+        )
+        let erosionDepths = squareErosionDepths(
+            in: ownedComponent,
+            width: mask.width,
+            height: mask.height
+        )
+
+        for radius in 1...maximumRadius {
+            let eroded = Set(
+                ownedComponent.filter { erosionDepths[$0] > radius }
+            )
+            let cores = components(
+                in: eroded,
+                width: mask.width,
+                height: mask.height
+            )
+            guard cores.count > 1,
+                  let primaryIndex = primaryCoreIndex(
+                    for: seed,
+                    cores: cores,
+                    within: ownedComponent,
+                    width: mask.width,
+                    height: mask.height
+                  ),
+                  let regions = assignedRegions(
+                    for: cores,
+                    primaryIndex: primaryIndex,
+                    within: ownedComponent,
+                    width: mask.width,
+                    height: mask.height
+                  ),
+                  let primaryBounds = bounds(
+                    of: regions[primaryIndex],
+                    width: mask.width
+                  ) else {
+                continue
+            }
+
+            let minimumExteriorExcursion = max(
+                minimumExteriorPixels,
+                Int(
+                    ceil(
+                        minimumExteriorFraction
+                            * Float(max(primaryBounds.width, primaryBounds.height))
+                    )
+                )
+            )
+
+            for (index, secondary) in regions.enumerated()
+                where index != primaryIndex && secondary.count >= minimumSecondaryCount {
+                guard let secondaryBounds = bounds(
+                    of: secondary,
+                    width: mask.width
+                ) else {
+                    continue
+                }
+                let exteriorExcursion = [
+                    primaryBounds.minX - secondaryBounds.minX,
+                    secondaryBounds.maxX - primaryBounds.maxX,
+                    primaryBounds.minY - secondaryBounds.minY,
+                    secondaryBounds.maxY - primaryBounds.maxY,
+                    0,
+                ].max() ?? 0
+                guard exteriorExcursion >= minimumExteriorExcursion else { continue }
+
+                return .narrowBridge(
+                    PhotoNarrowBridgeOwnershipEvidence(
+                        erosionRadiusPixels: radius,
+                        primaryRegionPixelCount: regions[primaryIndex].count,
+                        secondaryRegionPixelCount: secondary.count,
+                        selectedPixelCount: ownedComponent.count,
+                        exteriorExcursionPixels: exteriorExcursion
+                    )
+                )
+            }
+        }
+
+        return nil
+    }
+
+    private func nearestSelectedIndex(
+        to point: SIMD2<Float>,
+        in selected: Set<Int>,
+        width: Int,
+        height: Int
+    ) -> Int? {
+        let targetX = min(width - 1, max(0, Int(point.x * Float(width))))
+        let targetY = min(height - 1, max(0, Int(point.y * Float(height))))
+        for radius in 0...targetSearchRadiusPixels {
+            var candidates: [(index: Int, distanceSquared: Int)] = []
+            let minX = max(0, targetX - radius)
+            let maxX = min(width - 1, targetX + radius)
+            let minY = max(0, targetY - radius)
+            let maxY = min(height - 1, targetY + radius)
+            for y in minY...maxY {
+                for x in minX...maxX {
+                    guard radius == 0
+                            || x == minX || x == maxX || y == minY || y == maxY else {
+                        continue
+                    }
+                    let index = y * width + x
+                    guard selected.contains(index) else { continue }
+                    let deltaX = x - targetX
+                    let deltaY = y - targetY
+                    candidates.append((index, deltaX * deltaX + deltaY * deltaY))
+                }
+            }
+            if let candidate = candidates.min(by: {
+                if $0.distanceSquared == $1.distanceSquared {
+                    return $0.index < $1.index
+                }
+                return $0.distanceSquared < $1.distanceSquared
+            }) {
+                return candidate.index
+            }
+        }
+        return nil
+    }
+
+    private func component(
+        containing seed: Int,
+        in selected: Set<Int>,
+        width: Int,
+        height: Int
+    ) -> Set<Int> {
+        guard selected.contains(seed) else { return [] }
+        var result: Set<Int> = [seed]
+        var queue = [seed]
+        var readIndex = 0
+        while readIndex < queue.count {
+            let current = queue[readIndex]
+            readIndex += 1
+            for neighbor in neighbors8(of: current, width: width, height: height)
+                where selected.contains(neighbor) && !result.contains(neighbor) {
+                result.insert(neighbor)
+                queue.append(neighbor)
+            }
+        }
+        return result
+    }
+
+    /// Returns the first square-erosion radius that removes each selected
+    /// pixel. An eight-neighbor distance transform is equivalent to repeatedly
+    /// eroding with a full L-infinity square, but computes every topology level
+    /// in one linear pass. This lets the guard inspect the broader overlap seen
+    /// in the physical suitcase-and-shoes failure without multiplying work by
+    /// every radius and kernel area.
+    private func squareErosionDepths(
+        in selected: Set<Int>,
+        width: Int,
+        height: Int
+    ) -> [Int] {
+        var depths = Array(repeating: 0, count: width * height)
+        var queue: [Int] = []
+        queue.reserveCapacity(selected.count)
+
+        for index in selected {
+            let x = index % width
+            let y = index / width
+            let touchesOutside = x == 0
+                || x + 1 == width
+                || y == 0
+                || y + 1 == height
+            let touchesBackground = !touchesOutside
+                && neighbors8(of: index, width: width, height: height).contains {
+                    !selected.contains($0)
+                }
+            if touchesOutside || touchesBackground {
+                depths[index] = 1
+                queue.append(index)
+            }
+        }
+
+        var readIndex = 0
+        while readIndex < queue.count {
+            let current = queue[readIndex]
+            readIndex += 1
+            let nextDepth = depths[current] + 1
+            for neighbor in neighbors8(of: current, width: width, height: height)
+                where selected.contains(neighbor) && depths[neighbor] == 0 {
+                depths[neighbor] = nextDepth
+                queue.append(neighbor)
+            }
+        }
+        return depths
+    }
+
+    private func components(
+        in selected: Set<Int>,
+        width: Int,
+        height: Int
+    ) -> [Set<Int>] {
+        var unvisited = selected
+        var result: [Set<Int>] = []
+        while let seed = unvisited.first {
+            let next = component(
+                containing: seed,
+                in: unvisited,
+                width: width,
+                height: height
+            )
+            result.append(next)
+            unvisited.subtract(next)
+        }
+        return result
+    }
+
+    private func primaryCoreIndex(
+        for seed: Int,
+        cores: [Set<Int>],
+        within selected: Set<Int>,
+        width: Int,
+        height: Int
+    ) -> Int? {
+        var coreForPixel: [Int: Int] = [:]
+        for (coreIndex, core) in cores.enumerated() {
+            for pixel in core {
+                coreForPixel[pixel] = coreIndex
+            }
+        }
+
+        var distances = Array<Int?>(repeating: nil, count: cores.count)
+        var visited: Set<Int> = [seed]
+        var queue: [(index: Int, distance: Int)] = [(seed, 0)]
+        var readIndex = 0
+        while readIndex < queue.count {
+            let current = queue[readIndex]
+            readIndex += 1
+            if let coreIndex = coreForPixel[current.index], distances[coreIndex] == nil {
+                distances[coreIndex] = current.distance
+            }
+            for neighbor in neighbors8(of: current.index, width: width, height: height)
+                where selected.contains(neighbor) && !visited.contains(neighbor) {
+                visited.insert(neighbor)
+                queue.append((neighbor, current.distance + 1))
+            }
+        }
+
+        return cores.indices.min { left, right in
+            let leftDistance = distances[left] ?? Int.max
+            let rightDistance = distances[right] ?? Int.max
+            if leftDistance == rightDistance {
+                return cores[left].count > cores[right].count
+            }
+            return leftDistance < rightDistance
+        }
+    }
+
+    /// Reconstructs the raw region owned by each eroded core. Thresholds must
+    /// describe the original lobe, not the much smaller remnant left after the
+    /// erosion radius finally breaks a wide throat.
+    private func assignedRegions(
+        for cores: [Set<Int>],
+        primaryIndex: Int,
+        within selected: Set<Int>,
+        width: Int,
+        height: Int
+    ) -> [Set<Int>]? {
+        guard cores.indices.contains(primaryIndex), !cores.isEmpty else { return nil }
+        let pixelCount = width * height
+        var owner = Array(repeating: -1, count: pixelCount)
+        var distance = Array(repeating: Int.max, count: pixelCount)
+        let secondaryOrder = cores.indices
+            .filter { $0 != primaryIndex }
+            .sorted { left, right in
+                let leftMinimum = cores[left].min() ?? Int.max
+                let rightMinimum = cores[right].min() ?? Int.max
+                return leftMinimum < rightMinimum
+            }
+        let coreOrder = [primaryIndex] + secondaryOrder
+        var priority = Array(repeating: Int.max, count: cores.count)
+        for (rank, coreIndex) in coreOrder.enumerated() {
+            priority[coreIndex] = rank
+        }
+
+        var queue: [Int] = []
+        for coreIndex in coreOrder {
+            for pixel in cores[coreIndex].sorted() {
+                owner[pixel] = coreIndex
+                distance[pixel] = 0
+                queue.append(pixel)
+            }
+        }
+
+        var readIndex = 0
+        while readIndex < queue.count {
+            let current = queue[readIndex]
+            readIndex += 1
+            let currentOwner = owner[current]
+            let candidateDistance = distance[current] + 1
+            for neighbor in neighbors8(of: current, width: width, height: height)
+                where selected.contains(neighbor) {
+                let shouldClaim = candidateDistance < distance[neighbor]
+                    || (
+                        candidateDistance == distance[neighbor]
+                            && priority[currentOwner] < priority[owner[neighbor]]
+                    )
+                guard shouldClaim else { continue }
+                owner[neighbor] = currentOwner
+                distance[neighbor] = candidateDistance
+                queue.append(neighbor)
+            }
+        }
+
+        var regions = Array(repeating: Set<Int>(), count: cores.count)
+        for pixel in selected {
+            guard owner[pixel] >= 0 else { return nil }
+            regions[owner[pixel]].insert(pixel)
+        }
+        return regions
+    }
+
+    private func bounds(of selected: Set<Int>, width: Int) -> Bounds? {
+        guard !selected.isEmpty else { return nil }
+        let xs = selected.map { $0 % width }
+        let ys = selected.map { $0 / width }
+        guard let minX = xs.min(), let maxX = xs.max(),
+              let minY = ys.min(), let maxY = ys.max() else {
+            return nil
+        }
+        return Bounds(minX: minX, minY: minY, maxX: maxX, maxY: maxY)
+    }
+
+    private func neighbors8(of index: Int, width: Int, height: Int) -> [Int] {
+        let x = index % width
+        let y = index / width
+        var result: [Int] = []
+        result.reserveCapacity(8)
+        for deltaY in -1...1 {
+            for deltaX in -1...1 where deltaX != 0 || deltaY != 0 {
+                let neighborX = x + deltaX
+                let neighborY = y + deltaY
+                guard neighborX >= 0,
+                      neighborX < width,
+                      neighborY >= 0,
+                      neighborY < height else {
+                    continue
+                }
+                result.append(neighborY * width + neighborX)
+            }
+        }
+        return result
+    }
 }
 
 /// Refines Vision's appearance mask with the LiDAR surface connected to the
@@ -1545,6 +2026,7 @@ struct PhotoObjectMeasurement: Sendable {
     var policy = PhotoObjectMeasurementPolicy()
     var instanceSelector = PhotoForegroundInstanceSelector()
     var depthMaskFilter = PhotoReticleDepthMaskFilter()
+    var targetOwnershipGuard: PhotoNarrowBridgeOwnershipGuard? = .init()
     /// The public scanner is Box-first, so strong stacked-body rejection is on
     /// by default. General-item mode must explicitly inject `nil`; it must not
     /// apply rigid-body change-point assumptions to arbitrary furniture.
@@ -1601,6 +2083,14 @@ struct PhotoObjectMeasurement: Sendable {
             depthGrid: depthGrid,
             normalizedImagePoint: explicitTargetPoint
         )
+        if let explicitTargetPoint,
+           let targetOwnershipGuard,
+           let ambiguity = targetOwnershipGuard.ambiguity(
+            in: filteredMasks.targetExpectationDepthMask,
+            normalizedTargetPoint: explicitTargetPoint
+           ) {
+            throw PhotoObjectMeasurementError.targetOwnershipAmbiguous(ambiguity)
+        }
         let targetQuality = selected.quality(
             edgeMarginPixels: policy.protectedEdgeMarginPixels,
             excluding: filteredMasks.provenAlternateDepthMask

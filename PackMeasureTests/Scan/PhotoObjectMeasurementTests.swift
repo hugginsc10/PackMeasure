@@ -1,3 +1,4 @@
+import Foundation
 import XCTest
 import simd
 @testable import PackMeasure
@@ -47,6 +48,189 @@ final class PhotoObjectMeasurementTests: XCTestCase {
         XCTAssertEqual(selected.selectedPixelCount, 4)
         XCTAssertTrue(selected.contains(x: 0, y: 0))
         XCTAssertFalse(selected.contains(x: 3, y: 3), "selection must follow the tapped component, not image center")
+    }
+
+    func testScaledMaskCannotReintroduceDisconnectedSameLabelInstance() throws {
+        let lowResolutionMask = try labelMask(
+            [
+                [0, 0, 0, 0, 0, 0, 0, 0],
+                [0, 5, 5, 5, 0, 0, 0, 0],
+                [0, 5, 5, 5, 0, 0, 0, 0],
+                [0, 5, 5, 5, 0, 0, 0, 0],
+                [0, 5, 5, 5, 0, 0, 0, 0],
+                [0, 5, 5, 5, 0, 5, 5, 0],
+                [0, 0, 0, 0, 0, 5, 5, 0],
+                [0, 0, 0, 0, 0, 0, 0, 0],
+            ]
+        )
+        let selected = try PhotoForegroundInstanceSelector().select(
+            in: lowResolutionMask,
+            prompt: .target(normalizedImagePoint: SIMD2<Float>(0.25, 0.25))
+        )
+
+        let width = 16
+        let height = 16
+        var scaledLabels = Array(repeating: UInt32.zero, count: width * height)
+        for y in 2...11 {
+            for x in 2...7 {
+                scaledLabels[y * width + x] = 1
+            }
+        }
+        for y in 10...13 {
+            for x in 10...13 {
+                scaledLabels[y * width + x] = 1
+            }
+        }
+        // The full-resolution Vision mask reused the label and added a thin
+        // bridge. Label-only scaling must not broaden authority beyond the
+        // component that contained the user's tap in the source mask.
+        for x in 8...9 {
+            scaledLabels[10 * width + x] = 1
+        }
+        let scaledMask = try PhotoInstanceLabelMask(
+            width: width,
+            height: height,
+            labels: scaledLabels
+        )
+
+        XCTAssertThrowsError(try selected.validatingOwnership(of: scaledMask)) {
+            error in
+            guard case let .targetOwnershipAmbiguous(
+                .scaledMaskBroadened(
+                    unselectedSourcePixelCount,
+                    overlappingScaledPixelCount
+                )
+            ) = error as? PhotoObjectMeasurementError else {
+                return XCTFail("expected scaled-mask ownership ambiguity, got \(error)")
+            }
+            XCTAssertEqual(unselectedSourcePixelCount, 4)
+            XCTAssertGreaterThan(overlappingScaledPixelCount, 0)
+        }
+    }
+
+    func testScaledMaskOwnershipIsStableAcrossRetapsOnSameComponent() throws {
+        let lowResolutionMask = try labelMask(
+            [
+                [0, 0, 0, 0, 0, 0],
+                [0, 7, 7, 7, 0, 0],
+                [0, 7, 7, 7, 0, 0],
+                [0, 7, 7, 7, 0, 0],
+                [0, 7, 7, 7, 0, 0],
+                [0, 0, 0, 0, 0, 0],
+            ]
+        )
+        let scaledMask = try labelMask(
+            [
+                [0, 0, 0, 0, 0, 0],
+                [0, 1, 1, 1, 0, 0],
+                [0, 1, 1, 1, 0, 0],
+                [0, 1, 1, 1, 1, 1],
+                [0, 1, 1, 1, 0, 1],
+                [0, 0, 0, 0, 0, 0],
+            ]
+        )
+
+        let upperTap = try PhotoForegroundInstanceSelector().select(
+            in: lowResolutionMask,
+            prompt: .target(normalizedImagePoint: SIMD2<Float>(0.25, 0.25))
+        )
+        let lowerTap = try PhotoForegroundInstanceSelector().select(
+            in: lowResolutionMask,
+            prompt: .target(normalizedImagePoint: SIMD2<Float>(0.4, 0.65))
+        )
+
+        let upperValidated = try upperTap.validatingOwnership(of: scaledMask)
+        let lowerValidated = try lowerTap.validatingOwnership(of: scaledMask)
+        XCTAssertEqual(upperValidated, scaledMask)
+        XCTAssertEqual(
+            upperValidated,
+            lowerValidated,
+            "retapping the same physical instance must not change target ownership"
+        )
+    }
+
+    func testScaledMaskRejectsReclaimingEitherUntappedDisconnectedComponent() throws {
+        let lowResolutionMask = try labelMask(
+            [
+                [0, 0, 0, 0, 0, 0, 0],
+                [0, 5, 5, 0, 5, 5, 0],
+                [0, 5, 5, 0, 5, 5, 0],
+                [0, 0, 0, 0, 0, 0, 0],
+            ]
+        )
+        let scaledMask = try labelMask(
+            [
+                [0, 0, 0, 0, 0, 0, 0],
+                [0, 1, 1, 1, 1, 1, 0],
+                [0, 1, 1, 1, 1, 1, 0],
+                [0, 0, 0, 0, 0, 0, 0],
+            ]
+        )
+        let leftSelection = try PhotoForegroundInstanceSelector().select(
+            in: lowResolutionMask,
+            prompt: .target(normalizedImagePoint: SIMD2<Float>(0.2, 0.5))
+        )
+        let rightSelection = try PhotoForegroundInstanceSelector().select(
+            in: lowResolutionMask,
+            prompt: .target(normalizedImagePoint: SIMD2<Float>(0.7, 0.5))
+        )
+
+        for selection in [leftSelection, rightSelection] {
+            XCTAssertThrowsError(try selection.validatingOwnership(of: scaledMask)) {
+                error in
+                guard case .targetOwnershipAmbiguous(.scaledMaskBroadened) =
+                    error as? PhotoObjectMeasurementError else {
+                    return XCTFail("expected scaled-mask ownership ambiguity, got \(error)")
+                }
+            }
+        }
+    }
+
+    func testScaledMaskValidationPreservesRecoveredDetailAtNonIntegerResolution() throws {
+        let lowResolutionMask = try labelMask(
+            [
+                [0, 0, 0, 0],
+                [5, 5, 0, 5],
+                [5, 5, 0, 5],
+            ]
+        )
+        let selected = try PhotoForegroundInstanceSelector().select(
+            in: lowResolutionMask,
+            prompt: .target(normalizedImagePoint: SIMD2<Float>(0.2, 0.5))
+        )
+        var recoveredDetail = Array(repeating: UInt32.zero, count: 9 * 7)
+        for y in 0..<7 {
+            for x in 0...6 {
+                recoveredDetail[y * 9 + x] = 1
+            }
+        }
+        let scaledMask = try PhotoInstanceLabelMask(
+            width: 9,
+            height: 7,
+            labels: recoveredDetail
+        )
+
+        let validated = try selected.validatingOwnership(of: scaledMask)
+
+        XCTAssertEqual(validated, scaledMask)
+        XCTAssertEqual(
+            Set(validated.labels.indices.filter { validated.labels[$0] != 0 }),
+            Set(recoveredDetail.indices.filter { recoveredDetail[$0] != 0 }),
+            "coarse ownership must validate authority without clipping full-resolution detail"
+        )
+
+        var broadened = recoveredDetail
+        broadened[3 * 9 + 8] = 1
+        XCTAssertThrowsError(
+            try selected.validatingOwnership(
+                of: PhotoInstanceLabelMask(width: 9, height: 7, labels: broadened)
+            )
+        ) { error in
+            guard case .targetOwnershipAmbiguous(.scaledMaskBroadened) =
+                error as? PhotoObjectMeasurementError else {
+                return XCTFail("expected non-integer ownership overlap to fail, got \(error)")
+            }
+        }
     }
 
     func testExplicitTargetOnBackgroundFailsWithoutSoleOrCenterFallback() throws {
@@ -657,7 +841,8 @@ final class PhotoObjectMeasurementTests: XCTestCase {
         let result = try permissiveMeasurement.makePointCloud(
             labelMask: try PhotoInstanceLabelMask(width: width, height: height, labels: labels),
             depthGrid: depthGrid,
-            calibration: calibration(imageWidth: width, imageHeight: height)
+            calibration: calibration(imageWidth: width, imageHeight: height),
+            prompt: .target(normalizedImagePoint: SIMD2<Float>(0.4, 0.5))
         )
 
         XCTAssertEqual(result.depthSupport.selectedMaskSampleCount, 40)
@@ -692,7 +877,8 @@ final class PhotoObjectMeasurementTests: XCTestCase {
         let result = try permissiveMeasurement.makePointCloud(
             labelMask: try PhotoInstanceLabelMask(width: width, height: height, labels: labels),
             depthGrid: depthGrid,
-            calibration: calibration(imageWidth: width, imageHeight: height)
+            calibration: calibration(imageWidth: width, imageHeight: height),
+            prompt: .target(normalizedImagePoint: SIMD2<Float>(0.4, 0.5))
         )
 
         XCTAssertEqual(result.depthSupport.selectedMaskSampleCount, 40)
@@ -704,6 +890,178 @@ final class PhotoObjectMeasurementTests: XCTestCase {
         )
         XCTAssertTrue(result.worldPoints.allSatisfy { abs($0.z + 1) < 0.0001 })
         XCTAssertEqual(result.objectOutline?.loops.count, 1)
+    }
+
+    func testGradualDepthBridgeToLargeSecondaryLobeFailsForEveryTargetTap() throws {
+        let width = 40
+        let height = 48
+        var labels = Array(repeating: UInt32.zero, count: width * height)
+        var depthGrid = populatedDepthGrid(width: width, height: height)
+
+        for y in 4...37 {
+            for x in 6...22 {
+                let index = y * width + x
+                labels[index] = 5
+                depthGrid.depths[index] = 1
+            }
+        }
+        for y in 35...44 {
+            for x in 25...36 {
+                let index = y * width + x
+                labels[index] = 5
+                depthGrid.depths[index] = 1.12
+            }
+        }
+        for (x, depth) in [(23, Float(1.04)), (24, 1.08), (25, 1.12)] {
+            let index = 37 * width + x
+            labels[index] = 5
+            depthGrid.depths[index] = depth
+        }
+
+        let mask = try PhotoInstanceLabelMask(
+            width: width,
+            height: height,
+            labels: labels
+        )
+        let targetTaps = [
+            SIMD2<Float>(14.5 / Float(width), 12.5 / Float(height)),
+            SIMD2<Float>(20.5 / Float(width), 31.5 / Float(height)),
+            SIMD2<Float>(30.5 / Float(width), 40.5 / Float(height)),
+        ]
+
+        for targetTap in targetTaps {
+            XCTAssertThrowsError(
+                try permissiveMeasurement.makePointCloud(
+                    labelMask: mask,
+                    depthGrid: depthGrid,
+                    calibration: calibration(imageWidth: width, imageHeight: height),
+                    prompt: .target(normalizedImagePoint: targetTap)
+                )
+            ) { error in
+                guard case .targetOwnershipAmbiguous = error as? PhotoObjectMeasurementError else {
+                    return XCTFail("expected target ownership ambiguity, got \(error)")
+                }
+            }
+        }
+    }
+
+    func testWideBridgeUsesRawLobeAreaAfterErosionBreaksTheThroat() throws {
+        let width = 145
+        let height = 180
+        var labels = Array(repeating: UInt32.zero, count: width * height)
+
+        for y in 10...159 {
+            for x in 10...79 {
+                labels[y * width + x] = 5
+            }
+        }
+        for y in 116...155 {
+            for x in 95...130 {
+                labels[y * width + x] = 5
+            }
+        }
+        // Seven pixels of throat survive radii 1...3. Radius 4 breaks it,
+        // after which the raw shoe-sized basin must still clear the 8% gate.
+        for y in 130...136 {
+            for x in 80...94 {
+                labels[y * width + x] = 5
+            }
+        }
+
+        XCTAssertThrowsError(
+            try permissiveMeasurement.makePointCloud(
+                labelMask: PhotoInstanceLabelMask(
+                    width: width,
+                    height: height,
+                    labels: labels
+                ),
+                depthGrid: populatedDepthGrid(width: width, height: height),
+                calibration: calibration(imageWidth: width, imageHeight: height),
+                prompt: .target(normalizedImagePoint: SIMD2<Float>(0.3, 0.4))
+            )
+        ) { error in
+            guard case let .targetOwnershipAmbiguous(.narrowBridge(evidence)) =
+                error as? PhotoObjectMeasurementError else {
+                return XCTFail("expected narrow-bridge ambiguity, got \(error)")
+            }
+            XCTAssertEqual(evidence.erosionRadiusPixels, 4)
+            XCTAssertGreaterThanOrEqual(
+                evidence.secondaryRegionPixelCount,
+                Int(ceil(Float(evidence.selectedPixelCount) * 0.08))
+            )
+        }
+    }
+
+    func testObservedBuild38SuitcaseAndShoesOutlineRejectsAtPhysicalTopologyScale() throws {
+        let mask = try observedBuild38SuitcaseAndShoesMask()
+
+        XCTAssertThrowsError(
+            try permissiveMeasurement.makePointCloud(
+                labelMask: mask,
+                depthGrid: populatedDepthGrid(width: mask.width, height: mask.height),
+                calibration: calibration(imageWidth: mask.width, imageHeight: mask.height),
+                prompt: .target(
+                    normalizedImagePoint: SIMD2<Float>(0.34274194, 0.5147059)
+                )
+            )
+        ) { error in
+            guard case let .targetOwnershipAmbiguous(.narrowBridge(evidence)) =
+                error as? PhotoObjectMeasurementError else {
+                return XCTFail("expected observed suitcase/shoes ambiguity, got \(error)")
+            }
+            XCTAssertEqual(evidence.erosionRadiusPixels, 12)
+            XCTAssertEqual(evidence.selectedPixelCount, 12_180)
+            XCTAssertEqual(evidence.primaryRegionPixelCount, 8_778)
+            XCTAssertEqual(evidence.secondaryRegionPixelCount, 3_402)
+            XCTAssertEqual(evidence.exteriorExcursionPixels, 41)
+        }
+    }
+
+    func testUnknownDepthBridgeCannotAuthorizeLargeSecondaryLobe() throws {
+        let width = 40
+        let height = 48
+        var labels = Array(repeating: UInt32.zero, count: width * height)
+        var depthGrid = populatedDepthGrid(width: width, height: height)
+
+        for y in 4...37 {
+            for x in 6...22 {
+                let index = y * width + x
+                labels[index] = 5
+                depthGrid.depths[index] = 1
+            }
+        }
+        for y in 35...44 {
+            for x in 25...36 {
+                let index = y * width + x
+                labels[index] = 5
+                depthGrid.depths[index] = 1.12
+            }
+        }
+        for x in 23...25 {
+            let index = 37 * width + x
+            labels[index] = 5
+            depthGrid.depths[index] = .nan
+            depthGrid.confidences[index] = 0
+        }
+
+        XCTAssertThrowsError(
+            try permissiveMeasurement.makePointCloud(
+                labelMask: PhotoInstanceLabelMask(
+                    width: width,
+                    height: height,
+                    labels: labels
+                ),
+                depthGrid: depthGrid,
+                calibration: calibration(imageWidth: width, imageHeight: height),
+                prompt: .target(
+                    normalizedImagePoint: SIMD2<Float>(14.5 / Float(width), 12.5 / Float(height))
+                )
+            )
+        ) { error in
+            guard case .targetOwnershipAmbiguous = error as? PhotoObjectMeasurementError else {
+                return XCTFail("expected target ownership ambiguity, got \(error)")
+            }
+        }
     }
 
     func testReticleDepthFilterPreservesGraduallySlopedTargetSurface() throws {
@@ -720,7 +1078,8 @@ final class PhotoObjectMeasurementTests: XCTestCase {
         let result = try permissiveMeasurement.makePointCloud(
             labelMask: labels,
             depthGrid: depthGrid,
-            calibration: calibration(imageWidth: width, imageHeight: height)
+            calibration: calibration(imageWidth: width, imageHeight: height),
+            prompt: .target(normalizedImagePoint: SIMD2<Float>(0.5, 0.5))
         )
 
         XCTAssertEqual(result.depthSupport.selectedMaskSampleCount, 49)
@@ -745,17 +1104,207 @@ final class PhotoObjectMeasurementTests: XCTestCase {
             }
         }
 
+        for tapX in [Float(0.25), 0.75] {
+            let result = try permissiveMeasurement.makePointCloud(
+                labelMask: labels,
+                depthGrid: depthGrid,
+                calibration: calibration(imageWidth: width, imageHeight: height),
+                prompt: .target(
+                    normalizedImagePoint: SIMD2<Float>(tapX, 0.5)
+                )
+            )
+
+            XCTAssertEqual(result.depthSupport.selectedMaskSampleCount, 36)
+            XCTAssertEqual(result.depthSupport.supportedSampleCount, 36)
+            XCTAssertEqual(
+                Set(result.depthSupport.indices),
+                Set((1...6).flatMap { y in (1...6).map { x in y * width + x } })
+            )
+        }
+    }
+
+    func testOwnershipGuardPreservesSuitcaseHandleAndWheelLobes() throws {
+        let width = 40
+        let height = 48
+        var labels = Array(repeating: UInt32.zero, count: width * height)
+
+        for y in 8...38 {
+            for x in 10...29 {
+                labels[y * width + x] = 5
+            }
+        }
+        for y in 4...7 {
+            for x in 15...24 {
+                labels[y * width + x] = 5
+            }
+        }
+        for y in 39...42 {
+            for x in 12...15 {
+                labels[y * width + x] = 5
+            }
+            for x in 24...27 {
+                labels[y * width + x] = 5
+            }
+        }
+
         let result = try permissiveMeasurement.makePointCloud(
-            labelMask: labels,
-            depthGrid: depthGrid,
-            calibration: calibration(imageWidth: width, imageHeight: height)
+            labelMask: PhotoInstanceLabelMask(
+                width: width,
+                height: height,
+                labels: labels
+            ),
+            depthGrid: populatedDepthGrid(width: width, height: height),
+            calibration: calibration(imageWidth: width, imageHeight: height),
+            prompt: .target(normalizedImagePoint: SIMD2<Float>(0.5, 0.5))
         )
 
-        XCTAssertEqual(result.depthSupport.selectedMaskSampleCount, 36)
-        XCTAssertEqual(result.depthSupport.supportedSampleCount, 36)
+        let selectedIndices = Set(labels.indices.filter { labels[$0] == 5 })
+        XCTAssertEqual(Set(result.depthSupport.indices), selectedIndices)
+    }
+
+    func testOwnershipGuardPreservesSuitcaseRingHandleWithNarrowStems() throws {
+        let width = 60
+        let height = 70
+        var labels = Array(repeating: UInt32.zero, count: width * height)
+        for y in 20...60 {
+            for x in 15...44 {
+                labels[y * width + x] = 5
+            }
+        }
+        for y in 10...19 {
+            for x in 22...25 {
+                labels[y * width + x] = 5
+            }
+            for x in 34...37 {
+                labels[y * width + x] = 5
+            }
+        }
+        for y in 7...10 {
+            for x in 22...37 {
+                labels[y * width + x] = 5
+            }
+        }
+
+        let result = try permissiveMeasurement.makePointCloud(
+            labelMask: PhotoInstanceLabelMask(
+                width: width,
+                height: height,
+                labels: labels
+            ),
+            depthGrid: populatedDepthGrid(width: width, height: height),
+            calibration: calibration(imageWidth: width, imageHeight: height),
+            prompt: .target(normalizedImagePoint: SIMD2<Float>(0.5, 0.5))
+        )
+
         XCTAssertEqual(
             Set(result.depthSupport.indices),
-            Set((1...6).flatMap { y in (1...6).map { x in y * width + x } })
+            Set(labels.indices.filter { labels[$0] == 5 })
+        )
+        XCTAssertEqual(
+            result.objectOutline?.loops.count,
+            2,
+            "the exterior and handle opening must remain one owned item"
+        )
+    }
+
+    func testOwnershipGuardPreservesThickLShapeFromEitherArm() throws {
+        let width = 32
+        let height = 32
+        var labels = Array(repeating: UInt32.zero, count: width * height)
+        for y in 4...27 {
+            for x in 5...13 {
+                labels[y * width + x] = 5
+            }
+        }
+        for y in 19...27 {
+            for x in 5...26 {
+                labels[y * width + x] = 5
+            }
+        }
+        let mask = try PhotoInstanceLabelMask(
+            width: width,
+            height: height,
+            labels: labels
+        )
+        let selectedIndices = Set(labels.indices.filter { labels[$0] == 5 })
+        let taps = [
+            SIMD2<Float>(0.28, 0.25),
+            SIMD2<Float>(0.70, 0.72),
+        ]
+
+        for tap in taps {
+            let result = try permissiveMeasurement.makePointCloud(
+                labelMask: mask,
+                depthGrid: populatedDepthGrid(width: width, height: height),
+                calibration: calibration(imageWidth: width, imageHeight: height),
+                prompt: .target(normalizedImagePoint: tap)
+            )
+            XCTAssertEqual(Set(result.depthSupport.indices), selectedIndices)
+        }
+    }
+
+    func testOwnershipGuardPreservesLargeScaleLegitimateSilhouettesThroughAdaptiveRadii()
+        throws {
+        let guardUnderTest = PhotoNarrowBridgeOwnershipGuard()
+
+        let lWidth = 160
+        let lHeight = 160
+        var lSelection = Array(repeating: false, count: lWidth * lHeight)
+        for y in 15...140 {
+            for x in 20...59 {
+                lSelection[y * lWidth + x] = true
+            }
+        }
+        for y in 101...140 {
+            for x in 20...135 {
+                lSelection[y * lWidth + x] = true
+            }
+        }
+        let lMask = try PhotoDepthSelectionMask(
+            width: lWidth,
+            height: lHeight,
+            selected: lSelection
+        )
+        for tap in [SIMD2<Float>(0.25, 0.25), SIMD2<Float>(0.70, 0.75)] {
+            XCTAssertNil(
+                guardUnderTest.ambiguity(in: lMask, normalizedTargetPoint: tap)
+            )
+        }
+
+        let suitcaseWidth = 220
+        let suitcaseHeight = 260
+        var suitcaseSelection = Array(
+            repeating: false,
+            count: suitcaseWidth * suitcaseHeight
+        )
+        for y in 70...230 {
+            for x in 40...179 {
+                suitcaseSelection[y * suitcaseWidth + x] = true
+            }
+        }
+        for y in 30...69 {
+            for x in 75...92 {
+                suitcaseSelection[y * suitcaseWidth + x] = true
+            }
+            for x in 127...144 {
+                suitcaseSelection[y * suitcaseWidth + x] = true
+            }
+        }
+        for y in 15...32 {
+            for x in 75...144 {
+                suitcaseSelection[y * suitcaseWidth + x] = true
+            }
+        }
+        let suitcaseMask = try PhotoDepthSelectionMask(
+            width: suitcaseWidth,
+            height: suitcaseHeight,
+            selected: suitcaseSelection
+        )
+        XCTAssertNil(
+            guardUnderTest.ambiguity(
+                in: suitcaseMask,
+                normalizedTargetPoint: SIMD2<Float>(0.5, 0.6)
+            )
         )
     }
 
@@ -1399,6 +1948,68 @@ final class PhotoObjectMeasurementTests: XCTestCase {
                 labels[y * width + x] = 5
             }
         }
+        return try PhotoInstanceLabelMask(width: width, height: height, labels: labels)
+    }
+
+    /// Binary silhouette recovered from the cyan Build 38 preview outline in
+    /// the user's physical suitcase-and-shoes replay, nearest-center sampled
+    /// to a portrait-equivalent 192x256 LiDAR grid, then cropped to its
+    /// 124x170 owned bounds. Keeping only the ownership topology avoids
+    /// committing the user's room photo while preserving the release failure.
+    private func observedBuild38SuitcaseAndShoesMask() throws -> PhotoInstanceLabelMask {
+        let encoded = """
+        AAD8AwAAAAAAAAAAAAAAAADwfwAAAAAAAAAAAAAAAACA/w8AAAAAAAAAAAAAAAAA/P8BAAAAAAAAAAAAAAAA4P8fAAAAAAAAAAAA
+        AAAAAP7/AwAAAAAAAAAAAAAAAP//PwA8AAAAAAAAAAAAAP7//wPw/wMAAAAAAAAAAPj///8B//8DAAAAAAAAAMD///9/8P//DwAA
+        AAAAAAD+////P////w8AAAAAAADg//////////8fAAAAAAAA////////////DwAAAAAA8P///////////wMAAAAAAP//////////
+        /38AAAAAAPD///////////8PAAAAAAD/////////////AQAAAADg////////////HwAAAAAA/v///////////wMAAAAA4P//////
+        /////z8AAAAAAP7///////////8DAAAAAOD///////////8/AAAAAAD+////////////BwAAAADg////////////fwAAAAAA/v//
+        /////////wcAAAAA4P///////////38AAAAAAP7///////////8HAAAAAOD///////////9/AAAAAAD+////////////BwAAAADA
+        ////////////fwAAAAAA/P///////////wcAAAAAwP///////////38AAAAAAPz///////////8HAAAAAMD///////////9/AAAA
+        AAD8////////////AwAAAADA////////////PwAAAAAA/P///////////wMAAAAAwP///////////z8AAAAAAPz///////////8D
+        AAAAAID///////////8/AAAAAAD4////////////AwAAAACA////////////PwAAAAAA+P///////////wMAAAAAgP//////////
+        /z8AAAAAAPj///////////8DAAAAAID///////////8fAAAAAAD4////////////AQAAAACA////////////HwAAAAAA+P//////
+        /////wEAAAAAAP///////////x8AAAAAAPD///////////8BAAAAAAD///////////8fAAAAAADw////////////AQAAAAAA////
+        ////////HwAAAAAA8P///////////wEAAAAAAP///////////x8AAAAAAPD///////////8BAAAAAAD+//////////8fAAAAAADg
+        ////////////AQAAAAAA/v//////////HwAAAAAA4P///////////wEAAAAAAP7//////////w8AAAAAAOD///////////8AAAAA
+        AAD+//////////8PAAAAAADg////////////AAAAAAAA/v//////////DwAAAAAA4P///////////wAAAAAAAPz//////////w8A
+        AAAAAMD///////////8AAAAAAAD8//////////8PAAAAAADA//////////9/AAAAAAAA/P//////////BwAAAAAAwP//////////
+        fwAAAAAAAPz//////////wcAAAAAAMD//////////38AAAAAAAD4//////////8HAAAAAACA//////////9/AAAAAAAA+P//////
+        ////AwAAAAAAgP//////////PwAAAAAAAPj//////////wMAAAAAAID//////////z8AAAAAAAD4//////////8DAAAAAACA////
+        //////8/AAAAAAAA+P//////////AwAAAAAAAP//////////PwAAAAAAAPD//////////wEAAAAAAAD//////////x8AAAAAAADw
+        //////////8BAAAAAAAA//////////8fAAAAAAAA8P//////////AQAAAAAAAP//////////HwAAAAAAAPD//////////wEAAAAA
+        AAD//////////x8AAAAAAADg//////////8AAAAAAAAA/v////////8PAAAAAAAA4P//////////AAAAAAAAAP7/////////DwAA
+        AAAAAMD//////////wAAAAAAAAD8/////////w8AAAAAAACA//////////8AAAAAAAAA+P////////8PAAAAAAAAgP//////////
+        AAAAAAAAAPj/////////BwAAAAAAAID/////////fwAAAAAAAADw/////////wcAAAAAAAAA/v///////38AAAAAAAAAwP//////
+        //8HAAAAAAAAAPD///////9/AAAAAAAAAAD+////////BwAAAAAAAADg////////fwAAAAAAAAAA/P///////wcAAAAAAAAAgP//
+        /////z8AAAAAAAAAAPj///////8DAP8AAAAAAAD///////8/APwfAAAAAADg////////A+D/+28AAAAA/P//////P4D///8PAAAA
+        gP///////wf8////AAAAAPj////////w////HwAAAAD///////+P/////wMAAADw/////////////z8AAAAA/v////////////8H
+        AAAAwP////////////9/AAAAAPj/////////////BwAAAID/////////////fwAAAADw/////////////wcAAAAA/v//////////
+        /38AAAAAwP////////////8DAAAAAPz///////////8/AAAAAOD/////////////AwAAAAD+/+P/////////HwAAAADw/wP/////
+        /////wEAAACA/x/w/////////z8AAAAA+P8D//////////8DAAAAgP8/8P////////8/AAAAAPj/A///////////ewAAAID/P/D/
+        /////////w8AAAD4/wP+//////////8BAAAA/z/g//////////8fAAAA4P8B/P//////////AQAAAP4PgP//////////PwAAAMB/
+        APj//////////wMAAAD4A+D//////////z8AAAAAH4D///////////8HAAAAAAD4//////////9/AAAAAADA////////////BwAA
+        AAAA/P///////////wAAAAAA4P///////////w8AAAAAAP7///////////8AAAAAAOD///////////8HAAAAAAD+//////////9/
+        AAAAAADg////////////BwAAAAAA/v//////////fwAAAAAA4P///////////wcAAAAAAPz///////////8AAAAAAMD/////////
+        //8PAAAAAAD8////////////AAAAAACA////////////BwAAAAAA8P//////////fwAAAAAAAP7//////////wcAAAAAAMD/////
+        /////38AAAAAAAD4//////////8DAAAAAAAA//////////8fAAAAAAAA4P//////////AAAAAAAAAPz/////////BwAAAAAAAID/
+        ////////PwAAAAAAAADg/////////wAAAAAAAAAA/P///////wMAAAAAAAAAgP//////PwAAAAAAAAAAAMD//38AAAAAAAAAAAAA
+        AADA/z8AAAAAAA==
+        """
+        let width = 124
+        let height = 170
+        let data = try XCTUnwrap(
+            Data(base64Encoded: encoded, options: .ignoreUnknownCharacters)
+        )
+        XCTAssertEqual(data.count, (width * height + 7) / 8)
+
+        var labels = Array(repeating: UInt32.zero, count: width * height)
+        for index in labels.indices {
+            let bit = UInt8(1 << (index % 8))
+            if data[index / 8] & bit != 0 {
+                labels[index] = 5
+            }
+        }
+        XCTAssertEqual(labels.count { $0 == 5 }, 12_180)
         return try PhotoInstanceLabelMask(width: width, height: height, labels: labels)
     }
 

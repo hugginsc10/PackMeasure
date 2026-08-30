@@ -123,6 +123,21 @@ struct SingleShotObjectMeasurementTests {
             (.maskTouchesImageEdge(stage: .previewOutline), .framing, "F05"),
             (.noReticleDepthSurface, .isolation, "F06"),
             (
+                .targetOwnershipAmbiguous(
+                    .narrowBridge(
+                        PhotoNarrowBridgeOwnershipEvidence(
+                            erosionRadiusPixels: 2,
+                            primaryRegionPixelCount: 240,
+                            secondaryRegionPixelCount: 80,
+                            selectedPixelCount: 344,
+                            exteriorExcursionPixels: 12
+                        )
+                    )
+                ),
+                .isolation,
+                "F10"
+            ),
+            (
                 .multipleRigidItemsDetected(
                     PhotoRigidItemMultiplicityEvaluation(
                         assessment: .multipleRigidItems(
@@ -307,6 +322,19 @@ struct SingleShotObjectMeasurementTests {
             .photo(.maskAreaTooSmall(actual: 0.01, minimum: 0.03)),
             .photo(.maskAreaTooLarge(actual: 0.90, maximum: 0.85)),
             .photo(.maskTouchesImageEdge(stage: .sourceMask)),
+            .photo(
+                .targetOwnershipAmbiguous(
+                    .narrowBridge(
+                        PhotoNarrowBridgeOwnershipEvidence(
+                            erosionRadiusPixels: 2,
+                            primaryRegionPixelCount: 240,
+                            secondaryRegionPixelCount: 80,
+                            selectedPixelCount: 344,
+                            exteriorExcursionPixels: 12
+                        )
+                    )
+                )
+            ),
             .photo(.noReticleDepthSurface),
             .photo(.insufficientDepthSamples(actual: 24, minimum: 48)),
             .photo(.insufficientDepthCoverage(actual: 0.40, minimum: 0.60)),
