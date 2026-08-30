@@ -286,9 +286,9 @@ enum ScannerBuild33RuntimePolicy {
         guard hasTarget else {
             return ScannerAutomaticCapturePresentation(
                 actionTitle: "Select item",
-                guidance: acceptedAngleCount > 0
-                    ? "Tap the item again for angle \(acceptedAngleCount + 1)."
-                    : "Tap the item you want to measure.",
+                guidance: targetSelectionGuidance(
+                    acceptedAngleCount: acceptedAngleCount
+                ),
                 targetStatus: nil,
                 canCapture: false
             )
@@ -302,6 +302,17 @@ enum ScannerBuild33RuntimePolicy {
             ),
             canCapture: canCapture
         )
+    }
+
+    private static func targetSelectionGuidance(acceptedAngleCount: Int) -> String {
+        switch acceptedAngleCount {
+        case 0:
+            "Tap the item you want to measure."
+        case 1:
+            "Keep the item still. Move to another side, then tap the item again for angle 2."
+        default:
+            "Keep the item still. Move left or right and raise or lower the phone, then tap the item for the final photo."
+        }
     }
 
     static func guidedEntrySituation(

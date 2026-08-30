@@ -72,16 +72,51 @@ struct ScannerCapturePolicyTests {
     @Test
     func finalAngleGuidanceRequiresAHeightChange() {
         let agreeingPairCopy = ScannerGuidanceCopy.additionalAngleMessage(
-            for: .thirdAngleRequired
+            for: .thirdAngleRequired,
+            acceptedAngleCount: 2
         )
         let flatThirdViewCopy = ScannerGuidanceCopy.additionalAngleMessage(
-            for: .elevationTooSimilar
+            for: .elevationTooSimilar,
+            acceptedAngleCount: 2
         )
 
         #expect(agreeingPairCopy.localizedCaseInsensitiveContains("final photo"))
         #expect(agreeingPairCopy.localizedCaseInsensitiveContains("higher or lower"))
         #expect(flatThirdViewCopy.localizedCaseInsensitiveContains("camera height"))
         #expect(flatThirdViewCopy.localizedCaseInsensitiveContains("raise or lower"))
+    }
+
+    @Test
+    func liveCameraGuidanceMatchesTheNextAngle() {
+        let secondAngle = ScannerGuidanceCopy.additionalAnglePreview(
+            acceptedAngleCount: 1
+        )
+        let finalAngle = ScannerGuidanceCopy.additionalAnglePreview(
+            acceptedAngleCount: 2
+        )
+
+        #expect(secondAngle.localizedCaseInsensitiveContains("another side"))
+        #expect(secondAngle.localizedCaseInsensitiveContains("whole item"))
+        #expect(secondAngle.localizedCaseInsensitiveContains("item still"))
+        #expect(!secondAngle.localizedCaseInsensitiveContains("raise or lower"))
+        #expect(finalAngle.localizedCaseInsensitiveContains("final photo"))
+        #expect(finalAngle.localizedCaseInsensitiveContains("left or right"))
+        #expect(finalAngle.localizedCaseInsensitiveContains("raise or lower"))
+        #expect(finalAngle.localizedCaseInsensitiveContains("whole item"))
+        #expect(finalAngle.localizedCaseInsensitiveContains("item still"))
+    }
+
+    @Test
+    func finalAngleSimilarityRetryNamesBothRequiredMovements() {
+        let copy = ScannerGuidanceCopy.additionalAngleMessage(
+            for: .viewpointTooSimilar,
+            acceptedAngleCount: 2
+        )
+
+        #expect(copy.localizedCaseInsensitiveContains("saved angles"))
+        #expect(copy.localizedCaseInsensitiveContains("left or right"))
+        #expect(copy.localizedCaseInsensitiveContains("raise or lower"))
+        #expect(copy.localizedCaseInsensitiveContains("item still"))
     }
 
     @Test
@@ -567,7 +602,10 @@ struct ScannerCapturePolicyTests {
         #expect(
             review
                 == .needsAnotherAngle(
-                    ScannerGuidanceCopy.additionalAngleMessage(for: .firstAngleCaptured)
+                    ScannerGuidanceCopy.additionalAngleMessage(
+                        for: .firstAngleCaptured,
+                        acceptedAngleCount: 1
+                    )
                 )
         )
         #expect(!review.canSave)

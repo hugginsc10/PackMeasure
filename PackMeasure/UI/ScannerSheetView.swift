@@ -1705,7 +1705,9 @@ struct ScannerSheetView: View {
         }
         return scannerState.capturedEstimates.isEmpty
             ? ScannerGuidanceCopy.setup
-            : ScannerGuidanceCopy.additionalAnglePreview
+            : ScannerGuidanceCopy.additionalAnglePreview(
+                acceptedAngleCount: scannerState.capturedEstimates.count
+            )
     }
 
     private func dimensionString(_ estimate: MeasurementEstimate) -> String {
@@ -1890,9 +1892,12 @@ enum ScannerCapturePolicy {
                 return .retryRequired(ScannerGuidanceCopy.lowConfidenceRetry)
             }
             switch measurementProgress {
-            case .needsAnotherAngle(let reason, _):
+            case .needsAnotherAngle(let reason, let acceptedCount):
                 return .needsAnotherAngle(
-                    ScannerGuidanceCopy.additionalAngleMessage(for: reason)
+                    ScannerGuidanceCopy.additionalAngleMessage(
+                        for: reason,
+                        acceptedAngleCount: acceptedCount
+                    )
                 )
             case .inconsistent(let failure):
                 return .retryRequired(
@@ -1921,8 +1926,16 @@ enum ScannerGuidanceCopy {
     static let setup =
         "Keep the whole object visible, then take a photo."
 
-    static let additionalAnglePreview =
-        "Keep the item still; move around it and change camera height"
+    static func additionalAnglePreview(acceptedAngleCount: Int) -> String {
+        switch acceptedAngleCount {
+        case ...0:
+            setup
+        case 1:
+            "Keep the item still. Move to another side and keep the whole item inside the frame."
+        default:
+            "Keep the item still. For the final photo, move left or right, raise or lower the phone, and keep the whole item inside the frame."
+        }
+    }
 
     static let lowConfidenceRetry =
         "We couldn't get clear dimensions from this photo. Keep one object fully visible and try again."
@@ -1931,13 +1944,18 @@ enum ScannerGuidanceCopy {
         "We couldn't measure this photo. Keep one object fully visible and try again."
 
     static func additionalAngleMessage(
-        for reason: MeasurementAdditionalAngleReason
+        for reason: MeasurementAdditionalAngleReason,
+        acceptedAngleCount: Int
     ) -> String {
         switch reason {
         case .firstAngleCaptured:
             "First angle captured. Keep the item still, move around it, and take a second photo."
         case .viewpointTooSimilar:
-            "That view was too similar. Move farther left or right without moving the item."
+            if acceptedAngleCount >= 2 {
+                "That view was still too similar to the saved angles. Keep the item still; move farther left or right and raise or lower the phone for the final photo."
+            } else {
+                "That view was too similar. Move farther left or right without moving the item."
+            }
         case .thirdAngleRequired:
             "Good agreement so far. Take one final photo from another side with the phone higher or lower."
         case .elevationTooSimilar:

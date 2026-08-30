@@ -51,9 +51,27 @@ struct Build33ScannerPresentationTests {
             validationMessage: nil
         )
         #expect(nextAngleNeedsRetap.actionTitle == "Select item")
-        #expect(nextAngleNeedsRetap.guidance == "Tap the item again for angle 2.")
+        #expect(
+            nextAngleNeedsRetap.guidance
+                == "Keep the item still. Move to another side, then tap the item again for angle 2."
+        )
         #expect(nextAngleNeedsRetap.targetStatus == nil)
         #expect(!nextAngleNeedsRetap.canCapture)
+
+        let finalAngleNeedsRetap = ScannerBuild33RuntimePolicy.automaticCapture(
+            hasTarget: false,
+            ownsAcceptedEvidence: false,
+            acceptedAngleCount: 2,
+            canCapture: false,
+            validationMessage: nil
+        )
+        #expect(finalAngleNeedsRetap.actionTitle == "Select item")
+        #expect(
+            finalAngleNeedsRetap.guidance
+                == "Keep the item still. Move left or right and raise or lower the phone, then tap the item for the final photo."
+        )
+        #expect(finalAngleNeedsRetap.targetStatus == nil)
+        #expect(!finalAngleNeedsRetap.canCapture)
     }
 
     @Test
