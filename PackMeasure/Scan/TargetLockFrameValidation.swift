@@ -40,6 +40,7 @@ enum TargetLockFrameValidationFailure: CaseIterable, Equatable, Sendable {
     case insufficientDepthConfidence
     case surfaceOutsideBounds
     case boxNearFaceMismatch
+    case selectionSurfaceMismatch
 
     var diagnosticCode: String { "T03" }
 
@@ -57,7 +58,71 @@ enum TargetLockFrameValidationFailure: CaseIterable, Equatable, Sendable {
             "Hold still while LiDAR finds the selected item."
         case .surfaceOutsideBounds, .boxNearFaceMismatch:
             "Point back at the selected item; the current surface does not match it."
+        case .selectionSurfaceMismatch:
+            "The item moved after you selected it. Retap the item and take the photo again."
         }
+    }
+}
+
+/// Revalidates a fresh tap against the exact settled RGB/depth frame. The
+/// original pixel is deliberately not authoritative: the tap-frame world point
+/// must reproject into the capture frame and still resolve to the same surface.
+struct TargetSelectionFrameValidator: Equatable, Sendable {
+    var protectedPreviewMarginFraction: Float = 0.08
+    var maximumSurfaceDeltaMeters: Float = 0.08
+
+    func validate(
+        selection: TargetSelectionContext,
+        currentIdentity: TargetLockIdentity,
+        currentCameraEvidenceReacquisitionID: Int,
+        projectedPreviewPoint: SIMD2<Float>?,
+        observedSurface: TargetLockObservedSurface?
+    ) -> TargetLockFrameValidation {
+        guard configurationIsValid,
+              selection.identity == currentIdentity else {
+            return .rejected(.staleIdentity)
+        }
+        guard selection.cameraEvidenceReacquisitionID
+                == currentCameraEvidenceReacquisitionID,
+              selection.worldAnchor.targetLockAllFinite else {
+            return .rejected(.invalidTargetEvidence)
+        }
+        guard let projectedPreviewPoint,
+              projectedPreviewPoint.targetLockAllFinite else {
+            return .rejected(.projectionUnavailable)
+        }
+
+        let upperPreviewBoundary = 1 - protectedPreviewMarginFraction
+        guard projectedPreviewPoint.x >= protectedPreviewMarginFraction,
+              projectedPreviewPoint.x <= upperPreviewBoundary,
+              projectedPreviewPoint.y >= protectedPreviewMarginFraction,
+              projectedPreviewPoint.y <= upperPreviewBoundary else {
+            return .rejected(.outsideVisiblePreview)
+        }
+        guard let observedSurface,
+              observedSurface.worldPoint.targetLockAllFinite else {
+            return .rejected(.surfaceUnavailable)
+        }
+        guard observedSurface.confidence >= .medium else {
+            return .rejected(.insufficientDepthConfidence)
+        }
+        let delta = simd_distance(
+            observedSurface.worldPoint,
+            selection.worldAnchor
+        )
+        guard delta.isFinite,
+              delta <= maximumSurfaceDeltaMeters else {
+            return .rejected(.selectionSurfaceMismatch)
+        }
+        return .valid
+    }
+
+    private var configurationIsValid: Bool {
+        protectedPreviewMarginFraction.isFinite
+            && protectedPreviewMarginFraction >= 0
+            && protectedPreviewMarginFraction < 0.5
+            && maximumSurfaceDeltaMeters.isFinite
+            && maximumSurfaceDeltaMeters >= 0
     }
 }
 
@@ -232,11 +297,5 @@ struct TargetLockFrameValidationGate: Equatable, Sendable {
 private extension SIMD2 where Scalar == Float {
     var targetLockAllFinite: Bool {
         x.isFinite && y.isFinite
-    }
-}
-
-private extension SIMD3 where Scalar == Float {
-    var targetLockAllFinite: Bool {
-        x.isFinite && y.isFinite && z.isFinite
     }
 }

@@ -672,7 +672,11 @@ struct ScannerCameraZoomTests {
         #expect(state.measurementSeriesID == measurementSeriesID)
         #expect(
             state.selectAutomaticTarget(
-                rawCameraNormalizedPoint: SIMD2<Float>(0.5, 0.5)
+                rawCameraNormalizedPoint: SIMD2<Float>(0.5, 0.5),
+                selectionSurface: TargetLockObservedSurface(
+                    worldPoint: SIMD3<Float>(0, 0, -1),
+                    confidence: .medium
+                )
             ) == nil
         )
 

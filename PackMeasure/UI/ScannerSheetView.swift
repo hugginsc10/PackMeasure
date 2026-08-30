@@ -137,7 +137,9 @@ struct ScannerSheetView: View {
             let captureRequestID: Int
             let identity: TargetLockIdentity
             let prompt: PhotoTargetSelectionPrompt
+            let selectionContext: TargetSelectionContext
             let lockedContext: TargetCaptureContext?
+            let seriesReference: TargetSeriesReference?
             let cameraEvidenceReacquisitionID: Int
         }
 
@@ -167,9 +169,12 @@ struct ScannerSheetView: View {
         private(set) var measurementMode = ScannerMeasurementMode.automaticPhotos
         private(set) var automaticTargetPrompt: PhotoTargetSelectionPrompt?
         private(set) var targetLockLifecycle = TargetLockLifecycle()
+        private(set) var seriesTargetReference: TargetSeriesReference?
         private(set) var targetFrameValidationGate: TargetLockFrameValidationGate?
         private(set) var targetFrameValidationMessage: String?
         private(set) var lastAutomaticCaptureRejection: TargetLockFrameValidationFailure?
+        private(set) var lastAutomaticSeriesOwnershipFailure:
+            TargetSeriesOwnershipFailure?
         private(set) var pendingAutomaticCaptureAuthority: AutomaticPhotoCaptureAuthority?
         private(set) var guidedCaptureSession: GuidedBoxCaptureSession?
         private(set) var guidedCaptureRequestID = 0
@@ -340,6 +345,7 @@ struct ScannerSheetView: View {
         @discardableResult
         func selectAutomaticTarget(
             rawCameraNormalizedPoint: SIMD2<Float>,
+            selectionSurface: TargetLockObservedSurface,
             id: UUID = UUID()
         ) -> TargetLockIdentity? {
             guard measurementMode == .automaticPhotos else { return nil }
@@ -356,14 +362,41 @@ struct ScannerSheetView: View {
                   rawCameraNormalizedPoint.x.isFinite,
                   rawCameraNormalizedPoint.y.isFinite,
                   (0...1).contains(rawCameraNormalizedPoint.x),
-                  (0...1).contains(rawCameraNormalizedPoint.y) else {
+                  (0...1).contains(rawCameraNormalizedPoint.y),
+                  selectionSurface.worldPoint.targetLockAllFinite,
+                  selectionSurface.confidence >= .medium else {
                 return nil
+            }
+
+            if let seriesTargetReference {
+                let validation = TargetSeriesOwnershipValidator()
+                    .validateSelection(
+                        selectionSurface,
+                        reference: seriesTargetReference,
+                        measurementSeriesID: measurementSeriesID,
+                        subject: measurementSubject
+                    )
+                guard case .valid = validation else {
+                    if case .rejected(let failure) = validation {
+                        targetFrameValidationMessage = failure.actionMessage
+                        lastAutomaticSeriesOwnershipFailure = failure
+                    }
+                    return nil
+                }
             }
 
             let identity = targetLockLifecycle.select(
                 measurementSeriesID: measurementSeriesID,
                 id: id
             )
+            guard targetLockLifecycle.bindSelection(
+                identity: identity,
+                worldAnchor: selectionSurface.worldPoint,
+                cameraEvidenceReacquisitionID: cameraEvidenceReacquisitionID
+            ) else {
+                _ = targetLockLifecycle.cancelUnaccepted(identity: identity)
+                return nil
+            }
             automaticTargetPrompt = .target(
                 normalizedImagePoint: rawCameraNormalizedPoint
             )
@@ -372,8 +405,24 @@ struct ScannerSheetView: View {
             )
             targetFrameValidationMessage = nil
             lastAutomaticCaptureRejection = nil
+            lastAutomaticSeriesOwnershipFailure = nil
             pendingAutomaticCaptureAuthority = nil
             return identity
+        }
+
+        func automaticTargetSelectionFailed(
+            _ failure: TargetLockFrameValidationFailure
+        ) {
+            guard measurementMode == .automaticPhotos,
+                  targetLockLifecycle.current == nil,
+                  phase == .ready,
+                  !isApplyingCameraZoom,
+                  !isPreparingForAiming else {
+                return
+            }
+            targetFrameValidationMessage = failure.actionMessage
+            lastAutomaticCaptureRejection = failure
+            lastAutomaticSeriesOwnershipFailure = nil
         }
 
         @discardableResult
@@ -392,6 +441,11 @@ struct ScannerSheetView: View {
             guard canStartAutomaticCapture,
                   let identity = activeTargetIdentity,
                   identity.measurementSeriesID == measurementSeriesID,
+                  let selectionContext =
+                    targetLockLifecycle.currentSelectionContext,
+                  selectionContext.identity == identity,
+                  selectionContext.cameraEvidenceReacquisitionID
+                    == cameraEvidenceReacquisitionID,
                   let prompt = automaticTargetPrompt else {
                 return nil
             }
@@ -408,7 +462,9 @@ struct ScannerSheetView: View {
                 captureRequestID: captureRequestID,
                 identity: identity,
                 prompt: prompt,
+                selectionContext: selectionContext,
                 lockedContext: lockedContext,
+                seriesReference: seriesTargetReference,
                 cameraEvidenceReacquisitionID: cameraEvidenceReacquisitionID
             )
             pendingAutomaticCaptureAuthority = authority
@@ -445,18 +501,34 @@ struct ScannerSheetView: View {
                   authority.cameraEvidenceReacquisitionID
                     == cameraEvidenceReacquisitionID,
                   authority.identity.measurementSeriesID == measurementSeriesID,
-                  automaticTargetPrompt == authority.prompt else {
+                  automaticTargetPrompt == authority.prompt,
+                  authority.seriesReference == seriesTargetReference else {
                 return false
             }
 
             var candidateLifecycle = targetLockLifecycle
             guard let target = candidateLifecycle.current,
                   target.identity == authority.identity,
-                  target.ownsAcceptedEvidence,
-                  let lockedContext = candidateLifecycle.currentCaptureContext,
-                  authority.lockedContext == lockedContext,
-                  candidateLifecycle.markAmbiguous(identity: authority.identity) else {
+                  target.selectionContext == authority.selectionContext else {
                 return false
+            }
+            let preservesAcceptedEvidence = target.ownsAcceptedEvidence
+
+            if preservesAcceptedEvidence {
+                guard let lockedContext = candidateLifecycle.currentCaptureContext,
+                      authority.lockedContext == lockedContext,
+                      candidateLifecycle.markAmbiguous(
+                          identity: authority.identity
+                      ) else {
+                    return false
+                }
+            } else {
+                guard authority.lockedContext == nil,
+                      candidateLifecycle.cancelUnaccepted(
+                          identity: authority.identity
+                      ) else {
+                    return false
+                }
             }
 
             pendingAutomaticCaptureAuthority = nil
@@ -464,7 +536,12 @@ struct ScannerSheetView: View {
             if phase.isCapturing {
                 phase = .ready
             }
-            resetTargetFrameValidationGate()
+            if preservesAcceptedEvidence {
+                resetTargetFrameValidationGate()
+            } else {
+                automaticTargetPrompt = nil
+                targetFrameValidationGate = nil
+            }
             targetFrameValidationMessage = failure.actionMessage
             lastAutomaticCaptureRejection = failure
             return true
@@ -637,29 +714,47 @@ struct ScannerSheetView: View {
                     == cameraEvidenceReacquisitionID,
                   authority.identity.measurementSeriesID == measurementSeriesID,
                   targetLockLifecycle.current?.identity == authority.identity,
-                  automaticTargetPrompt == authority.prompt else {
+                  targetLockLifecycle.currentSelectionContext
+                    == authority.selectionContext,
+                  automaticTargetPrompt == authority.prompt,
+                  authority.seriesReference == seriesTargetReference else {
                 return nil
             }
 
-            // A callback that owns the current pending request is terminal even
-            // when its measurement evidence fails closed. A delayed callback
-            // cannot consume a newer request because the full authority differs.
-            pendingAutomaticCaptureAuthority = nil
-            isPreparingForAiming = false
             let capture = recordedCapture.measurement
-            objectOverlay = capture.objectOverlay
 
             guard capture.evidence.estimate.confidence != .low else {
+                // A callback that owns the current pending request is terminal.
+                // Consume it only after classifying the result so malformed
+                // evidence cannot strand the state halfway through admission.
+                pendingAutomaticCaptureAuthority = nil
+                isPreparingForAiming = false
+                objectOverlay = capture.objectOverlay
                 estimate = capture.evidence.estimate
                 phase = .measured
                 return nil
             }
             guard let bounds = capture.evidence.targetLockBounds else {
-                estimate = nil
-                objectOverlay = nil
-                phase = .failed(
+                rejectAutomaticMeasurementEvidence(
                     "The selected item could not be verified in this photo. Retake the photo."
                 )
+                return nil
+            }
+
+            let ownershipValidation = TargetSeriesOwnershipValidator()
+                .validateCapture(
+                    bounds,
+                    selection: authority.selectionContext,
+                    reference: seriesTargetReference,
+                    subject: measurementSubject
+                )
+            guard case .valid = ownershipValidation else {
+                if case .rejected(let failure) = ownershipValidation {
+                    rejectAutomaticSeriesOwnership(
+                        failure,
+                        identity: authority.identity
+                    )
+                }
                 return nil
             }
 
@@ -668,6 +763,9 @@ struct ScannerSheetView: View {
             if ownedAcceptedEvidence {
                 guard let context = candidateLifecycle.currentCaptureContext,
                       authority.lockedContext == context else {
+                    rejectAutomaticMeasurementEvidence(
+                        "PackMeasure could not verify the selected item's position. Retap the item and take the photo again."
+                    )
                     return nil
                 }
             } else {
@@ -677,10 +775,16 @@ struct ScannerSheetView: View {
                           worldAnchor: capture.evidence.geometryCenter,
                           bounds: bounds
                       ) else {
+                    rejectAutomaticMeasurementEvidence(
+                        "PackMeasure could not verify the selected item's position. Retap the item and take the photo again."
+                    )
                     return nil
                 }
             }
             guard let captureContext = candidateLifecycle.currentCaptureContext else {
+                rejectAutomaticMeasurementEvidence(
+                    "PackMeasure could not verify the selected item's position. Retap the item and take the photo again."
+                )
                 return nil
             }
 
@@ -688,18 +792,34 @@ struct ScannerSheetView: View {
             let acceptedCount = candidateWorkflow.captures.count
             let progress = candidateWorkflow.record(capture)
             let admittedAngle = candidateWorkflow.captures.count == acceptedCount + 1
+            var candidateSeriesReference = seriesTargetReference
             if admittedAngle {
                 guard candidateLifecycle.recordAcceptedAngle(using: captureContext) else {
+                    rejectAutomaticMeasurementEvidence(
+                        "PackMeasure could not safely add this photo. Retap the same item and take the photo again."
+                    )
                     return nil
+                }
+                if candidateSeriesReference == nil {
+                    candidateSeriesReference = TargetSeriesReference(
+                        originIdentity: authority.identity,
+                        subject: measurementSubject,
+                        bounds: bounds
+                    )
                 }
             }
 
+            pendingAutomaticCaptureAuthority = nil
+            isPreparingForAiming = false
+            objectOverlay = capture.objectOverlay
             measurementWorkflow = candidateWorkflow
             targetLockLifecycle = candidateLifecycle
+            seriesTargetReference = candidateSeriesReference
             if admittedAngle {
                 capturedAngleRecords.append(recordedCapture)
                 resetTargetFrameValidationGate()
                 lastAutomaticCaptureRejection = nil
+                lastAutomaticSeriesOwnershipFailure = nil
             }
             switch progress {
             case .accepted(let consensus):
@@ -721,6 +841,7 @@ struct ScannerSheetView: View {
             capturedAngleRecords = []
             measurementSeriesID += 1
             targetLockLifecycle.reset()
+            seriesTargetReference = nil
             clearAutomaticTargetAuthority()
             estimate = nil
             objectOverlay = nil
@@ -982,6 +1103,9 @@ struct ScannerSheetView: View {
             }
             guard target.ownsAcceptedEvidence else {
                 return target.state == .provisional
+                    && target.selectionContext?.identity == target.identity
+                    && target.selectionContext?.cameraEvidenceReacquisitionID
+                        == cameraEvidenceReacquisitionID
             }
             return target.captureContext != nil
                 && targetFrameValidationGate?.identity == target.identity
@@ -1001,7 +1125,42 @@ struct ScannerSheetView: View {
             targetFrameValidationGate = nil
             targetFrameValidationMessage = nil
             lastAutomaticCaptureRejection = nil
+            lastAutomaticSeriesOwnershipFailure = nil
             pendingAutomaticCaptureAuthority = nil
+        }
+
+        private func rejectAutomaticSeriesOwnership(
+            _ failure: TargetSeriesOwnershipFailure,
+            identity: TargetLockIdentity
+        ) {
+            pendingAutomaticCaptureAuthority = nil
+            isPreparingForAiming = false
+            var candidateLifecycle = targetLockLifecycle
+            if candidateLifecycle.current?.canCancelBeforeAcceptedEvidence == true {
+                _ = candidateLifecycle.cancelUnaccepted(identity: identity)
+            } else {
+                _ = candidateLifecycle.markAmbiguous(identity: identity)
+            }
+            targetLockLifecycle = candidateLifecycle
+            automaticTargetPrompt = nil
+            targetFrameValidationGate = nil
+            targetFrameValidationMessage = failure.actionMessage
+            lastAutomaticCaptureRejection = nil
+            lastAutomaticSeriesOwnershipFailure = failure
+            estimate = nil
+            objectOverlay = nil
+            phase = .failed(failure.actionMessage)
+        }
+
+        private func rejectAutomaticMeasurementEvidence(_ message: String) {
+            pendingAutomaticCaptureAuthority = nil
+            isPreparingForAiming = false
+            estimate = nil
+            objectOverlay = nil
+            targetFrameValidationMessage = message
+            lastAutomaticCaptureRejection = nil
+            lastAutomaticSeriesOwnershipFailure = nil
+            phase = .failed(message)
         }
 
         private func guidedCaptureRejectionMessage(

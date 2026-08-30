@@ -11,7 +11,11 @@ struct MeasurementARFrameIntegrationTests {
         state.phase = .ready
         _ = try #require(
             state.selectAutomaticTarget(
-                rawCameraNormalizedPoint: SIMD2<Float>(0.5, 0.5)
+                rawCameraNormalizedPoint: SIMD2<Float>(0.5, 0.5),
+                selectionSurface: TargetLockObservedSurface(
+                    worldPoint: SIMD3<Float>(0, 0, -1),
+                    confidence: .medium
+                )
             )
         )
         state.startMeasurement()
@@ -58,6 +62,86 @@ struct MeasurementARFrameIntegrationTests {
         #expect(lowResolutionSelection.label == 7)
         #expect(pointCloud.selectedLabel == 7)
         #expect(pointCloud.maskQuality.selectedPixelCount == 24)
+    }
+
+    @Test
+    func worldBoundPromptSurvivesCameraMotionWhileSavedPixelSwitchesObjects()
+        throws
+    {
+        let width = 12
+        let height = 12
+        let savedPixel = SIMD2<Float>(0.25, 0.5)
+        let reprojectedWorldPrompt = SIMD2<Float>(0.75, 0.5)
+        let depthGrid = populatedDepthGrid(width: width, height: height)
+        let intrinsics = calibration(width: width, height: height).intrinsics
+        let sampler = ScannerFrameDepthSampler()
+        let tapFrameSurface = try #require(
+            sampler.sample(
+                normalizedImagePoint: savedPixel,
+                grid: depthGrid,
+                cameraImageResolutionPixels: SIMD2<Int>(width, height),
+                cameraIntrinsics: intrinsics,
+                cameraTransform: matrix_identity_float4x4
+            )
+        )
+        var movedCameraTransform = matrix_identity_float4x4
+        movedCameraTransform.columns.3.x = -0.5
+        let stalePixelSurface = try #require(
+            sampler.sample(
+                normalizedImagePoint: savedPixel,
+                grid: depthGrid,
+                cameraImageResolutionPixels: SIMD2<Int>(width, height),
+                cameraIntrinsics: intrinsics,
+                cameraTransform: movedCameraTransform
+            )
+        )
+        let reprojectedSurface = try #require(
+            sampler.sample(
+                normalizedImagePoint: reprojectedWorldPrompt,
+                grid: depthGrid,
+                cameraImageResolutionPixels: SIMD2<Int>(width, height),
+                cameraIntrinsics: intrinsics,
+                cameraTransform: movedCameraTransform
+            )
+        )
+
+        // In the settled frame, object B now occupies the original pixel while
+        // the world-bound point for object A has moved to the right.
+        var movedFrameLabels = Array(repeating: UInt32.zero, count: width * height)
+        for y in 3...8 {
+            for x in 1...4 { movedFrameLabels[y * width + x] = 5 }
+            for x in 6...9 { movedFrameLabels[y * width + x] = 7 }
+        }
+        let movedFrameMask = try PhotoInstanceLabelMask(
+            width: width,
+            height: height,
+            labels: movedFrameLabels
+        )
+        let stalePixelSelection = try ScannerAutomaticPhotoFrameProcessor(
+            prompt: .target(normalizedImagePoint: savedPixel),
+            measurement: PhotoObjectMeasurement()
+        ).selectForeground(in: movedFrameMask)
+        let worldBoundSelection = try ScannerAutomaticPhotoFrameProcessor(
+            prompt: .target(normalizedImagePoint: reprojectedWorldPrompt),
+            measurement: PhotoObjectMeasurement()
+        ).selectForeground(in: movedFrameMask)
+
+        #expect(tapFrameSurface.confidence == .high)
+        #expect(reprojectedSurface.confidence == .high)
+        #expect(
+            distance(
+                tapFrameSurface.worldPosition,
+                stalePixelSurface.worldPosition
+            ) > 0.49
+        )
+        #expect(
+            distance(
+                tapFrameSurface.worldPosition,
+                reprojectedSurface.worldPosition
+            ) < 0.000_1
+        )
+        #expect(stalePixelSelection.label == 5)
+        #expect(worldBoundSelection.label == 7)
     }
 
     @Test

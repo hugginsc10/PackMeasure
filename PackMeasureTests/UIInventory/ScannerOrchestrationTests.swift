@@ -117,16 +117,24 @@ struct ScannerOrchestrationTests {
         let state = readyState()
         let firstPoint = SIMD2<Float>(0.24, 0.61)
         let secondPoint = SIMD2<Float>(0.73, 0.28)
+        let firstSurfacePoint = SIMD3<Float>(0.2, 0.4, -1.1)
+        let ignoredSecondSurfacePoint = SIMD3<Float>(9, 4, -3)
 
         let firstIdentity = try #require(
             state.selectAutomaticTarget(
                 rawCameraNormalizedPoint: firstPoint,
+                selectionSurface: selectionSurface(
+                    worldPoint: firstSurfacePoint
+                ),
                 id: firstTargetID
             )
         )
         let secondIdentity = try #require(
             state.selectAutomaticTarget(
                 rawCameraNormalizedPoint: secondPoint,
+                selectionSurface: selectionSurface(
+                    worldPoint: ignoredSecondSurfacePoint
+                ),
                 id: secondTargetID
             )
         )
@@ -137,6 +145,17 @@ struct ScannerOrchestrationTests {
         #expect(state.activeTargetIdentity == firstIdentity)
         #expect(state.automaticTargetPrompt == .target(normalizedImagePoint: firstPoint))
         #expect(state.canChangeAutomaticTarget)
+
+        let authority = try #require(state.beginAutomaticCapture())
+        #expect(
+            authority.selectionContext
+                == TargetSelectionContext(
+                    identity: firstIdentity,
+                    worldAnchor: firstSurfacePoint,
+                    cameraEvidenceReacquisitionID: 0
+                )
+        )
+        #expect(authority.seriesReference == nil)
     }
 
     @Test @MainActor
@@ -186,6 +205,7 @@ struct ScannerOrchestrationTests {
         let newIdentity = try #require(
             state.selectAutomaticTarget(
                 rawCameraNormalizedPoint: SIMD2<Float>(0.68, 0.44),
+                selectionSurface: selectionSurface(),
                 id: secondTargetID
             )
         )
@@ -209,7 +229,9 @@ struct ScannerOrchestrationTests {
 
         #expect(authority.identity == state.activeTargetIdentity)
         #expect(authority.prompt == state.automaticTargetPrompt)
+        #expect(authority.selectionContext == state.activeTargetLock?.selectionContext)
         #expect(authority.lockedContext == nil)
+        #expect(authority.seriesReference == nil)
         #expect(authority.cameraEvidenceReacquisitionID == 0)
 
         let progress = try #require(
@@ -269,6 +291,7 @@ struct ScannerOrchestrationTests {
         let secondIdentity = try #require(
             state.selectAutomaticTarget(
                 rawCameraNormalizedPoint: secondPoint,
+                selectionSurface: selectionSurface(),
                 id: secondTargetID
             )
         )
@@ -307,6 +330,7 @@ struct ScannerOrchestrationTests {
         let firstIdentity = try #require(
             state.selectAutomaticTarget(
                 rawCameraNormalizedPoint: SIMD2<Float>(0.31, 0.57),
+                selectionSurface: selectionSurface(),
                 id: firstTargetID
             )
         )
@@ -327,6 +351,7 @@ struct ScannerOrchestrationTests {
         let secondIdentity = try #require(
             state.selectAutomaticTarget(
                 rawCameraNormalizedPoint: SIMD2<Float>(0.68, 0.44),
+                selectionSurface: selectionSurface(),
                 id: secondTargetID
             )
         )
@@ -381,6 +406,7 @@ struct ScannerOrchestrationTests {
         let thirdIdentity = try #require(
             state.selectAutomaticTarget(
                 rawCameraNormalizedPoint: SIMD2<Float>(0.49, 0.52),
+                selectionSurface: selectionSurface(),
                 id: thirdTargetID
             )
         )
@@ -450,6 +476,7 @@ struct ScannerOrchestrationTests {
         _ = try #require(
             state.selectAutomaticTarget(
                 rawCameraNormalizedPoint: SIMD2<Float>(0.69, 0.38),
+                selectionSurface: selectionSurface(),
                 id: secondTargetID
             )
         )
@@ -480,7 +507,13 @@ struct ScannerOrchestrationTests {
             captureRequestID: 1,
             identity: fakeIdentity,
             prompt: .target(normalizedImagePoint: SIMD2<Float>(0.5, 0.5)),
+            selectionContext: TargetSelectionContext(
+                identity: fakeIdentity,
+                worldAnchor: .zero,
+                cameraEvidenceReacquisitionID: 0
+            ),
             lockedContext: nil,
+            seriesReference: nil,
             cameraEvidenceReacquisitionID: 0
         )
 
@@ -492,7 +525,7 @@ struct ScannerOrchestrationTests {
         )
         #expect(noTarget.capturedAngleRecords.isEmpty)
 
-        let state = try selectedReadyState()
+        let state = try selectedReadyState(selectionWorldPoint: .zero)
         let firstAuthority = try #require(state.beginAutomaticCapture())
         #expect(
             state.receiveAutomaticMeasurement(
@@ -602,6 +635,7 @@ struct ScannerOrchestrationTests {
         let nextIdentity = try #require(
             state.selectAutomaticTarget(
                 rawCameraNormalizedPoint: SIMD2<Float>(0.59, 0.36),
+                selectionSurface: selectionSurface(),
                 id: secondTargetID
             )
         )
@@ -661,6 +695,7 @@ struct ScannerOrchestrationTests {
         let initialIdentity = try #require(
             state.selectAutomaticTarget(
                 rawCameraNormalizedPoint: SIMD2<Float>(0.31, 0.57),
+                selectionSurface: selectionSurface(worldPoint: .zero),
                 id: firstTargetID
             )
         )
@@ -672,6 +707,7 @@ struct ScannerOrchestrationTests {
         let replacementIdentity = try #require(
             state.selectAutomaticTarget(
                 rawCameraNormalizedPoint: SIMD2<Float>(0.68, 0.44),
+                selectionSurface: selectionSurface(worldPoint: .zero),
                 id: secondTargetID
             )
         )
@@ -988,13 +1024,15 @@ struct ScannerOrchestrationTests {
     }
 
     @Test @MainActor
-    func betweenAngleRetargetingDoesNotUseLockedFrameValidation() throws {
+    func betweenAngleFreshSelectionUsesSeriesOwnershipNotRetiredLockedFrame() throws {
         let state = try acceptedFirstAngleState(center: .zero)
+        let seriesReference = try #require(state.seriesTargetReference)
         state.prepareForAiming()
         #expect(state.previewBecameReady())
         let freshIdentity = try #require(
             state.selectAutomaticTarget(
                 rawCameraNormalizedPoint: SIMD2<Float>(0.42, 0.63),
+                selectionSurface: selectionSurface(worldPoint: .zero),
                 id: secondTargetID
             )
         )
@@ -1005,6 +1043,183 @@ struct ScannerOrchestrationTests {
         )
         #expect(state.targetFrameValidationGate?.isReady != true)
         #expect(state.canStartAutomaticCapture)
+
+        let authority = try #require(state.beginAutomaticCapture())
+        #expect(authority.lockedContext == nil)
+        #expect(authority.seriesReference == seriesReference)
+        #expect(authority.selectionContext.identity == freshIdentity)
+        #expect(authority.selectionContext.worldAnchor == .zero)
+    }
+
+    @Test @MainActor
+    func freshTapOutsideFirstAngleReferenceIsRejectedWithoutMutatingSeries() throws {
+        let state = try acceptedFirstAngleState(center: .zero)
+        let acceptedRecords = state.capturedAngleRecords
+        let acceptedWorkflow = state.measurementWorkflow
+        let seriesReference = try #require(state.seriesTargetReference)
+
+        state.prepareForAiming()
+        #expect(state.previewBecameReady())
+
+        let rejectedIdentity = state.selectAutomaticTarget(
+            rawCameraNormalizedPoint: SIMD2<Float>(0.72, 0.41),
+            selectionSurface: selectionSurface(
+                worldPoint: SIMD3<Float>(3, 0, 0)
+            ),
+            id: secondTargetID
+        )
+
+        #expect(rejectedIdentity == nil)
+        #expect(state.activeTargetIdentity == nil)
+        #expect(state.pendingAutomaticCaptureAuthority == nil)
+        #expect(state.capturedAngleRecords == acceptedRecords)
+        #expect(state.measurementWorkflow == acceptedWorkflow)
+        #expect(state.seriesTargetReference == seriesReference)
+        #expect(
+            state.lastAutomaticSeriesOwnershipFailure
+                == .selectionOutsideReference
+        )
+        #expect(
+            state.targetFrameValidationMessage
+                == TargetSeriesOwnershipFailure.selectionOutsideReference
+                    .actionMessage
+        )
+    }
+
+    @Test @MainActor
+    func laterCaptureMissingItsFreshTapIsRejectedWithoutMutatingSeries() throws {
+        let state = try acceptedFirstAngleState(center: .zero)
+        let acceptedRecords = state.capturedAngleRecords
+        let acceptedWorkflow = state.measurementWorkflow
+        let seriesReference = try #require(state.seriesTargetReference)
+        let sameItemTap = SIMD3<Float>(0.4, 0, 0)
+
+        state.prepareForAiming()
+        #expect(state.previewBecameReady())
+        _ = try #require(
+            state.selectAutomaticTarget(
+                rawCameraNormalizedPoint: SIMD2<Float>(0.72, 0.41),
+                selectionSurface: selectionSurface(worldPoint: sameItemTap),
+                id: secondTargetID
+            )
+        )
+        let authority = try #require(state.beginAutomaticCapture())
+        #expect(authority.seriesReference == seriesReference)
+        #expect(authority.selectionContext.worldAnchor == sameItemTap)
+
+        let progress = state.receiveAutomaticMeasurement(
+            automaticCapture(
+                center: SIMD3<Float>(3, 0, 0),
+                viewpointPosition: SIMD3<Float>(2, 0, 0),
+                horizontalForward: SIMD2<Float>(-1, 0)
+            ),
+            authority: authority
+        )
+
+        let failure = TargetSeriesOwnershipFailure.captureMissesSelection
+        #expect(progress == nil)
+        #expect(state.capturedAngleRecords == acceptedRecords)
+        #expect(state.measurementWorkflow == acceptedWorkflow)
+        #expect(state.seriesTargetReference == seriesReference)
+        #expect(state.activeTargetIdentity == nil)
+        #expect(state.lastAutomaticSeriesOwnershipFailure == failure)
+        #expect(state.targetFrameValidationMessage == failure.actionMessage)
+        #expect(state.phase == .failed(failure.actionMessage))
+        #expect(!failure.actionMessage.contains("Diagnostic"))
+    }
+
+    @Test @MainActor
+    func malformedGeometryFailsExplicitlyWithoutMutatingAcceptedSeries() throws {
+        let state = try acceptedFirstAngleState(center: .zero)
+        let acceptedRecords = state.capturedAngleRecords
+        let acceptedWorkflow = state.measurementWorkflow
+        let seriesReference = try #require(state.seriesTargetReference)
+
+        state.prepareForAiming()
+        #expect(state.previewBecameReady())
+        _ = try #require(
+            state.selectAutomaticTarget(
+                rawCameraNormalizedPoint: SIMD2<Float>(0.72, 0.41),
+                selectionSurface: selectionSurface(worldPoint: .zero),
+                id: secondTargetID
+            )
+        )
+        let authority = try #require(state.beginAutomaticCapture())
+        let malformedCenter = SIMD3<Float>(.nan, 0, 0)
+
+        let progress = state.receiveAutomaticMeasurement(
+            automaticCapture(
+                center: malformedCenter,
+                boundsOverride: targetBounds(center: .zero),
+                viewpointPosition: SIMD3<Float>(2, 0, 0),
+                horizontalForward: SIMD2<Float>(-1, 0)
+            ),
+            authority: authority
+        )
+
+        #expect(progress == nil)
+        #expect(state.pendingAutomaticCaptureAuthority == nil)
+        #expect(!state.isPreparingForAiming)
+        #expect(state.capturedAngleRecords == acceptedRecords)
+        #expect(state.measurementWorkflow == acceptedWorkflow)
+        #expect(state.seriesTargetReference == seriesReference)
+        #expect(state.objectOverlay == nil)
+        guard case .failed(let message) = state.phase else {
+            Issue.record("malformed geometry must fail explicitly")
+            return
+        }
+        #expect(message.contains("Retap the item"))
+        #expect(!message.contains("Diagnostic"))
+    }
+
+    @Test @MainActor
+    func sameObjectTapCanProceedDespiteLargeFittedCenterDrift() throws {
+        let state = try acceptedFirstAngleState(center: .zero)
+        let seriesReference = try #require(state.seriesTargetReference)
+        let sameItemTap = SIMD3<Float>(0.4, 0, 0)
+        let driftedCenter = SIMD3<Float>(1.2, 0, 0)
+        let driftedBounds = TargetLockBounds(
+            center: driftedCenter,
+            halfExtents: SIMD3<Float>(1, 0.5, 0.5),
+            yawRadians: 0
+        )
+
+        state.prepareForAiming()
+        #expect(state.previewBecameReady())
+        _ = try #require(
+            state.selectAutomaticTarget(
+                rawCameraNormalizedPoint: SIMD2<Float>(0.72, 0.41),
+                selectionSurface: selectionSurface(worldPoint: sameItemTap),
+                id: secondTargetID
+            )
+        )
+        let authority = try #require(state.beginAutomaticCapture())
+
+        let progress = try #require(
+            state.receiveAutomaticMeasurement(
+                automaticCapture(
+                    center: driftedCenter,
+                    boundsOverride: driftedBounds,
+                    viewpointPosition: SIMD3<Float>(2, 0, 0),
+                    horizontalForward: SIMD2<Float>(-1, 0)
+                ),
+                authority: authority
+            )
+        )
+
+        #expect(
+            progress == .needsAnotherAngle(
+                reason: .thirdAngleRequired,
+                acceptedCount: 2
+            )
+        )
+        #expect(state.capturedAngleRecords.count == 2)
+        #expect(
+            state.capturedAngleRecords.last?.evidence.geometryCenter
+                == driftedCenter
+        )
+        #expect(state.seriesTargetReference == seriesReference)
+        #expect(state.lastAutomaticSeriesOwnershipFailure == nil)
     }
 
     @Test @MainActor
@@ -1082,11 +1297,16 @@ struct ScannerOrchestrationTests {
     }
 
     @MainActor
-    private func selectedReadyState() throws -> ScannerSheetView.ScannerStateModel {
+    private func selectedReadyState(
+        selectionWorldPoint: SIMD3<Float> = SIMD3<Float>(0.2, 0.4, -1.1)
+    ) throws -> ScannerSheetView.ScannerStateModel {
         let state = readyState()
         _ = try #require(
             state.selectAutomaticTarget(
                 rawCameraNormalizedPoint: SIMD2<Float>(0.31, 0.57),
+                selectionSurface: selectionSurface(
+                    worldPoint: selectionWorldPoint
+                ),
                 id: firstTargetID
             )
         )
@@ -1097,7 +1317,7 @@ struct ScannerOrchestrationTests {
     private func acceptedFirstAngleState(
         center: SIMD3<Float> = SIMD3<Float>(0.2, 0.4, -1.1)
     ) throws -> ScannerSheetView.ScannerStateModel {
-        let state = try selectedReadyState()
+        let state = try selectedReadyState(selectionWorldPoint: center)
         let authority = try #require(state.beginAutomaticCapture())
         _ = try #require(
             state.receiveAutomaticMeasurement(
@@ -1111,6 +1331,7 @@ struct ScannerOrchestrationTests {
     private func automaticCapture(
         center: SIMD3<Float>,
         includesBounds: Bool = true,
+        boundsOverride: TargetLockBounds? = nil,
         viewpointPosition: SIMD3<Float> = SIMD3<Float>(0, 0, 2),
         horizontalForward: SIMD2<Float> = SIMD2<Float>(0, -1),
         cameraZoom: ScannerCameraZoom = .standard
@@ -1129,7 +1350,7 @@ struct ScannerOrchestrationTests {
                     pointCloudConfidence: .high,
                     geometryCenter: center,
                     targetLockBounds: includesBounds
-                        ? targetBounds(center: center)
+                        ? (boundsOverride ?? targetBounds(center: center))
                         : nil
                 ),
                 viewpoint: MeasurementCameraViewpoint(
@@ -1155,6 +1376,15 @@ struct ScannerOrchestrationTests {
             center: center,
             halfExtents: SIMD3<Float>(0.5, 0.5, 0.5),
             yawRadians: 0
+        )
+    }
+
+    private func selectionSurface(
+        worldPoint: SIMD3<Float> = SIMD3<Float>(0.2, 0.4, -1.1)
+    ) -> TargetLockObservedSurface {
+        TargetLockObservedSurface(
+            worldPoint: worldPoint,
+            confidence: .medium
         )
     }
 

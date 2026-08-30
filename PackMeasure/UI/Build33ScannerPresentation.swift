@@ -286,7 +286,7 @@ enum ScannerBuild33RuntimePolicy {
         guard hasTarget else {
             return ScannerAutomaticCapturePresentation(
                 actionTitle: "Select item",
-                guidance: targetSelectionGuidance(
+                guidance: validationMessage ?? targetSelectionGuidance(
                     acceptedAngleCount: acceptedAngleCount
                 ),
                 targetStatus: nil,

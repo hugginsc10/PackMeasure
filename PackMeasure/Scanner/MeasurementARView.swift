@@ -716,7 +716,9 @@ struct MeasurementARView: UIViewRepresentable {
         context.coordinator.scannerState = scannerState
         uiView.objectOverlay = scannerState.objectOverlay
         context.coordinator.synchronizeCaptureState(
-            targetLock: scannerState.automaticTargetValidationLockSnapshot,
+            targetLock: scannerState.activeTargetLock,
+            validationTargetLock:
+                scannerState.automaticTargetValidationLockSnapshot,
             targetPrompt: scannerState.automaticTargetPrompt,
             targetSubject: scannerState.measurementSubject,
             cameraEvidenceReacquisitionID:
@@ -937,7 +939,9 @@ struct MeasurementARView: UIViewRepresentable {
         private let peripheralFloorEstimator = PeripheralFloorEstimator()
         private let objectRegionFilter = ReticleSeededObjectRegionFilter()
         private let targetFrameValidator = TargetLockFrameValidator()
+        private let targetSelectionFrameValidator = TargetSelectionFrameValidator()
         private let targetFrameEvidenceAdapter = ScannerTargetFrameEvidenceAdapter()
+        private let frameDepthSampler = ScannerFrameDepthSampler()
         private let guidedFrameSampler = ScannerGuidedFrameSampler()
         private let singleShotFrameRoutePolicy = ScannerSingleShotFrameRoutePolicy()
         private let automaticCaptureAuthorityTerminator =
@@ -1050,13 +1054,14 @@ struct MeasurementARView: UIViewRepresentable {
         @MainActor
         func synchronizeCaptureState(
             targetLock: TargetLock?,
+            validationTargetLock: TargetLock?,
             targetPrompt: PhotoTargetSelectionPrompt?,
             targetSubject: TargetLockSubject,
             cameraEvidenceReacquisitionID: Int,
             guidedRequest: GuidedBoxCaptureRequest?,
             guidedOverlay: GuidedBoxOverlay
         ) {
-            let targetSnapshot = targetLock.flatMap { lock in
+            let targetSnapshot = validationTargetLock.flatMap { lock in
                 lock.captureContext.map { _ in
                     TargetTrackingSnapshot(
                         lock: lock,
@@ -1136,6 +1141,10 @@ struct MeasurementARView: UIViewRepresentable {
                   let frame = arView.session.currentFrame else {
                 return
             }
+            guard case .normal = frame.camera.trackingState else {
+                state.automaticTargetSelectionFailed(.cameraPoseUnavailable)
+                return
+            }
             let viewportSize = SIMD2<Float>(
                 Float(arView.bounds.width),
                 Float(arView.bounds.height)
@@ -1156,8 +1165,37 @@ struct MeasurementARView: UIViewRepresentable {
                     ) else {
                 return
             }
+            guard let depthData = frame.smoothedSceneDepth ?? frame.sceneDepth,
+                  let grid = depthGrid(from: depthData) else {
+                state.automaticTargetSelectionFailed(.surfaceUnavailable)
+                return
+            }
+            let imageResolution = frame.camera.imageResolution
+            guard let sample = frameDepthSampler.sample(
+                normalizedImagePoint: rawImagePoint,
+                grid: grid,
+                cameraImageResolutionPixels: SIMD2<Int>(
+                    Int(imageResolution.width.rounded()),
+                    Int(imageResolution.height.rounded())
+                ),
+                cameraIntrinsics: frame.camera.intrinsics,
+                cameraTransform: frame.camera.transform
+            ) else {
+                state.automaticTargetSelectionFailed(.surfaceUnavailable)
+                return
+            }
+            guard sample.confidence >= .medium else {
+                state.automaticTargetSelectionFailed(
+                    .insufficientDepthConfidence
+                )
+                return
+            }
             _ = state.selectAutomaticTarget(
-                rawCameraNormalizedPoint: rawImagePoint
+                rawCameraNormalizedPoint: rawImagePoint,
+                selectionSurface: TargetLockObservedSurface(
+                    worldPoint: sample.worldPosition,
+                    confidence: sample.confidence
+                )
             )
         }
 
@@ -1692,11 +1730,11 @@ struct MeasurementARView: UIViewRepresentable {
             let settledPreviewViewportSize = currentPreviewViewportSize()
                 ?? activeCapture.previewViewportSize
 
-            var exactPrompt = activeCapture.automaticAuthority?.prompt
-            if let authority = activeCapture.automaticAuthority,
-               let lockedContext = authority.lockedContext {
+            var exactPrompt: PhotoTargetSelectionPrompt?
+            if let authority = activeCapture.automaticAuthority {
                 guard let targetLock = activeCapture.targetLock,
-                      targetLock.captureContext == lockedContext else {
+                      targetLock.identity == authority.identity,
+                      targetLock.selectionContext == authority.selectionContext else {
                     let failure = TargetLockFrameValidationFailure
                         .invalidTargetEvidence
                     rejectAutomaticTargetFrame(
@@ -1706,23 +1744,54 @@ struct MeasurementARView: UIViewRepresentable {
                     )
                     return
                 }
-                let exactSample = exactTargetFrameSample(
-                    from: frame,
-                    lock: targetLock,
-                    viewportSize: settledPreviewViewportSize
-                )
-                let validation = targetFrameValidator.validate(
-                    lock: targetLock,
-                    subject: activeCapture.targetSubject,
-                    evidence: exactSample.evidence
-                )
-                let authoritativeValidation =
-                    targetFrameAuthorityTracker.exactFrameValidation(
-                        validation,
-                        identity: authority.identity,
-                        cameraEvidenceReacquisitionID:
-                            authority.cameraEvidenceReacquisitionID
+                let exactSample: ExactTargetFrameSample
+                let authoritativeValidation: TargetLockFrameValidation
+                if let lockedContext = authority.lockedContext {
+                    guard targetLock.captureContext == lockedContext else {
+                        rejectAutomaticTargetFrame(
+                            .invalidTargetEvidence,
+                            capture: activeCapture,
+                            authority: authority
+                        )
+                        return
+                    }
+                    exactSample = exactTargetFrameSample(
+                        from: frame,
+                        identity: lockedContext.identity,
+                        worldAnchor: lockedContext.worldAnchor,
+                        viewportSize: settledPreviewViewportSize
                     )
+                    let validation = targetFrameValidator.validate(
+                        lock: targetLock,
+                        subject: activeCapture.targetSubject,
+                        evidence: exactSample.evidence
+                    )
+                    authoritativeValidation =
+                        targetFrameAuthorityTracker.exactFrameValidation(
+                            validation,
+                            identity: authority.identity,
+                            cameraEvidenceReacquisitionID:
+                                authority.cameraEvidenceReacquisitionID
+                        )
+                } else {
+                    exactSample = exactTargetFrameSample(
+                        from: frame,
+                        identity: authority.selectionContext.identity,
+                        worldAnchor: authority.selectionContext.worldAnchor,
+                        viewportSize: settledPreviewViewportSize
+                    )
+                    authoritativeValidation =
+                        targetSelectionFrameValidator.validate(
+                            selection: authority.selectionContext,
+                            currentIdentity: targetLock.identity,
+                            currentCameraEvidenceReacquisitionID:
+                                authority.cameraEvidenceReacquisitionID,
+                            projectedPreviewPoint:
+                                exactSample.evidence.projectedPreviewPoint,
+                            observedSurface:
+                                exactSample.evidence.observedSurface
+                        )
+                }
                 guard case .valid = authoritativeValidation,
                       let rawImagePoint = exactSample.rawImagePoint else {
                     let failure: TargetLockFrameValidationFailure =
@@ -1891,7 +1960,7 @@ struct MeasurementARView: UIViewRepresentable {
             }
             let snapshot = captureVisualSnapshot
             let targetMarkerPoint: SIMD2<Float>?
-            if let worldAnchor = snapshot.targetLock?.worldAnchor {
+            if let worldAnchor = snapshot.targetLock?.previewWorldAnchor {
                 targetMarkerPoint = normalizedPreviewPoint(
                     worldPoint: worldAnchor,
                     frame: frame,
@@ -2034,14 +2103,39 @@ struct MeasurementARView: UIViewRepresentable {
             lock: TargetLock,
             viewportSize: SIMD2<Float>
         ) -> ExactTargetFrameSample {
-            guard let context = lock.captureContext,
+            guard let context = lock.captureContext else {
+                return ExactTargetFrameSample(
+                    evidence: TargetLockFrameEvidence(
+                        identity: lock.identity,
+                        projectedPreviewPoint: nil,
+                        cameraWorldPosition: nil,
+                        observedSurface: nil
+                    ),
+                    rawImagePoint: nil
+                )
+            }
+            return exactTargetFrameSample(
+                from: frame,
+                identity: context.identity,
+                worldAnchor: context.worldAnchor,
+                viewportSize: viewportSize
+            )
+        }
+
+        private func exactTargetFrameSample(
+            from frame: ARFrame,
+            identity: TargetLockIdentity,
+            worldAnchor: SIMD3<Float>,
+            viewportSize: SIMD2<Float>
+        ) -> ExactTargetFrameSample {
+            guard worldAnchor.targetLockAllFinite,
                   viewportSize.x.isFinite,
                   viewportSize.y.isFinite,
                   viewportSize.x > 0,
                   viewportSize.y > 0 else {
                 return ExactTargetFrameSample(
                     evidence: TargetLockFrameEvidence(
-                        identity: lock.identity,
+                        identity: identity,
                         projectedPreviewPoint: nil,
                         cameraWorldPosition: nil,
                         observedSurface: nil
@@ -2055,7 +2149,7 @@ struct MeasurementARView: UIViewRepresentable {
                 height: CGFloat(viewportSize.y)
             )
             let projectedPoint = frame.camera.projectPoint(
-                context.worldAnchor,
+                worldAnchor,
                 orientation: .portrait,
                 viewportSize: viewportCGSize
             )
@@ -2077,7 +2171,7 @@ struct MeasurementARView: UIViewRepresentable {
                 .flatMap(depthGrid(from:))
             let imageResolution = frame.camera.imageResolution
             let evidence = targetFrameEvidenceAdapter.makeEvidence(
-                identity: context.identity,
+                identity: identity,
                 projectedPreviewPointPixels: projectedPreviewPoint,
                 viewportSizePixels: viewportSize,
                 rawImagePoint: rawImagePoint,

@@ -6,6 +6,15 @@ struct TargetLockIdentity: Equatable, Hashable, Sendable {
     let measurementSeriesID: Int
 }
 
+/// Tap-frame LiDAR evidence that binds a fresh per-angle selection to one
+/// physical world point. The capture frame must reproject and revalidate this
+/// point before it can become a Vision prompt.
+struct TargetSelectionContext: Equatable, Sendable {
+    let identity: TargetLockIdentity
+    let worldAnchor: SIMD3<Float>
+    let cameraEvidenceReacquisitionID: Int
+}
+
 enum TargetLockState: Equatable, Sendable {
     case provisional
     case locked
@@ -58,6 +67,132 @@ struct TargetLockBounds: Equatable, Sendable {
     }
 }
 
+/// Immutable first-angle world reference retained after the per-angle target
+/// lock is retired. Fresh taps are still required, but they must resolve back
+/// to this same stationary volume before another angle can join the series.
+struct TargetSeriesReference: Equatable, Sendable {
+    let originIdentity: TargetLockIdentity
+    let subject: TargetLockSubject
+    let bounds: TargetLockBounds
+
+    var measurementSeriesID: Int {
+        originIdentity.measurementSeriesID
+    }
+}
+
+enum TargetSeriesOwnershipFailure: Equatable, Sendable {
+    case invalidEvidence
+    case staleSeries
+    case selectionOutsideReference
+    case captureMissesSelection
+
+    var actionMessage: String {
+        switch self {
+        case .invalidEvidence, .staleSeries:
+            "Retap the same item before taking the photo."
+        case .selectionOutsideReference:
+            "That tap appears to be on a different item. Retap the same item you used for angle 1."
+        case .captureMissesSelection:
+            "PackMeasure lost the item you tapped. Retap the same item and take the photo again."
+        }
+    }
+}
+
+enum TargetSeriesOwnershipValidation: Equatable, Sendable {
+    case valid
+    case rejected(TargetSeriesOwnershipFailure)
+}
+
+/// Uses ARKit's stable world coordinate system to prevent a similarly sized
+/// neighboring object from joining an existing multi-angle measurement.
+struct TargetSeriesOwnershipValidator: Equatable, Sendable {
+    var relativeBoundsSlack: Float = 0.10
+    var minimumBoundsSlackMeters: Float = 0.03
+    var maximumBoundsSlackMeters: Float = 0.08
+
+    func validateSelection(
+        _ surface: TargetLockObservedSurface,
+        reference: TargetSeriesReference,
+        measurementSeriesID: Int,
+        subject: TargetLockSubject
+    ) -> TargetSeriesOwnershipValidation {
+        guard configurationIsValid,
+              reference.measurementSeriesID == measurementSeriesID,
+              reference.subject == subject else {
+            return .rejected(.staleSeries)
+        }
+        guard reference.bounds.hasValidEvidence,
+              surface.worldPoint.targetLockAllFinite,
+              surface.confidence >= .medium,
+              let tolerance = boundsSlack(for: reference.bounds) else {
+            return .rejected(.invalidEvidence)
+        }
+        guard reference.bounds.contains(
+            surface.worldPoint,
+            slackMeters: tolerance
+        ) else {
+            return .rejected(.selectionOutsideReference)
+        }
+        return .valid
+    }
+
+    func validateCapture(
+        _ candidateBounds: TargetLockBounds,
+        selection: TargetSelectionContext,
+        reference: TargetSeriesReference?,
+        subject: TargetLockSubject
+    ) -> TargetSeriesOwnershipValidation {
+        guard configurationIsValid,
+              candidateBounds.hasValidEvidence,
+              selection.worldAnchor.targetLockAllFinite,
+              let candidateTolerance = boundsSlack(for: candidateBounds),
+              candidateBounds.contains(
+                selection.worldAnchor,
+                slackMeters: candidateTolerance
+              ) else {
+            return .rejected(.captureMissesSelection)
+        }
+
+        guard let reference else { return .valid }
+        guard reference.measurementSeriesID
+                == selection.identity.measurementSeriesID,
+              reference.subject == subject else {
+            return .rejected(.staleSeries)
+        }
+        guard reference.bounds.hasValidEvidence,
+              let referenceTolerance = boundsSlack(for: reference.bounds) else {
+            return .rejected(.invalidEvidence)
+        }
+        guard reference.bounds.contains(
+            selection.worldAnchor,
+            slackMeters: referenceTolerance
+        ) else {
+            return .rejected(.selectionOutsideReference)
+        }
+        return .valid
+    }
+
+    private var configurationIsValid: Bool {
+        relativeBoundsSlack.isFinite
+            && relativeBoundsSlack >= 0
+            && minimumBoundsSlackMeters.isFinite
+            && minimumBoundsSlackMeters >= 0
+            && maximumBoundsSlackMeters.isFinite
+            && maximumBoundsSlackMeters >= minimumBoundsSlackMeters
+    }
+
+    private func boundsSlack(for bounds: TargetLockBounds) -> Float? {
+        guard bounds.hasValidEvidence else { return nil }
+        let fullExtents = bounds.halfExtents * 2
+        let diagonal = simd_length(fullExtents)
+        guard diagonal.isFinite, diagonal > 0 else { return nil }
+        return min(
+            maximumBoundsSlackMeters,
+            max(minimumBoundsSlackMeters, diagonal * relativeBoundsSlack)
+        )
+    }
+}
+
 /// Immutable authority attached to an exact capture request. A delayed
 /// callback must still match the active target and measurement series.
 struct TargetCaptureContext: Equatable, Sendable {
@@ -69,6 +204,7 @@ struct TargetCaptureContext: Equatable, Sendable {
 struct TargetLock: Equatable, Sendable {
     let identity: TargetLockIdentity
     private(set) var state = TargetLockState.provisional
+    private(set) var selectionContext: TargetSelectionContext?
     private(set) var worldAnchor: SIMD3<Float>?
     private(set) var bounds: TargetLockBounds?
     private(set) var acceptedAngleCount = 0
@@ -83,6 +219,10 @@ struct TargetLock: Equatable, Sendable {
 
     var canCancelBeforeAcceptedEvidence: Bool {
         !ownsAcceptedEvidence
+    }
+
+    var previewWorldAnchor: SIMD3<Float>? {
+        worldAnchor ?? selectionContext?.worldAnchor
     }
 
     var captureContext: TargetCaptureContext? {
@@ -101,11 +241,31 @@ struct TargetLock: Equatable, Sendable {
     }
 
     @discardableResult
+    mutating func bindSelection(
+        worldAnchor: SIMD3<Float>,
+        cameraEvidenceReacquisitionID: Int
+    ) -> Bool {
+        guard state == .provisional,
+              selectionContext == nil,
+              worldAnchor.targetLockAllFinite,
+              cameraEvidenceReacquisitionID >= 0 else {
+            return false
+        }
+        selectionContext = TargetSelectionContext(
+            identity: identity,
+            worldAnchor: worldAnchor,
+            cameraEvidenceReacquisitionID: cameraEvidenceReacquisitionID
+        )
+        return true
+    }
+
+    @discardableResult
     mutating func promote(
         worldAnchor: SIMD3<Float>,
         bounds: TargetLockBounds
     ) -> Bool {
         guard state != .moved,
+              selectionContext != nil,
               worldAnchor.targetLockAllFinite,
               bounds.hasValidEvidence else {
             return false
@@ -156,6 +316,10 @@ struct TargetLockLifecycle: Equatable, Sendable {
         current?.captureContext
     }
 
+    var currentSelectionContext: TargetSelectionContext? {
+        current?.selectionContext
+    }
+
     @discardableResult
     mutating func select(
         measurementSeriesID: Int,
@@ -171,6 +335,19 @@ struct TargetLockLifecycle: Equatable, Sendable {
         )
         current = TargetLock(identity: identity)
         return identity
+    }
+
+    @discardableResult
+    mutating func bindSelection(
+        identity: TargetLockIdentity,
+        worldAnchor: SIMD3<Float>,
+        cameraEvidenceReacquisitionID: Int
+    ) -> Bool {
+        guard current?.identity == identity else { return false }
+        return current?.bindSelection(
+            worldAnchor: worldAnchor,
+            cameraEvidenceReacquisitionID: cameraEvidenceReacquisitionID
+        ) == true
     }
 
     @discardableResult
@@ -231,7 +408,7 @@ struct TargetLockLifecycle: Equatable, Sendable {
     }
 }
 
-private extension SIMD3 where Scalar == Float {
+extension SIMD3 where Scalar == Float {
     var targetLockAllFinite: Bool {
         x.isFinite && y.isFinite && z.isFinite
     }

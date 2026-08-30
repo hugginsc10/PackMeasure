@@ -9,6 +9,162 @@ struct TargetLockFrameValidationTests {
     private let staleID = UUID(uuidString: "44444444-4444-4444-4444-444444444444")!
 
     @Test
+    func provisionalSelectionExactCaptureFrameMatchIsAccepted() {
+        let selection = selectionContext()
+
+        let result = TargetSelectionFrameValidator().validate(
+            selection: selection,
+            currentIdentity: selection.identity,
+            currentCameraEvidenceReacquisitionID: 17,
+            projectedPreviewPoint: SIMD2<Float>(0.5, 0.5),
+            observedSurface: TargetLockObservedSurface(
+                worldPoint: selection.worldAnchor,
+                confidence: .medium
+            )
+        )
+
+        #expect(result == .valid)
+    }
+
+    @Test
+    func provisionalSelectionAcceptsExactSurfaceDistanceToleranceBoundary() {
+        let selection = selectionContext(worldAnchor: .zero)
+
+        let result = TargetSelectionFrameValidator().validate(
+            selection: selection,
+            currentIdentity: selection.identity,
+            currentCameraEvidenceReacquisitionID: 17,
+            projectedPreviewPoint: SIMD2<Float>(0.5, 0.5),
+            observedSurface: TargetLockObservedSurface(
+                worldPoint: SIMD3<Float>(0.08, 0, 0),
+                confidence: .high
+            )
+        )
+
+        #expect(result == .valid)
+    }
+
+    @Test
+    func provisionalSelectionRejectsSurfaceImmediatelyOutsideTolerance() {
+        let selection = selectionContext(worldAnchor: .zero)
+
+        let result = TargetSelectionFrameValidator().validate(
+            selection: selection,
+            currentIdentity: selection.identity,
+            currentCameraEvidenceReacquisitionID: 17,
+            projectedPreviewPoint: SIMD2<Float>(0.5, 0.5),
+            observedSurface: TargetLockObservedSurface(
+                worldPoint: SIMD3<Float>(0.080_1, 0, 0),
+                confidence: .high
+            )
+        )
+
+        #expect(result == .rejected(.selectionSurfaceMismatch))
+        #expect(
+            TargetLockFrameValidationFailure.selectionSurfaceMismatch.actionMessage
+                == "The item moved after you selected it. Retap the item and take the photo again."
+        )
+    }
+
+    @Test
+    func provisionalSelectionRequiresCurrentMediumConfidenceSurface() {
+        let selection = selectionContext()
+        let validator = TargetSelectionFrameValidator()
+
+        #expect(
+            validator.validate(
+                selection: selection,
+                currentIdentity: selection.identity,
+                currentCameraEvidenceReacquisitionID: 17,
+                projectedPreviewPoint: SIMD2<Float>(0.5, 0.5),
+                observedSurface: nil
+            ) == .rejected(.surfaceUnavailable)
+        )
+        #expect(
+            validator.validate(
+                selection: selection,
+                currentIdentity: selection.identity,
+                currentCameraEvidenceReacquisitionID: 17,
+                projectedPreviewPoint: SIMD2<Float>(0.5, 0.5),
+                observedSurface: TargetLockObservedSurface(
+                    worldPoint: selection.worldAnchor,
+                    confidence: .low
+                )
+            ) == .rejected(.insufficientDepthConfidence)
+        )
+    }
+
+    @Test
+    func provisionalSelectionRejectsStaleIdentityAndCameraEpoch() {
+        let selection = selectionContext()
+        let surface = TargetLockObservedSurface(
+            worldPoint: selection.worldAnchor,
+            confidence: .high
+        )
+        let validator = TargetSelectionFrameValidator()
+
+        #expect(
+            validator.validate(
+                selection: selection,
+                currentIdentity: TargetLockIdentity(
+                    targetID: staleID,
+                    measurementSeriesID: selection.identity.measurementSeriesID
+                ),
+                currentCameraEvidenceReacquisitionID: 17,
+                projectedPreviewPoint: SIMD2<Float>(0.5, 0.5),
+                observedSurface: surface
+            ) == .rejected(.staleIdentity)
+        )
+        #expect(
+            validator.validate(
+                selection: selection,
+                currentIdentity: selection.identity,
+                currentCameraEvidenceReacquisitionID: 18,
+                projectedPreviewPoint: SIMD2<Float>(0.5, 0.5),
+                observedSurface: surface
+            ) == .rejected(.invalidTargetEvidence)
+        )
+    }
+
+    @Test
+    func provisionalSelectionEnforcesProtectedPreviewMargin() {
+        let selection = selectionContext()
+        let surface = TargetLockObservedSurface(
+            worldPoint: selection.worldAnchor,
+            confidence: .high
+        )
+        let validator = TargetSelectionFrameValidator()
+
+        #expect(
+            validator.validate(
+                selection: selection,
+                currentIdentity: selection.identity,
+                currentCameraEvidenceReacquisitionID: 17,
+                projectedPreviewPoint: SIMD2<Float>(0.08, 0.92),
+                observedSurface: surface
+            ) == .valid
+        )
+        #expect(
+            validator.validate(
+                selection: selection,
+                currentIdentity: selection.identity,
+                currentCameraEvidenceReacquisitionID: 17,
+                projectedPreviewPoint: SIMD2<Float>(0.079_9, 0.5),
+                observedSurface: surface
+            ) == .rejected(.outsideVisiblePreview)
+        )
+        #expect(
+            validator.validate(
+                selection: selection,
+                currentIdentity: selection.identity,
+                currentCameraEvidenceReacquisitionID: 17,
+                projectedPreviewPoint: nil,
+                observedSurface: surface
+            ) == .rejected(.projectionUnavailable)
+        )
+    }
+
+    @Test
     func exactEightPercentPreviewBoundaryIsAccepted() throws {
         let lock = try lockedTarget()
         let validator = TargetLockFrameValidator()
@@ -328,6 +484,10 @@ struct TargetLockFrameValidationTests {
     ) throws -> TargetLock {
         let identity = TargetLockIdentity(targetID: targetID, measurementSeriesID: 9)
         var lock = TargetLock(identity: identity)
+        let bound = lock.bindSelection(
+            worldAnchor: SIMD3<Float>(0, 0, 0.49),
+            cameraEvidenceReacquisitionID: 17
+        )
         let promoted = lock.promote(
             worldAnchor: SIMD3<Float>(0, 0, 0.5),
             bounds: bounds ?? TargetLockBounds(
@@ -336,8 +496,19 @@ struct TargetLockFrameValidationTests {
                 yawRadians: 0
             )
         )
+        #expect(bound)
         #expect(promoted)
         return lock
+    }
+
+    private func selectionContext(
+        worldAnchor: SIMD3<Float> = SIMD3<Float>(0.1, 0.2, 0.3)
+    ) -> TargetSelectionContext {
+        TargetSelectionContext(
+            identity: TargetLockIdentity(targetID: targetID, measurementSeriesID: 9),
+            worldAnchor: worldAnchor,
+            cameraEvidenceReacquisitionID: 17
+        )
     }
 
     private func frameEvidence(

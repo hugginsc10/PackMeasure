@@ -18,6 +18,8 @@ struct TargetLockTests {
         #expect(lifecycle.current?.identity == identity)
         #expect(lifecycle.current?.state == .provisional)
         #expect(lifecycle.current?.acceptedAngleCount == 0)
+        #expect(lifecycle.currentSelectionContext == nil)
+        #expect(lifecycle.current?.previewWorldAnchor == nil)
         #expect(lifecycle.currentCaptureContext == nil)
     }
 
@@ -26,6 +28,12 @@ struct TargetLockTests {
         var lifecycle = TargetLockLifecycle()
         let identity = lifecycle.select(measurementSeriesID: 7, id: firstID)
         let bounds = targetBounds()
+        let selectionAnchor = SIMD3<Float>(0.1, 0.2, 0.3)
+        let bound = lifecycle.bindSelection(
+            identity: identity,
+            worldAnchor: selectionAnchor,
+            cameraEvidenceReacquisitionID: 11
+        )
 
         let promoted = lifecycle.promote(
             identity: identity,
@@ -33,8 +41,16 @@ struct TargetLockTests {
             bounds: bounds
         )
 
+        #expect(bound)
         #expect(promoted)
         #expect(lifecycle.current?.state == .locked)
+        #expect(
+            lifecycle.currentSelectionContext == TargetSelectionContext(
+                identity: identity,
+                worldAnchor: selectionAnchor,
+                cameraEvidenceReacquisitionID: 11
+            )
+        )
         #expect(
             lifecycle.currentCaptureContext == TargetCaptureContext(
                 identity: identity,
@@ -48,6 +64,11 @@ struct TargetLockTests {
     func nonFiniteOrDegenerateWorldEvidenceFailsClosed() {
         var lifecycle = TargetLockLifecycle()
         let identity = lifecycle.select(measurementSeriesID: 7, id: firstID)
+        let bound = lifecycle.bindSelection(
+            identity: identity,
+            worldAnchor: SIMD3<Float>(0, 0, 0.5),
+            cameraEvidenceReacquisitionID: 11
+        )
 
         let nonFinitePromotion = lifecycle.promote(
             identity: identity,
@@ -64,10 +85,122 @@ struct TargetLockTests {
             )
         )
 
+        #expect(bound)
         #expect(!nonFinitePromotion)
         #expect(!degeneratePromotion)
         #expect(lifecycle.current?.state == .provisional)
         #expect(lifecycle.currentCaptureContext == nil)
+    }
+
+    @Test
+    func promotionRequiresTapFrameSelectionEvidence() {
+        var lifecycle = TargetLockLifecycle()
+        let identity = lifecycle.select(measurementSeriesID: 7, id: firstID)
+
+        let promoted = lifecycle.promote(
+            identity: identity,
+            worldAnchor: SIMD3<Float>(0, 0, 0.5),
+            bounds: targetBounds()
+        )
+
+        #expect(!promoted)
+        #expect(lifecycle.current?.state == .provisional)
+        #expect(lifecycle.currentCaptureContext == nil)
+    }
+
+    @Test
+    func selectionBindingCapturesIdentityAnchorAndCameraEpoch() throws {
+        var lifecycle = TargetLockLifecycle()
+        let identity = lifecycle.select(measurementSeriesID: 7, id: firstID)
+        let selectionAnchor = SIMD3<Float>(0.15, -0.2, 0.7)
+
+        let bound = lifecycle.bindSelection(
+            identity: identity,
+            worldAnchor: selectionAnchor,
+            cameraEvidenceReacquisitionID: 23
+        )
+
+        #expect(bound)
+        #expect(
+            lifecycle.currentSelectionContext == TargetSelectionContext(
+                identity: identity,
+                worldAnchor: selectionAnchor,
+                cameraEvidenceReacquisitionID: 23
+            )
+        )
+        #expect(lifecycle.current?.previewWorldAnchor == selectionAnchor)
+        #expect(lifecycle.currentCaptureContext == nil)
+    }
+
+    @Test
+    func selectionBindingIsOneShotAndImmutable() throws {
+        var lifecycle = TargetLockLifecycle()
+        let identity = lifecycle.select(measurementSeriesID: 7, id: firstID)
+        let originalAnchor = SIMD3<Float>(0.1, 0.2, 0.3)
+        let replacementAnchor = SIMD3<Float>(9, 8, 7)
+
+        let firstBinding = lifecycle.bindSelection(
+            identity: identity,
+            worldAnchor: originalAnchor,
+            cameraEvidenceReacquisitionID: 3
+        )
+        let replacementBinding = lifecycle.bindSelection(
+            identity: identity,
+            worldAnchor: replacementAnchor,
+            cameraEvidenceReacquisitionID: 4
+        )
+
+        #expect(firstBinding)
+        #expect(!replacementBinding)
+        let retained = try #require(lifecycle.currentSelectionContext)
+        #expect(retained.worldAnchor == originalAnchor)
+        #expect(retained.cameraEvidenceReacquisitionID == 3)
+    }
+
+    @Test
+    func invalidSelectionEvidenceFailsClosedWithoutPartialBinding() {
+        var lifecycle = TargetLockLifecycle()
+        let identity = lifecycle.select(measurementSeriesID: 7, id: firstID)
+
+        let nonFiniteBinding = lifecycle.bindSelection(
+            identity: identity,
+            worldAnchor: SIMD3<Float>(.nan, 0, 0.5),
+            cameraEvidenceReacquisitionID: 1
+        )
+        let invalidEpochBinding = lifecycle.bindSelection(
+            identity: identity,
+            worldAnchor: SIMD3<Float>(0, 0, 0.5),
+            cameraEvidenceReacquisitionID: -1
+        )
+
+        #expect(!nonFiniteBinding)
+        #expect(!invalidEpochBinding)
+        #expect(lifecycle.currentSelectionContext == nil)
+        #expect(lifecycle.current?.previewWorldAnchor == nil)
+    }
+
+    @Test
+    func previewAnchorUsesTapSelectionUntilPromotionThenCapturedAnchor() {
+        var lifecycle = TargetLockLifecycle()
+        let identity = lifecycle.select(measurementSeriesID: 7, id: firstID)
+        let selectionAnchor = SIMD3<Float>(0.1, 0.2, 0.3)
+        let capturedAnchor = SIMD3<Float>(0.2, 0.3, 0.4)
+
+        let bound = lifecycle.bindSelection(
+            identity: identity,
+            worldAnchor: selectionAnchor,
+            cameraEvidenceReacquisitionID: 8
+        )
+        #expect(bound)
+        #expect(lifecycle.current?.previewWorldAnchor == selectionAnchor)
+
+        let promoted = lifecycle.promote(
+            identity: identity,
+            worldAnchor: capturedAnchor,
+            bounds: targetBounds()
+        )
+        #expect(promoted)
+        #expect(lifecycle.current?.previewWorldAnchor == capturedAnchor)
     }
 
     @Test
@@ -144,6 +277,11 @@ struct TargetLockTests {
         #expect(canceled)
 
         let replacement = lifecycle.select(measurementSeriesID: 7, id: secondID)
+        let bound = lifecycle.bindSelection(
+            identity: replacement,
+            worldAnchor: SIMD3<Float>(0, 0, 0.5),
+            cameraEvidenceReacquisitionID: 11
+        )
         let promoted = lifecycle.promote(
             identity: replacement,
             worldAnchor: SIMD3<Float>(0, 0, 0.5),
@@ -151,6 +289,7 @@ struct TargetLockTests {
         )
         let recordedDelayedContext = lifecycle.recordAcceptedAngle(using: delayedContext)
 
+        #expect(bound)
         #expect(promoted)
         #expect(!recordedDelayedContext)
         #expect(lifecycle.current?.identity == replacement)
@@ -228,6 +367,128 @@ struct TargetLockTests {
         #expect(bounds.contains(SIMD3<Float>(0.21, 0, 0), slackMeters: 0.02))
     }
 
+    @Test
+    func seriesReferenceAcceptsSameVolumeSurfaceAndRejectsNeighboringItem() {
+        let identity = TargetLockIdentity(
+            targetID: firstID,
+            measurementSeriesID: 7
+        )
+        let reference = TargetSeriesReference(
+            originIdentity: identity,
+            subject: .box,
+            bounds: targetBounds()
+        )
+        let validator = TargetSeriesOwnershipValidator()
+
+        #expect(
+            validator.validateSelection(
+                TargetLockObservedSurface(
+                    worldPoint: SIMD3<Float>(0.5, 0, 0),
+                    confidence: .medium
+                ),
+                reference: reference,
+                measurementSeriesID: 7,
+                subject: .box
+            ) == .valid
+        )
+        #expect(
+            validator.validateSelection(
+                TargetLockObservedSurface(
+                    worldPoint: SIMD3<Float>(0.7, 0, 0),
+                    confidence: .high
+                ),
+                reference: reference,
+                measurementSeriesID: 7,
+                subject: .box
+            ) == .rejected(.selectionOutsideReference)
+        )
+    }
+
+    @Test
+    func seriesReferenceRejectsStaleSeriesAndSubject() {
+        let identity = TargetLockIdentity(
+            targetID: firstID,
+            measurementSeriesID: 7
+        )
+        let reference = TargetSeriesReference(
+            originIdentity: identity,
+            subject: .box,
+            bounds: targetBounds()
+        )
+        let surface = TargetLockObservedSurface(
+            worldPoint: .zero,
+            confidence: .high
+        )
+        let validator = TargetSeriesOwnershipValidator()
+
+        #expect(
+            validator.validateSelection(
+                surface,
+                reference: reference,
+                measurementSeriesID: 8,
+                subject: .box
+            ) == .rejected(.staleSeries)
+        )
+        #expect(
+            validator.validateSelection(
+                surface,
+                reference: reference,
+                measurementSeriesID: 7,
+                subject: .generalItem
+            ) == .rejected(.staleSeries)
+        )
+    }
+
+    @Test
+    func captureMustOwnTapButDoesNotRequireFittedCentersToMatch() {
+        let firstIdentity = TargetLockIdentity(
+            targetID: firstID,
+            measurementSeriesID: 7
+        )
+        let laterIdentity = TargetLockIdentity(
+            targetID: secondID,
+            measurementSeriesID: 7
+        )
+        let reference = TargetSeriesReference(
+            originIdentity: firstIdentity,
+            subject: .box,
+            bounds: targetBounds()
+        )
+        let selection = TargetSelectionContext(
+            identity: laterIdentity,
+            worldAnchor: SIMD3<Float>(0.4, 0, 0),
+            cameraEvidenceReacquisitionID: 12
+        )
+        let shiftedCandidate = TargetLockBounds(
+            center: SIMD3<Float>(0.55, 0, 0),
+            halfExtents: SIMD3<Float>(0.2, 0.2, 0.2),
+            yawRadians: 0
+        )
+        let missedCandidate = TargetLockBounds(
+            center: SIMD3<Float>(2, 0, 0),
+            halfExtents: SIMD3<Float>(0.2, 0.2, 0.2),
+            yawRadians: 0
+        )
+        let validator = TargetSeriesOwnershipValidator()
+
+        #expect(
+            validator.validateCapture(
+                shiftedCandidate,
+                selection: selection,
+                reference: reference,
+                subject: .box
+            ) == .valid
+        )
+        #expect(
+            validator.validateCapture(
+                missedCandidate,
+                selection: selection,
+                reference: reference,
+                subject: .box
+            ) == .rejected(.captureMissesSelection)
+        )
+    }
+
     private func lockedLifecycle(
         id: UUID? = nil,
         measurementSeriesID: Int = 7
@@ -236,6 +497,11 @@ struct TargetLockTests {
         let identity = lifecycle.select(
             measurementSeriesID: measurementSeriesID,
             id: id ?? firstID
+        )
+        _ = lifecycle.bindSelection(
+            identity: identity,
+            worldAnchor: SIMD3<Float>(0, 0, 0.49),
+            cameraEvidenceReacquisitionID: 11
         )
         _ = lifecycle.promote(
             identity: identity,
