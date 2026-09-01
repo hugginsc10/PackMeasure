@@ -1052,37 +1052,163 @@ struct ScannerOrchestrationTests {
     }
 
     @Test @MainActor
-    func freshTapOutsideFirstAngleReferenceIsRejectedWithoutMutatingSeries() throws {
+    func newlyVisibleTapJoinsSeriesWhenCapturedBoundsOverlapFirstAngle() throws {
+        let state = try acceptedFirstAngleState(center: .zero)
+        let seriesReference = try #require(state.seriesTargetReference)
+        let newlyVisibleTap = SIMD3<Float>(0.85, 0, 0)
+        let overlappingBounds = TargetLockBounds(
+            center: SIMD3<Float>(0.65, 0, 0),
+            halfExtents: SIMD3<Float>(0.25, 0.5, 0.5),
+            yawRadians: 0
+        )
+
+        state.prepareForAiming()
+        #expect(state.previewBecameReady())
+        let identity = try #require(
+            state.selectAutomaticTarget(
+                rawCameraNormalizedPoint: SIMD2<Float>(0.72, 0.41),
+                selectionSurface: selectionSurface(worldPoint: newlyVisibleTap),
+                id: secondTargetID
+            )
+        )
+        let authority = try #require(state.beginAutomaticCapture())
+        let progress = try #require(
+            state.receiveAutomaticMeasurement(
+                automaticCapture(
+                    center: overlappingBounds.center,
+                    boundsOverride: overlappingBounds,
+                    viewpointPosition: SIMD3<Float>(2, 0, 0),
+                    horizontalForward: SIMD2<Float>(-1, 0)
+                ),
+                authority: authority
+            )
+        )
+
+        #expect(identity.targetID == secondTargetID)
+        #expect(state.pendingAutomaticCaptureAuthority == nil)
+        #expect(
+            progress == .needsAnotherAngle(
+                reason: .thirdAngleRequired,
+                acceptedCount: 2
+            )
+        )
+        #expect(state.capturedAngleRecords.count == 2)
+        #expect(state.seriesTargetReference == seriesReference)
+        #expect(state.lastAutomaticSeriesOwnershipFailure == nil)
+    }
+
+    @Test @MainActor
+    func positiveGapNeighborIsRejectedWithoutMutatingAcceptedSeries() throws {
         let state = try acceptedFirstAngleState(center: .zero)
         let acceptedRecords = state.capturedAngleRecords
         let acceptedWorkflow = state.measurementWorkflow
         let seriesReference = try #require(state.seriesTargetReference)
+        let neighborTap = SIMD3<Float>(1.05, 0, 0)
+        let neighborBounds = TargetLockBounds(
+            center: neighborTap,
+            halfExtents: SIMD3<Float>(0.45, 0.5, 0.5),
+            yawRadians: 0
+        )
 
         state.prepareForAiming()
         #expect(state.previewBecameReady())
-
-        let rejectedIdentity = state.selectAutomaticTarget(
-            rawCameraNormalizedPoint: SIMD2<Float>(0.72, 0.41),
-            selectionSurface: selectionSurface(
-                worldPoint: SIMD3<Float>(3, 0, 0)
+        _ = try #require(
+            state.selectAutomaticTarget(
+                rawCameraNormalizedPoint: SIMD2<Float>(0.72, 0.41),
+                selectionSurface: selectionSurface(worldPoint: neighborTap),
+                id: secondTargetID
+            )
+        )
+        let authority = try #require(state.beginAutomaticCapture())
+        let progress = state.receiveAutomaticMeasurement(
+            automaticCapture(
+                center: neighborBounds.center,
+                boundsOverride: neighborBounds,
+                viewpointPosition: SIMD3<Float>(2, 0, 0),
+                horizontalForward: SIMD2<Float>(-1, 0)
             ),
-            id: secondTargetID
+            authority: authority
         )
 
-        #expect(rejectedIdentity == nil)
+        let failure = TargetSeriesOwnershipFailure.selectionOutsideReference
+        #expect(progress == nil)
+        #expect(state.capturedAngleRecords == acceptedRecords)
+        #expect(state.measurementWorkflow == acceptedWorkflow)
+        #expect(state.seriesTargetReference == seriesReference)
         #expect(state.activeTargetIdentity == nil)
-        #expect(state.pendingAutomaticCaptureAuthority == nil)
+        #expect(state.lastAutomaticSeriesOwnershipFailure == failure)
+        #expect(state.targetFrameValidationMessage == failure.actionMessage)
+        #expect(state.phase == .failed(failure.actionMessage))
+    }
+
+    @Test @MainActor
+    func thirdAngleCannotChainThroughOnlySecondAngleBounds() throws {
+        let state = try acceptedFirstAngleState(center: .zero)
+        let seriesReference = try #require(state.seriesTargetReference)
+        let secondTap = SIMD3<Float>(0.85, 0, 0)
+        let secondBounds = TargetLockBounds(
+            center: SIMD3<Float>(0.65, 0, 0),
+            halfExtents: SIMD3<Float>(0.25, 0.5, 0.5),
+            yawRadians: 0
+        )
+
+        state.prepareForAiming()
+        #expect(state.previewBecameReady())
+        _ = try #require(
+            state.selectAutomaticTarget(
+                rawCameraNormalizedPoint: SIMD2<Float>(0.72, 0.41),
+                selectionSurface: selectionSurface(worldPoint: secondTap),
+                id: secondTargetID
+            )
+        )
+        let secondAuthority = try #require(state.beginAutomaticCapture())
+        _ = try #require(
+            state.receiveAutomaticMeasurement(
+                automaticCapture(
+                    center: secondBounds.center,
+                    boundsOverride: secondBounds,
+                    viewpointPosition: SIMD3<Float>(2, 0, 0),
+                    horizontalForward: SIMD2<Float>(-1, 0)
+                ),
+                authority: secondAuthority
+            )
+        )
+        let acceptedRecords = state.capturedAngleRecords
+        let acceptedWorkflow = state.measurementWorkflow
+        let thirdTap = SIMD3<Float>(1.35, 0, 0)
+        let thirdBounds = TargetLockBounds(
+            center: SIMD3<Float>(1.2, 0, 0),
+            halfExtents: SIMD3<Float>(0.25, 0.5, 0.5),
+            yawRadians: 0
+        )
+
+        state.prepareForAiming()
+        #expect(state.previewBecameReady())
+        _ = try #require(
+            state.selectAutomaticTarget(
+                rawCameraNormalizedPoint: SIMD2<Float>(0.58, 0.47),
+                selectionSurface: selectionSurface(worldPoint: thirdTap),
+                id: thirdTargetID
+            )
+        )
+        let thirdAuthority = try #require(state.beginAutomaticCapture())
+        let progress = state.receiveAutomaticMeasurement(
+            automaticCapture(
+                center: thirdBounds.center,
+                boundsOverride: thirdBounds,
+                viewpointPosition: SIMD3<Float>(2, 0.3, 1),
+                horizontalForward: SIMD2<Float>(-1, -1)
+            ),
+            authority: thirdAuthority
+        )
+
+        #expect(progress == nil)
         #expect(state.capturedAngleRecords == acceptedRecords)
         #expect(state.measurementWorkflow == acceptedWorkflow)
         #expect(state.seriesTargetReference == seriesReference)
         #expect(
             state.lastAutomaticSeriesOwnershipFailure
                 == .selectionOutsideReference
-        )
-        #expect(
-            state.targetFrameValidationMessage
-                == TargetSeriesOwnershipFailure.selectionOutsideReference
-                    .actionMessage
         )
     }
 

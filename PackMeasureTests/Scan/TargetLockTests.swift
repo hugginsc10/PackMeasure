@@ -368,7 +368,7 @@ struct TargetLockTests {
     }
 
     @Test
-    func seriesReferenceAcceptsSameVolumeSurfaceAndRejectsNeighboringItem() {
+    func seriesSelectionAllowsNewlyVisibleSurfaceToRemainProvisional() {
         let identity = TargetLockIdentity(
             targetID: firstID,
             measurementSeriesID: 7
@@ -400,7 +400,29 @@ struct TargetLockTests {
                 reference: reference,
                 measurementSeriesID: 7,
                 subject: .box
-            ) == .rejected(.selectionOutsideReference)
+            ) == .valid
+        )
+        #expect(
+            validator.validateSelection(
+                TargetLockObservedSurface(
+                    worldPoint: SIMD3<Float>(0.85, 0, 0),
+                    confidence: .high
+                ),
+                reference: reference,
+                measurementSeriesID: 7,
+                subject: .box
+            ) == .valid
+        )
+        #expect(
+            validator.validateSelection(
+                TargetLockObservedSurface(
+                    worldPoint: SIMD3<Float>(0.7, 0, 0),
+                    confidence: .low
+                ),
+                reference: reference,
+                measurementSeriesID: 7,
+                subject: .box
+            ) == .rejected(.invalidEvidence)
         )
     }
 
@@ -486,6 +508,121 @@ struct TargetLockTests {
                 reference: reference,
                 subject: .box
             ) == .rejected(.captureMissesSelection)
+        )
+    }
+
+    @Test
+    func captureAcceptsNewlyVisibleTapWhenCandidateOverlapsReference() {
+        let reference = seriesReference(bounds: targetBounds())
+        let selection = selectionContext(worldAnchor: SIMD3<Float>(0.85, 0, 0))
+        let overlappingCandidate = TargetLockBounds(
+            center: SIMD3<Float>(0.65, 0, 0),
+            halfExtents: SIMD3<Float>(0.25, 0.4, 0.4),
+            yawRadians: 0
+        )
+
+        #expect(
+            TargetSeriesOwnershipValidator().validateCapture(
+                overlappingCandidate,
+                selection: selection,
+                reference: reference,
+                subject: .box
+            ) == .valid
+        )
+    }
+
+    @Test
+    func captureRejectsPositiveGapNeighborEvenWhenItOwnsFreshTap() {
+        let reference = seriesReference(bounds: targetBounds())
+        let selection = selectionContext(worldAnchor: SIMD3<Float>(1.05, 0, 0))
+        let separatedCandidate = TargetLockBounds(
+            center: SIMD3<Float>(1.05, 0, 0),
+            halfExtents: SIMD3<Float>(0.45, 0.4, 0.4),
+            yawRadians: 0
+        )
+
+        #expect(
+            TargetSeriesOwnershipValidator().validateCapture(
+                separatedCandidate,
+                selection: selection,
+                reference: reference,
+                subject: .box
+            ) == .rejected(.selectionOutsideReference)
+        )
+    }
+
+    @Test
+    func captureRejectsBoundaryOnlyContact() {
+        let reference = seriesReference(bounds: targetBounds())
+        let selection = selectionContext(worldAnchor: SIMD3<Float>(1, 0, 0))
+        let touchingCandidate = TargetLockBounds(
+            center: SIMD3<Float>(1, 0, 0),
+            halfExtents: SIMD3<Float>(0.5, 0.4, 0.4),
+            yawRadians: 0
+        )
+
+        #expect(
+            TargetSeriesOwnershipValidator().validateCapture(
+                touchingCandidate,
+                selection: selection,
+                reference: reference,
+                subject: .box
+            ) == .rejected(.selectionOutsideReference)
+        )
+    }
+
+    @Test
+    func captureRejectsYawedAABBOverlapWithoutOrientedInteriorOverlap() {
+        let yaw = Float.pi / 4
+        let referenceBounds = TargetLockBounds(
+            center: .zero,
+            halfExtents: SIMD3<Float>(0.7, 0.4, 0.1),
+            yawRadians: yaw
+        )
+        let perpendicularOffset = SIMD3<Float>(
+            -sin(yaw) * 0.3,
+            0,
+            cos(yaw) * 0.3
+        )
+        let candidate = TargetLockBounds(
+            center: perpendicularOffset,
+            halfExtents: SIMD3<Float>(0.7, 0.4, 0.1),
+            yawRadians: yaw
+        )
+
+        #expect(
+            TargetSeriesOwnershipValidator().validateCapture(
+                candidate,
+                selection: selectionContext(worldAnchor: perpendicularOffset),
+                reference: seriesReference(bounds: referenceBounds),
+                subject: .box
+            ) == .rejected(.selectionOutsideReference)
+        )
+    }
+
+    private func seriesReference(
+        bounds: TargetLockBounds
+    ) -> TargetSeriesReference {
+        TargetSeriesReference(
+            originIdentity: TargetLockIdentity(
+                targetID: firstID,
+                measurementSeriesID: 7
+            ),
+            subject: .box,
+            bounds: bounds
+        )
+    }
+
+    private func selectionContext(
+        worldAnchor: SIMD3<Float>
+    ) -> TargetSelectionContext {
+        TargetSelectionContext(
+            identity: TargetLockIdentity(
+                targetID: secondID,
+                measurementSeriesID: 7
+            ),
+            worldAnchor: worldAnchor,
+            cameraEvidenceReacquisitionID: 12
         )
     }
 
