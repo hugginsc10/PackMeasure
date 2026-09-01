@@ -58,6 +58,8 @@ enum SingleShotCaptureFailure: Error, Equatable, Sendable {
     case sceneDepthUnavailable
     case depthGridUnreadable
     case foreground(ForegroundMaskAdapterError)
+    case targetSelection(PhotoTargetSelectionError)
+    case targetLock(TargetLockFrameValidationFailure)
     case photo(PhotoObjectMeasurementError)
     case unexpectedProcessingFailure(domain: String, code: Int)
 
@@ -81,6 +83,10 @@ enum SingleShotCaptureFailure: Error, Equatable, Sendable {
             .processing
         case .foreground(let error):
             error.retryCategory
+        case .targetSelection(let error):
+            error.retryCategory
+        case .targetLock:
+            .isolation
         case .photo(let error):
             error.retryCategory
         }
@@ -94,6 +100,10 @@ enum SingleShotCaptureFailure: Error, Equatable, Sendable {
             .unavailable
         case .foreground(let error):
             error.disposition
+        case .targetSelection(let error):
+            error.disposition
+        case .targetLock:
+            .targetRejected
         case .photo(let error):
             error.retryCategory == .processing ? .unavailable : .targetRejected
         }
@@ -107,6 +117,10 @@ enum SingleShotCaptureFailure: Error, Equatable, Sendable {
             "C02"
         case .foreground(let error):
             error.diagnosticCode
+        case .targetSelection(let error):
+            error.diagnosticCode
+        case .targetLock:
+            "T03"
         case .photo(let error):
             error.diagnosticCode
         case .unexpectedProcessingFailure:
@@ -122,10 +136,56 @@ enum SingleShotCaptureFailure: Error, Equatable, Sendable {
             "depth_grid_unreadable"
         case .foreground(let error):
             error.diagnosticDescription
+        case .targetSelection(let error):
+            error.diagnosticDescription
+        case .targetLock(let reason):
+            "target_lock_frame_rejected,reason=\(String(describing: reason))"
         case .photo(let error):
             error.diagnosticDescription
         case let .unexpectedProcessingFailure(domain, code):
             "unexpected_processing_failure,domain=\(domain),code=\(code)"
+        }
+    }
+}
+
+extension PhotoTargetSelectionError {
+    var retryCategory: ScannerPhotoRetryCategory {
+        switch self {
+        case .invalidTargetSelectionPoint:
+            .processing
+        case .staleTargetSelectionPrompt, .noForegroundAtTargetPoint:
+            .isolation
+        }
+    }
+
+    var disposition: SingleShotFailureDisposition {
+        switch self {
+        case .invalidTargetSelectionPoint:
+            .unavailable
+        case .staleTargetSelectionPrompt, .noForegroundAtTargetPoint:
+            .targetRejected
+        }
+    }
+
+    var diagnosticCode: String {
+        switch self {
+        case .invalidTargetSelectionPoint:
+            "P10"
+        case .staleTargetSelectionPrompt:
+            "T02"
+        case .noForegroundAtTargetPoint:
+            "F07"
+        }
+    }
+
+    var diagnosticDescription: String {
+        switch self {
+        case .invalidTargetSelectionPoint:
+            "invalid_target_selection_point"
+        case .staleTargetSelectionPrompt:
+            "stale_target_selection_prompt"
+        case .noForegroundAtTargetPoint:
+            "no_foreground_at_target_point"
         }
     }
 }
@@ -202,7 +262,10 @@ extension PhotoObjectMeasurementError {
         case .noForegroundInstance,
              .ambiguousForegroundInstances,
              .noReticleDepthSurface,
-             .maskAreaTooSmall:
+             .maskAreaTooSmall,
+             .targetOwnershipAmbiguous,
+             .multipleRigidItemsDetected,
+             .rigidItemMultiplicityUncertain:
             .isolation
         case .insufficientDepthSamples,
              .insufficientDepthCoverage,
@@ -238,6 +301,12 @@ extension PhotoObjectMeasurementError {
             "F05"
         case .noReticleDepthSurface:
             "F06"
+        case .targetOwnershipAmbiguous:
+            "F10"
+        case .multipleRigidItemsDetected:
+            "F08"
+        case .rigidItemMultiplicityUncertain:
+            "F09"
         case .insufficientDepthSamples:
             "D01"
         case .insufficientDepthCoverage:
@@ -293,8 +362,18 @@ extension PhotoObjectMeasurementError {
             "mask_area_too_small,actual=\(Self.metric(actual)),minimum=\(Self.metric(minimum))"
         case let .maskAreaTooLarge(actual, maximum):
             "mask_area_too_large,actual=\(Self.metric(actual)),maximum=\(Self.metric(maximum))"
-        case .maskTouchesImageEdge:
-            "mask_touches_image_edge"
+        case let .maskTouchesImageEdge(stage):
+            "mask_touches_image_edge,stage=\(stage.rawValue)"
+        case let .targetOwnershipAmbiguous(ambiguity):
+            switch ambiguity {
+            case let .scaledMaskBroadened(
+                unselectedSourcePixelCount,
+                overlappingScaledPixelCount
+            ):
+                "target_ownership_ambiguous,reason=scaled_mask_broadened,unselected_source_pixels=\(unselectedSourcePixelCount),overlapping_scaled_pixels=\(overlappingScaledPixelCount)"
+            case let .narrowBridge(evidence):
+                "target_ownership_ambiguous,reason=narrow_bridge,erosion_radius_pixels=\(evidence.erosionRadiusPixels),primary_region_pixels=\(evidence.primaryRegionPixelCount),secondary_region_pixels=\(evidence.secondaryRegionPixelCount),selected_pixels=\(evidence.selectedPixelCount),exterior_excursion_pixels=\(evidence.exteriorExcursionPixels)"
+            }
         case .maskCalibrationAspectRatioMismatch:
             "mask_calibration_aspect_ratio_mismatch"
         case .depthGridResolutionMismatch:
@@ -311,6 +390,16 @@ extension PhotoObjectMeasurementError {
             "insufficient_horizontal_depth_endpoint_coverage,actual=\(Self.metric(actual)),minimum=\(Self.metric(minimum))"
         case let .insufficientVerticalDepthEndpointCoverage(actual, minimum):
             "insufficient_vertical_depth_endpoint_coverage,actual=\(Self.metric(actual)),minimum=\(Self.metric(minimum))"
+        case let .multipleRigidItemsDetected(evaluation):
+            Self.multiplicityDescription(
+                prefix: "multiple_rigid_items_detected",
+                evaluation: evaluation
+            )
+        case let .rigidItemMultiplicityUncertain(evaluation):
+            Self.multiplicityDescription(
+                prefix: "rigid_item_multiplicity_uncertain",
+                evaluation: evaluation
+            )
         case .invalidCameraCalibration:
             "invalid_camera_calibration"
         case .invalidWorldPoint:
@@ -320,6 +409,62 @@ extension PhotoObjectMeasurementError {
 
     private static func metric(_ value: Float) -> String {
         String(format: "%.6f", value)
+    }
+
+    private static func multiplicityDescription(
+        prefix: String,
+        evaluation: PhotoRigidItemMultiplicityEvaluation
+    ) -> String {
+        var fields = [
+            prefix,
+            "assessment=\(evaluation.assessment.diagnosticLabel)",
+            "assessment_route=\(evaluation.diagnosticRoute)",
+            "finite_points=\(evaluation.finitePointCount)",
+            "minimum_points=\(evaluation.minimumPointCount)",
+            "usable_bins=\(evaluation.usableBinCount)",
+            "eligible_splits=\(evaluation.eligibleSplitCount)",
+            "comparable_splits=\(evaluation.comparableSplitCount)",
+            "comparable_split_fraction=\(metric(evaluation.comparableSplitFraction))",
+            "indeterminate_reason=\(evaluation.indeterminateReason?.rawValue ?? "none")",
+        ]
+        let evidence: PhotoRigidItemMultiplicityEvidence? = if case .multipleRigidItems(
+            let acceptedEvidence
+        ) = evaluation.assessment {
+            acceptedEvidence
+        } else {
+            evaluation.candidateEvidence
+        }
+        if let evidence {
+            fields.append(
+                "split_height_fraction=\(metric(evidence.splitHeightFraction))"
+            )
+            fields.append(
+                "maximum_boundary_shift_meters=\(metric(evidence.maximumBoundaryShiftMeters))"
+            )
+            fields.append(
+                "normalized_boundary_shift=\(metric(evidence.normalizedBoundaryShift))"
+            )
+            fields.append(
+                "significant_boundary_count=\(evidence.significantBoundaryCount)"
+            )
+            fields.append("boundary_basis=\(evidence.basis.rawValue)")
+            fields.append(
+                "maximum_qualifying_noise_meters=\(metric(evidence.maximumQualifyingNoiseMeters))"
+            )
+            fields.append(
+                "lower_body_height_fraction=\(metric(evidence.lowerBodyHeightFraction))"
+            )
+            fields.append(
+                "upper_body_height_fraction=\(metric(evidence.upperBodyHeightFraction))"
+            )
+            fields.append(
+                "lower_body_point_fraction=\(metric(evidence.lowerBodyPointFraction))"
+            )
+            fields.append(
+                "upper_body_point_fraction=\(metric(evidence.upperBodyPointFraction))"
+            )
+        }
+        return fields.joined(separator: ",")
     }
 }
 
@@ -366,12 +511,15 @@ enum SingleShotObjectMeasurement {
              .maskAreaTooSmall,
              .maskAreaTooLarge,
              .maskTouchesImageEdge,
+             .targetOwnershipAmbiguous,
              .insufficientDepthSamples,
              .insufficientDepthCoverage,
              .insufficientHorizontalDepthSupport,
              .insufficientVerticalDepthSupport,
              .insufficientHorizontalDepthEndpointCoverage,
-             .insufficientVerticalDepthEndpointCoverage:
+             .insufficientVerticalDepthEndpointCoverage,
+             .multipleRigidItemsDetected,
+             .rigidItemMultiplicityUncertain:
             return .targetRejected(.insufficientSurfaceEvidence)
         }
     }

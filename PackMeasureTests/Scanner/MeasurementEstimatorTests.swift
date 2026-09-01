@@ -589,6 +589,37 @@ struct MeasurementEstimatorTests {
     }
 
     @Test
+    func captureEvidenceCarriesYawOrientedBoundsFromTheAcceptedGeometry() throws {
+        let points = boxSurfacePoints(
+            length: 0.8,
+            width: 0.5,
+            height: 0.6,
+            yaw: .pi / 10
+        )
+        let geometry = try GravityAlignedBoundingBoxEstimator().estimate(points: points)
+
+        guard case .success(let evidence) = MeasurementEstimator.captureEvidenceOutcome(
+            from: points,
+            frameCount: 1
+        ) else {
+            Issue.record("expected capture evidence with target-lock bounds")
+            return
+        }
+        let bounds = try #require(evidence.targetLockBounds)
+
+        #expect(bounds.center == geometry.center)
+        #expect(bounds.yawRadians == geometry.yawRadians)
+        #expect(
+            bounds.halfExtents == SIMD3<Float>(
+                Float(geometry.dimensions.lengthMeters / 2),
+                Float(geometry.dimensions.heightMeters / 2),
+                Float(geometry.dimensions.widthMeters / 2)
+            )
+        )
+        #expect(bounds.hasValidEvidence)
+    }
+
+    @Test
     func viewpointRequiresMinimumHorizontalBaseline() {
         let policy = MeasurementViewpointPolicy()
         let reference = angleCapture(position: SIMD3<Float>(-0.074, 0, 0))
@@ -1156,8 +1187,7 @@ struct MeasurementEstimatorTests {
     }
 
     @Test
-    func thirdAngleMustChangeViewDirectionFromEverySavedCapture() {
-        var workflow = MultiAngleMeasurementWorkflow()
+    func elevatedThirdAngleMayResembleOneViewAndAgreeWithTheIndependentView() {
         let first = angleCapture(
             length: meters(fromInches: 16),
             width: meters(fromInches: 12),
@@ -1172,21 +1202,143 @@ struct MeasurementEstimatorTests {
             position: SIMD3<Float>(1, 0, 0),
             horizontalForward: SIMD2<Float>(-1, 0)
         )
-        let repeatsFirstDirection = angleCapture(
+        // This is a physically realizable elevated pose near the second
+        // camera, looking back toward the target. It is too close to count as
+        // independent from that view, but is independent from the first.
+        let resemblesSecondView = angleCapture(
             length: meters(fromInches: 16),
             width: meters(fromInches: 12),
             height: meters(fromInches: 5),
-            position: SIMD3<Float>(0, 0, -1),
+            position: SIMD3<Float>(0.95, 0.21, 0.05),
+            horizontalForward: SIMD2<Float>(-0.95, -0.05)
+        )
+
+        for retainedViews in [[first, second], [second, first]] {
+            var workflow = MultiAngleMeasurementWorkflow()
+            _ = workflow.record(retainedViews[0])
+            #expect(
+                workflow.record(retainedViews[1])
+                    == .needsAnotherAngle(reason: .dimensionsDisagree, acceptedCount: 2)
+            )
+            guard case .accepted(let consensus) = workflow.record(resemblesSecondView) else {
+                Issue.record(
+                    "expected the final angle to agree with its independent saved view"
+                )
+                continue
+            }
+            #expect(workflow.captures == retainedViews + [resemblesSecondView])
+            #expect(consensus.widthMeters == meters(fromInches: 12))
+            #expect(consensus.comparisonAngleCount == 3)
+            #expect(consensus.comparisonAgreementCount == 2)
+        }
+    }
+
+    @Test
+    func thirdAngleCannotResolveWithOnlyTheSavedViewItResembles() {
+        var workflow = MultiAngleMeasurementWorkflow()
+        let first = angleCapture(
+            length: meters(fromInches: 16),
+            width: meters(fromInches: 12),
+            height: meters(fromInches: 5),
+            position: SIMD3<Float>(0, 0, 1),
             horizontalForward: SIMD2<Float>(0, -1)
+        )
+        let independentSecond = angleCapture(
+            length: meters(fromInches: 16),
+            width: meters(fromInches: 10),
+            height: meters(fromInches: 5),
+            position: SIMD3<Float>(1, 0, 0),
+            horizontalForward: SIMD2<Float>(-1, 0)
+        )
+        // Near the first camera and looking toward the target: admissible
+        // because it differs from Angle 2, but not independent from Angle 1.
+        let repeatsFirstMeasurement = angleCapture(
+            length: meters(fromInches: 16),
+            width: meters(fromInches: 12),
+            height: meters(fromInches: 5),
+            position: SIMD3<Float>(0.05, 0.21, 0.95),
+            horizontalForward: SIMD2<Float>(-0.05, -0.95)
+        )
+
+        _ = workflow.record(first)
+        #expect(
+            workflow.record(independentSecond)
+                == .needsAnotherAngle(reason: .dimensionsDisagree, acceptedCount: 2)
+        )
+        #expect(
+            workflow.record(repeatsFirstMeasurement)
+                == .inconsistent(.dimensionsInconsistent)
+        )
+        #expect(workflow.captures == [first, independentSecond, repeatsFirstMeasurement])
+    }
+
+    @Test
+    func equalVolumeConsensusTieIsIndependentOfCaptureOrder() {
+        let shared = angleCapture(
+            length: 0.500,
+            width: 0.500,
+            height: 0.500,
+            position: SIMD3<Float>(0, 0, 1)
+        )
+        let longerLower = angleCapture(
+            length: 0.538,
+            width: 0.500,
+            height: 0.462,
+            position: SIMD3<Float>(1, 0.21, 0)
+        )
+        let narrowerTaller = angleCapture(
+            length: 0.500,
+            width: 0.462,
+            height: 0.538,
+            position: SIMD3<Float>(0, 0.21, -1)
+        )
+
+        var firstOrder = MultiAngleMeasurementWorkflow()
+        _ = firstOrder.record(shared)
+        _ = firstOrder.record(longerLower)
+        let firstProgress = firstOrder.record(narrowerTaller)
+
+        var secondOrder = MultiAngleMeasurementWorkflow()
+        _ = secondOrder.record(shared)
+        _ = secondOrder.record(narrowerTaller)
+        let secondProgress = secondOrder.record(longerLower)
+
+        guard case .accepted(let firstConsensus) = firstProgress,
+              case .accepted(let secondConsensus) = secondProgress else {
+            Issue.record("expected both capture orders to resolve an independent agreeing pair")
+            return
+        }
+        #expect(firstConsensus == secondConsensus)
+        #expect(firstConsensus.lengthMeters == 0.538)
+        #expect(firstConsensus.widthMeters == 0.500)
+        #expect(firstConsensus.heightMeters == 0.500)
+        #expect(firstConsensus.comparisonAngleCount == 3)
+        #expect(firstConsensus.comparisonAgreementCount == 2)
+    }
+
+    @Test
+    func thirdAngleSimilarToEverySavedViewIsRejectedWithoutAppend() {
+        var workflow = MultiAngleMeasurementWorkflow()
+        let first = angleCapture(
+            position: SIMD3<Float>(0, 0, 1),
+            horizontalForward: SIMD2<Float>(0, -1)
+        )
+        let second = angleCapture(
+            position: SIMD3<Float>(1, 0, 0),
+            horizontalForward: SIMD2<Float>(-1, 0)
+        )
+        let similarToBoth = angleCapture(
+            position: SIMD3<Float>(0.05, 0.21, 1),
+            horizontalForward: SIMD2<Float>(-1, 0)
         )
 
         _ = workflow.record(first)
         #expect(
             workflow.record(second)
-                == .needsAnotherAngle(reason: .dimensionsDisagree, acceptedCount: 2)
+                == .needsAnotherAngle(reason: .thirdAngleRequired, acceptedCount: 2)
         )
         #expect(
-            workflow.record(repeatsFirstDirection)
+            workflow.record(similarToBoth)
                 == .needsAnotherAngle(reason: .viewpointTooSimilar, acceptedCount: 2)
         )
         #expect(workflow.captures == [first, second])

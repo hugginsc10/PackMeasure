@@ -1,3 +1,4 @@
+import CoreGraphics
 import Testing
 import simd
 @testable import PackMeasure
@@ -71,10 +72,12 @@ struct ScannerCapturePolicyTests {
     @Test
     func finalAngleGuidanceRequiresAHeightChange() {
         let agreeingPairCopy = ScannerGuidanceCopy.additionalAngleMessage(
-            for: .thirdAngleRequired
+            for: .thirdAngleRequired,
+            acceptedAngleCount: 2
         )
         let flatThirdViewCopy = ScannerGuidanceCopy.additionalAngleMessage(
-            for: .elevationTooSimilar
+            for: .elevationTooSimilar,
+            acceptedAngleCount: 2
         )
 
         #expect(agreeingPairCopy.localizedCaseInsensitiveContains("final photo"))
@@ -84,14 +87,174 @@ struct ScannerCapturePolicyTests {
     }
 
     @Test
-    func photoFailureCopyReportsExactDepthCoverageAndDiagnosticCode() {
+    func liveCameraGuidanceMatchesTheNextAngle() {
+        let secondAngle = ScannerGuidanceCopy.additionalAnglePreview(
+            acceptedAngleCount: 1
+        )
+        let finalAngle = ScannerGuidanceCopy.additionalAnglePreview(
+            acceptedAngleCount: 2
+        )
+
+        #expect(secondAngle.localizedCaseInsensitiveContains("another side"))
+        #expect(secondAngle.localizedCaseInsensitiveContains("whole item"))
+        #expect(secondAngle.localizedCaseInsensitiveContains("item still"))
+        #expect(!secondAngle.localizedCaseInsensitiveContains("raise or lower"))
+        #expect(finalAngle.localizedCaseInsensitiveContains("final photo"))
+        #expect(finalAngle.localizedCaseInsensitiveContains("left or right"))
+        #expect(finalAngle.localizedCaseInsensitiveContains("raise or lower"))
+        #expect(finalAngle.localizedCaseInsensitiveContains("whole item"))
+        #expect(finalAngle.localizedCaseInsensitiveContains("item still"))
+    }
+
+    @Test
+    func finalAngleSimilarityRetryNamesBothRequiredMovements() {
+        let copy = ScannerGuidanceCopy.additionalAngleMessage(
+            for: .viewpointTooSimilar,
+            acceptedAngleCount: 2
+        )
+
+        #expect(copy.localizedCaseInsensitiveContains("saved angles"))
+        #expect(copy.localizedCaseInsensitiveContains("left or right"))
+        #expect(copy.localizedCaseInsensitiveContains("raise or lower"))
+        #expect(copy.localizedCaseInsensitiveContains("item still"))
+    }
+
+    @Test
+    func liveCameraUsesPortraitFramingAndSuppressesCompetingReviewContent() {
+        #expect(ScannerPreviewLayoutPolicy.fallbackLiveCameraAspectRatio == 0.75)
+        #expect(
+            ScannerPreviewLayoutPolicy.preferredAspectRatio(
+                showsLiveCamera: true,
+                liveCameraAspectRatio: 0.5625,
+                capturedAspectRatio: 1.20
+            ) == 0.5625
+        )
+        #expect(
+            ScannerPreviewLayoutPolicy.preferredAspectRatio(
+                showsLiveCamera: false,
+                liveCameraAspectRatio: 0.5625,
+                capturedAspectRatio: 1.20
+            ) == 1.20
+        )
+        #expect(
+            !ScannerPreviewLayoutPolicy.showsReviewContent(
+                showsLiveCamera: true
+            )
+        )
+        #expect(
+            ScannerPreviewLayoutPolicy.showsReviewContent(
+                showsLiveCamera: false
+            )
+        )
+        #expect(ScannerPreviewFramingPolicy.protectedInsetFraction == 0.02)
+        #expect(
+            ScannerPreviewLayoutPolicy.orientedLiveCameraAspectRatio(
+                imageWidth: 1_920,
+                imageHeight: 1_080
+            ) == 0.5625
+        )
+    }
+
+    @Test
+    func liveCameraSizingRespectsCompactAndUnspecifiedProposals() {
+        let fallback = CGSize(width: 240, height: 320)
+
+        #expect(
+            ScannerPreviewLayoutPolicy.fittedSize(
+                proposedWidth: 390,
+                proposedHeight: nil,
+                fallbackSize: fallback,
+                preferredAspectRatio: 0.75
+            ) == CGSize(width: 390, height: 520)
+        )
+        #expect(
+            ScannerPreviewLayoutPolicy.fittedSize(
+                proposedWidth: 390,
+                proposedHeight: 300,
+                fallbackSize: fallback,
+                preferredAspectRatio: 0.75
+            ) == CGSize(width: 225, height: 300)
+        )
+        #expect(
+            ScannerPreviewLayoutPolicy.fittedSize(
+                proposedWidth: 390,
+                proposedHeight: 0,
+                fallbackSize: fallback,
+                preferredAspectRatio: 0.75
+            ) == .zero
+        )
+        #expect(
+            ScannerPreviewLayoutPolicy.fittedSize(
+                proposedWidth: nil,
+                proposedHeight: 300,
+                fallbackSize: fallback,
+                preferredAspectRatio: 0.75
+            ) == CGSize(width: 225, height: 300)
+        )
+        #expect(
+            ScannerPreviewLayoutPolicy.fittedSize(
+                proposedWidth: nil,
+                proposedHeight: nil,
+                fallbackSize: fallback,
+                preferredAspectRatio: 0.75
+            ) == fallback
+        )
+        let invalid = ScannerPreviewLayoutPolicy.fittedSize(
+            proposedWidth: CGFloat.infinity,
+            proposedHeight: CGFloat.nan,
+            fallbackSize: CGSize(
+                width: CGFloat.infinity,
+                height: CGFloat.nan
+            ),
+            preferredAspectRatio: 0.75
+        )
+        #expect(invalid == .zero)
+    }
+
+    @Test
+    func protectedGuideCornersRemainInsideTheRoundedPreview() {
+        #expect(
+            ScannerPreviewFramingPolicy.safePreviewCornerRadius(
+                in: CGSize(width: 390, height: 520)
+            ) == 24
+        )
+        let compactRadius = ScannerPreviewFramingPolicy.safePreviewCornerRadius(
+            in: CGSize(width: 200, height: 200)
+        )
+        let protectedInset = 200
+            * CGFloat(ScannerPreviewFramingPolicy.protectedInsetFraction)
+        let maximumSafeRadius = protectedInset / (1 - 1 / sqrt(CGFloat(2)))
+        #expect(compactRadius <= maximumSafeRadius)
+    }
+
+    @Test
+    func f05CopyDistinguishesVisibleCropFromSourceOutlineLeakage() {
+        let visibleCrop = ScannerPhotoFailureCopy.message(
+            for: .photo(.maskTouchesImageEdge(stage: .previewOutline))
+        )
+        let sourceOutline = ScannerPhotoFailureCopy.message(
+            for: .photo(.maskTouchesImageEdge(stage: .sourceMask))
+        )
+
+        #expect(visibleCrop != sourceOutline)
+        #expect(visibleCrop.localizedCaseInsensitiveContains("cropped"))
+        #expect(visibleCrop.contains("0.5×"))
+        #expect(visibleCrop.localizedCaseInsensitiveContains("step back"))
+        #expect(sourceOutline.localizedCaseInsensitiveContains("outline"))
+        #expect(sourceOutline.localizedCaseInsensitiveContains("solid surface"))
+        #expect(!visibleCrop.localizedCaseInsensitiveContains("diagnostic"))
+        #expect(!sourceOutline.localizedCaseInsensitiveContains("diagnostic"))
+    }
+
+    @Test
+    func photoFailureCopyReportsExactDepthCoverageWithoutInternalCode() {
         let copy = ScannerPhotoFailureCopy.message(
             for: .photo(.insufficientDepthCoverage(actual: 0.42, minimum: 0.60))
         )
 
         #expect(copy.contains("42%"))
         #expect(copy.contains("60%"))
-        #expect(copy.contains("Diagnostic D02"))
+        #expect(!copy.localizedCaseInsensitiveContains("diagnostic"))
         #expect(!copy.localizedCaseInsensitiveContains("isolate one clear object"))
     }
 
@@ -137,12 +300,12 @@ struct ScannerCapturePolicyTests {
         #expect(horizontal.localizedCaseInsensitiveContains("horizontal endpoint band"))
         #expect(horizontal.localizedCaseInsensitiveContains("both horizontal ends"))
         #expect(horizontal.contains("24%"))
-        #expect(horizontal.contains("Diagnostic D05"))
+        #expect(!horizontal.localizedCaseInsensitiveContains("diagnostic"))
         #expect(!horizontal.localizedCaseInsensitiveContains("horizontal span"))
         #expect(vertical.localizedCaseInsensitiveContains("vertical endpoint band"))
         #expect(vertical.localizedCaseInsensitiveContains("both vertical ends"))
         #expect(vertical.contains("31%"))
-        #expect(vertical.contains("Diagnostic D06"))
+        #expect(!vertical.localizedCaseInsensitiveContains("diagnostic"))
         #expect(!vertical.localizedCaseInsensitiveContains("vertical span"))
     }
 
@@ -152,14 +315,58 @@ struct ScannerCapturePolicyTests {
             for: .foreground(.noObservation)
         )
         let framingCopy = ScannerPhotoFailureCopy.message(
-            for: .photo(.maskTouchesImageEdge)
+            for: .photo(.maskTouchesImageEdge(stage: .sourceMask))
         )
 
-        #expect(foregroundCopy.localizedCaseInsensitiveContains("didn't recognize"))
-        #expect(foregroundCopy.contains("Diagnostic V02"))
+        #expect(foregroundCopy.localizedCaseInsensitiveContains("couldn't find"))
+        #expect(foregroundCopy.localizedCaseInsensitiveContains("item's outline"))
+        #expect(foregroundCopy.localizedCaseInsensitiveContains("keep the item still"))
+        #expect(foregroundCopy.localizedCaseInsensitiveContains("move the phone closer"))
+        #expect(foregroundCopy.localizedCaseInsensitiveContains("every edge visible"))
+        #expect(!foregroundCopy.localizedCaseInsensitiveContains("diagnostic"))
+        #expect(!foregroundCopy.localizedCaseInsensitiveContains("tap a solid face"))
+        #expect(!foregroundCopy.localizedCaseInsensitiveContains("use 4 points"))
         #expect(!foregroundCopy.localizedCaseInsensitiveContains("not enough object depth"))
         #expect(framingCopy.localizedCaseInsensitiveContains("edge"))
-        #expect(framingCopy.contains("Diagnostic F05"))
+        #expect(!framingCopy.localizedCaseInsensitiveContains("diagnostic"))
+    }
+
+    @Test
+    func visionNoObservationAndForegroundInstanceFailureDoNotShareGuidance() {
+        let visionCopy = ScannerPhotoFailureCopy.message(
+            for: .foreground(.noObservation)
+        )
+        let instanceCopy = ScannerPhotoFailureCopy.message(
+            for: .foreground(
+                .photo(stage: .instanceSelection, error: .noForegroundInstance)
+            )
+        )
+
+        #expect(visionCopy != instanceCopy)
+        #expect(visionCopy.localizedCaseInsensitiveContains("move the phone closer"))
+        #expect(!visionCopy.localizedCaseInsensitiveContains("tap a solid face"))
+        #expect(instanceCopy.localizedCaseInsensitiveContains("selected item"))
+        #expect(instanceCopy.localizedCaseInsensitiveContains("show less floor"))
+        #expect(instanceCopy.localizedCaseInsensitiveContains("three-quarter angle"))
+        #expect(!instanceCopy.localizedCaseInsensitiveContains("selected box"))
+        #expect(!instanceCopy.localizedCaseInsensitiveContains("use 4 points"))
+        #expect(!visionCopy.localizedCaseInsensitiveContains("diagnostic"))
+        #expect(!instanceCopy.localizedCaseInsensitiveContains("diagnostic"))
+    }
+
+    @Test
+    func directForegroundInstanceFailureStaysModeNeutral() {
+        let copy = ScannerPhotoFailureCopy.message(
+            for: .photo(.noForegroundInstance)
+        )
+
+        #expect(copy.localizedCaseInsensitiveContains("selected item"))
+        #expect(copy.localizedCaseInsensitiveContains("solid surface"))
+        #expect(copy.localizedCaseInsensitiveContains("show less floor"))
+        #expect(copy.localizedCaseInsensitiveContains("three-quarter angle"))
+        #expect(!copy.localizedCaseInsensitiveContains("selected box"))
+        #expect(!copy.localizedCaseInsensitiveContains("use 4 points"))
+        #expect(!copy.localizedCaseInsensitiveContains("diagnostic"))
     }
 
     @Test
@@ -180,8 +387,8 @@ struct ScannerCapturePolicyTests {
         #expect(unavailable.localizedCaseInsensitiveContains("wasn't ready"))
         #expect(rejected.localizedCaseInsensitiveContains("center-depth fallback"))
         #expect(rejected.localizedCaseInsensitiveContains("couldn't isolate enough"))
-        #expect(unavailable.contains("Diagnostic F01"))
-        #expect(rejected.contains("Diagnostic F01"))
+        #expect(!unavailable.localizedCaseInsensitiveContains("diagnostic"))
+        #expect(!rejected.localizedCaseInsensitiveContains("diagnostic"))
         #expect(!unavailable.localizedCaseInsensitiveContains("contrasting background"))
         #expect(!rejected.localizedCaseInsensitiveContains("contrasting background"))
     }
@@ -193,7 +400,7 @@ struct ScannerCapturePolicyTests {
         )
 
         #expect(copy.localizedCaseInsensitiveContains("couldn't process"))
-        #expect(copy.contains("Diagnostic C03"))
+        #expect(!copy.localizedCaseInsensitiveContains("diagnostic"))
         #expect(!copy.localizedCaseInsensitiveContains("whole object"))
     }
 
@@ -395,7 +602,10 @@ struct ScannerCapturePolicyTests {
         #expect(
             review
                 == .needsAnotherAngle(
-                    ScannerGuidanceCopy.additionalAngleMessage(for: .firstAngleCaptured)
+                    ScannerGuidanceCopy.additionalAngleMessage(
+                        for: .firstAngleCaptured,
+                        acceptedAngleCount: 1
+                    )
                 )
         )
         #expect(!review.canSave)
@@ -721,7 +931,7 @@ struct ScannerCapturePolicyTests {
         position: SIMD3<Float>,
         horizontalForward: SIMD2<Float>? = nil,
         objectOverlay: MeasurementObjectOverlay? = nil
-    ) -> MeasurementAngleCapture {
+    ) -> ScannerRecordedAngleCapture {
         let derivedForward = SIMD2<Float>(-position.x, -position.z)
         let resolvedForward: SIMD2<Float>
         if let horizontalForward {
@@ -732,25 +942,45 @@ struct ScannerCapturePolicyTests {
             resolvedForward = SIMD2<Float>(0, -1)
         }
 
-        return MeasurementAngleCapture(
-            evidence: MeasurementCaptureEvidence(
-                estimate: MeasurementEstimate(
-                    lengthMeters: length,
-                    widthMeters: width,
-                    heightMeters: height,
-                    confidence: pointCloudConfidence == .high ? .medium : pointCloudConfidence,
-                    sampleCount: 800,
-                    frameCount: 1
+        return ScannerRecordedAngleCapture(
+            measurement: MeasurementAngleCapture(
+                evidence: MeasurementCaptureEvidence(
+                    estimate: MeasurementEstimate(
+                        lengthMeters: length,
+                        widthMeters: width,
+                        heightMeters: height,
+                        confidence: pointCloudConfidence == .high
+                            ? .medium
+                            : pointCloudConfidence,
+                        sampleCount: 800,
+                        frameCount: 1
+                    ),
+                    pointCloudConfidence: pointCloudConfidence,
+                    geometryCenter: center
                 ),
-                pointCloudConfidence: pointCloudConfidence,
-                geometryCenter: center
+                viewpoint: MeasurementCameraViewpoint(
+                    position: position,
+                    horizontalForward: resolvedForward
+                ),
+                objectOverlay: objectOverlay
             ),
-            viewpoint: MeasurementCameraViewpoint(
-                position: position,
-                horizontalForward: resolvedForward
-            ),
-            objectOverlay: objectOverlay
+            cameraProvenance: cameraProvenance()
         )
+    }
+
+    private func cameraProvenance(
+        zoom: ScannerCameraZoom = .standard
+    ) -> ScannerCameraCaptureProvenance {
+        ScannerCameraCaptureProvenance(
+            cameraZoom: zoom,
+            appliedDisplayZoomFactor: zoom.rawValue,
+            intrinsics: simd_float3x3(columns: (
+                SIMD3<Float>(1_000, 0, 0),
+                SIMD3<Float>(0, 1_000, 0),
+                SIMD3<Float>(1_000, 500, 1)
+            )),
+            imageResolutionPixels: SIMD2<Int>(2_000, 1_000)
+        )!
     }
 
     private func meters(fromInches inches: Double) -> Double {
