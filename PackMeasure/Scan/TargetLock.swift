@@ -65,6 +65,58 @@ struct TargetLockBounds: Equatable, Sendable {
             -sine * delta.x + cosine * delta.z
         )
     }
+
+    /// Returns true only when two gravity-aligned, yaw-oriented volumes share
+    /// positive 3D interior. Face/edge contact is not ownership evidence, and
+    /// testing the four rectangle axes avoids accepting disjoint yawed boxes
+    /// whose world-axis-aligned bounding boxes happen to overlap.
+    func overlapsInterior(
+        with other: TargetLockBounds,
+        minimumOverlapMeters: Float = 0
+    ) -> Bool {
+        guard hasValidEvidence,
+              other.hasValidEvidence,
+              minimumOverlapMeters.isFinite,
+              minimumOverlapMeters >= 0 else {
+            return false
+        }
+
+        let verticalOverlap = halfExtents.y
+            + other.halfExtents.y
+            - abs(other.center.y - center.y)
+        guard verticalOverlap > minimumOverlapMeters else { return false }
+
+        let centerDelta = SIMD2<Float>(
+            other.center.x - center.x,
+            other.center.z - center.z
+        )
+        let separatingAxes = [
+            horizontalXAxis,
+            horizontalZAxis,
+            other.horizontalXAxis,
+            other.horizontalZAxis,
+        ]
+        return separatingAxes.allSatisfy { axis in
+            let projectedOverlap = projectedHorizontalRadius(on: axis)
+                + other.projectedHorizontalRadius(on: axis)
+                - abs(simd_dot(centerDelta, axis))
+            return projectedOverlap.isFinite
+                && projectedOverlap > minimumOverlapMeters
+        }
+    }
+
+    private var horizontalXAxis: SIMD2<Float> {
+        SIMD2<Float>(cos(yawRadians), sin(yawRadians))
+    }
+
+    private var horizontalZAxis: SIMD2<Float> {
+        SIMD2<Float>(-sin(yawRadians), cos(yawRadians))
+    }
+
+    private func projectedHorizontalRadius(on axis: SIMD2<Float>) -> Float {
+        abs(simd_dot(axis, horizontalXAxis)) * halfExtents.x
+            + abs(simd_dot(axis, horizontalZAxis)) * halfExtents.z
+    }
 }
 
 /// Immutable first-angle world reference retained after the per-angle target
@@ -123,16 +175,13 @@ struct TargetSeriesOwnershipValidator: Equatable, Sendable {
         }
         guard reference.bounds.hasValidEvidence,
               surface.worldPoint.targetLockAllFinite,
-              surface.confidence >= .medium,
-              let tolerance = boundsSlack(for: reference.bounds) else {
+              surface.confidence >= .medium else {
             return .rejected(.invalidEvidence)
         }
-        guard reference.bounds.contains(
-            surface.worldPoint,
-            slackMeters: tolerance
-        ) else {
-            return .rejected(.selectionOutsideReference)
-        }
+        // The first photo sees only part of a 3D object. A later tap may land
+        // on a newly visible surface outside that partial fit, so selection
+        // remains provisional until the settled capture supplies a candidate
+        // volume that both owns this fresh tap and overlaps angle 1.
         return .valid
     }
 
@@ -159,14 +208,10 @@ struct TargetSeriesOwnershipValidator: Equatable, Sendable {
               reference.subject == subject else {
             return .rejected(.staleSeries)
         }
-        guard reference.bounds.hasValidEvidence,
-              let referenceTolerance = boundsSlack(for: reference.bounds) else {
+        guard reference.bounds.hasValidEvidence else {
             return .rejected(.invalidEvidence)
         }
-        guard reference.bounds.contains(
-            selection.worldAnchor,
-            slackMeters: referenceTolerance
-        ) else {
+        guard candidateBounds.overlapsInterior(with: reference.bounds) else {
             return .rejected(.selectionOutsideReference)
         }
         return .valid
