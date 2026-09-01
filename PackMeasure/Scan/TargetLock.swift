@@ -161,6 +161,7 @@ struct TargetSeriesOwnershipValidator: Equatable, Sendable {
     var relativeBoundsSlack: Float = 0.10
     var minimumBoundsSlackMeters: Float = 0.03
     var maximumBoundsSlackMeters: Float = 0.08
+    var minimumInteriorOverlapMeters: Float = 0.03
 
     func validateSelection(
         _ surface: TargetLockObservedSurface,
@@ -211,7 +212,13 @@ struct TargetSeriesOwnershipValidator: Equatable, Sendable {
         guard reference.bounds.hasValidEvidence else {
             return .rejected(.invalidEvidence)
         }
-        guard candidateBounds.overlapsInterior(with: reference.bounds) else {
+        // Treat sub-noise-floor intersections as contact, not shared ownership.
+        // Adjacent fitted volumes can bleed into each other by a few millimeters
+        // even when Vision correctly isolates two different physical items.
+        guard candidateBounds.overlapsInterior(
+            with: reference.bounds,
+            minimumOverlapMeters: minimumInteriorOverlapMeters
+        ) else {
             return .rejected(.selectionOutsideReference)
         }
         return .valid
@@ -224,6 +231,8 @@ struct TargetSeriesOwnershipValidator: Equatable, Sendable {
             && minimumBoundsSlackMeters >= 0
             && maximumBoundsSlackMeters.isFinite
             && maximumBoundsSlackMeters >= minimumBoundsSlackMeters
+            && minimumInteriorOverlapMeters.isFinite
+            && minimumInteriorOverlapMeters >= 0
     }
 
     private func boundsSlack(for bounds: TargetLockBounds) -> Float? {
