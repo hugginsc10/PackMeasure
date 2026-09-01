@@ -572,6 +572,26 @@ struct TargetLockTests {
     }
 
     @Test
+    func captureRejectsAdjacentFitNoiseBelowOwnershipOverlapFloor() {
+        let reference = seriesReference(bounds: targetBounds())
+        let selection = selectionContext(worldAnchor: SIMD3<Float>(0.98, 0, 0))
+        let noisyNeighborCandidate = TargetLockBounds(
+            center: SIMD3<Float>(0.98, 0, 0),
+            halfExtents: SIMD3<Float>(0.5, 0.4, 0.4),
+            yawRadians: 0
+        )
+
+        #expect(
+            TargetSeriesOwnershipValidator().validateCapture(
+                noisyNeighborCandidate,
+                selection: selection,
+                reference: reference,
+                subject: .box
+            ) == .rejected(.selectionOutsideReference)
+        )
+    }
+
+    @Test
     func captureRejectsYawedAABBOverlapWithoutOrientedInteriorOverlap() {
         let yaw = Float.pi / 4
         let referenceBounds = TargetLockBounds(
