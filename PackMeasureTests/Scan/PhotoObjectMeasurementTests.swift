@@ -1841,6 +1841,64 @@ final class PhotoObjectMeasurementTests: XCTestCase {
         XCTAssertEqual(points[3].z, 28, accuracy: 0.0001)
     }
 
+    @MainActor
+    func testGeneralItemProductionPolicyPreservesNonBoxSilhouettes() throws {
+        let state = ScannerSheetView.ScannerStateModel()
+        XCTAssertTrue(state.setMeasurementSubject(.generalItem))
+        let measurement = state.automaticPhotoMeasurement
+        XCTAssertNil(measurement.rigidItemMultiplicityGuard)
+        XCTAssertEqual(measurement.policy, PhotoObjectMeasurementPolicy())
+        let size = 96
+        let fixtures: [(String, (Int, Int) -> Bool)] = [
+            ("round bin", { x, y in
+                let dx = Float(x - 48) / 25, dy = Float(y - 48) / 32
+                return dx * dx + dy * dy <= 1
+            }),
+            ("luggage with handle", { x, y in
+                ((24...72).contains(x) && (30...80).contains(y))
+                    || ((34...62).contains(x) && (15...35).contains(y)
+                        && !((40...56).contains(x) && (21...29).contains(y)))
+            }),
+            ("chair with back and legs", { x, y in
+                ((24...72).contains(x) && (16...57).contains(y))
+                    || ((24...35).contains(x) && (58...80).contains(y))
+                    || ((61...72).contains(x) && (58...80).contains(y))
+            }),
+            ("L-shaped furniture", { x, y in
+                ((20...39).contains(x) && (16...78).contains(y))
+                    || ((20...76).contains(x) && (57...78).contains(y))
+            })
+        ]
+        for (name, includes) in fixtures {
+            let labels = (0..<size * size).map { includes($0 % size, $0 / size) ? UInt32(5) : 0 }
+            let mask = try PhotoInstanceLabelMask(width: size, height: size, labels: labels)
+            let first = labels.firstIndex(of: 5)!
+            let target = SIMD2<Float>((Float(first % size) + 0.5) / Float(size),
+                                      (Float(first / size) + 0.5) / Float(size))
+            let cloud = try measurement.makePointCloud(labelMask: mask,
+                depthGrid: populatedDepthGrid(width: size, height: size),
+                calibration: calibration(imageWidth: size, imageHeight: size),
+                prompt: .target(normalizedImagePoint: target))
+            XCTAssertEqual(Set(cloud.depthSupport.indices), Set(labels.indices.filter { labels[$0] == 5 }), name)
+            XCTAssertNil(cloud.rigidItemMultiplicityEvaluation, name)
+        }
+    }
+
+    @MainActor
+    func testGeneralItemProductionPolicyStillRejectsPhotoEdgeClipping() throws {
+        let state = ScannerSheetView.ScannerStateModel()
+        XCTAssertTrue(state.setMeasurementSubject(.generalItem))
+        XCTAssertThrowsError(try state.automaticPhotoMeasurement.makePointCloud(
+            labelMask: boxMask(width: 96, height: 96, x: 0...60, y: 15...80),
+            depthGrid: populatedDepthGrid(width: 96, height: 96),
+            calibration: calibration(imageWidth: 96, imageHeight: 96),
+            prompt: .target(normalizedImagePoint: SIMD2(0.3, 0.5)))) { error in
+                guard case .maskTouchesImageEdge = error as? PhotoObjectMeasurementError else {
+                    return XCTFail("Unexpected rejection: \(error)")
+                }
+            }
+    }
+
     private var permissiveMeasurement: PhotoObjectMeasurement {
         PhotoObjectMeasurement(
             policy: permissivePolicy,

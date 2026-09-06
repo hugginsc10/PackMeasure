@@ -498,6 +498,12 @@ struct ScannerModeSelector: View {
                 }
             }
 
+            Text(selection.subject == .box
+                 ? "For rectangular boxes. Choose General Item for luggage, chairs, bins, or furniture."
+                 : "For luggage, chairs, bins, and furniture. Include handles and legs in the outline; leave space around the whole item.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
             Text("Measure with")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
