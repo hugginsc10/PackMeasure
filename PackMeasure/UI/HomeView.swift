@@ -7,6 +7,9 @@ struct HomeView: View {
     var body: some View {
         NavigationStack {
             List {
+                Section {
+                    NavigationLink("Measure a room", destination: RoomMeasurementView())
+                }
                 spaceNeededSection
                 loadMixSection
                 vehicleSection
