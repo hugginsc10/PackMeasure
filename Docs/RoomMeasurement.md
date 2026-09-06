@@ -34,3 +34,23 @@ LiDAR accuracy, completeness, or real-world usability. Report measured errors
 before setting a product accuracy claim or releasing this as calibrated.
 
 Reference: https://developer.apple.com/documentation/roomplan
+
+## Partial-scan recovery (Build 44)
+
+Build 43 rejected all measurements if fewer than three walls were returned, any
+wall was invalid, or the footprint was degenerate. Build 44 preserves every
+valid wall and reports the count of excluded invalid walls. Partial scans can be
+saved, but do not show an overall room span. All-invalid/empty results still fail
+with the detected count, a new-scan button, and user-initiated diagnostic sharing.
+
+The capture view shows a live detected-wall count. Results offer Scan again and
+Diagnostics; diagnostics include the build, duration, live/final wall counts,
+raw wall dimensions, and error, but no photos or point clouds. Share before
+retrying or closing, because diagnostics are session-local.
+
+Retest: intentionally finish after two highlighted walls, verify a partial
+result with two wall measurements and no overall span, then scan again and
+capture the rest of the room. Save/reopen both partial and fuller results.
+Screenshots IMG_5573/5574 and the user's live-wall-highlights report establish
+that Build 43's post-processing validation failed, but do not identify which
+validation condition fired or prove a particular RoomPlan fault.

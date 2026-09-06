@@ -13,13 +13,44 @@ final class RoomMeasurementTests: XCTestCase {
         }
     }
 
-    func testRejectsMissingInvalidAndCollinearWalls() {
+    func testPreservesPartialScanInsteadOfDiscardingDetectedWalls() throws {
+        for count in [1, 2] {
+            let room = try MeasuredRoom(walls: Array(rectangle().prefix(count)))
+            XCTAssertEqual(room.walls.count, count)
+            XCTAssertFalse(room.hasRoomExtent)
+            XCTAssertTrue(room.shareText.contains("Partial scan"))
+            XCTAssertFalse(room.shareText.contains("Scanned span:"))
+        }
+    }
+
+    func testRejectsOnlyWhenThereAreNoUsableWalls() throws {
         XCTAssertThrowsError(try MeasuredRoom(walls: []))
-        XCTAssertThrowsError(try MeasuredRoom(walls: Array(rectangle().prefix(2))))
         let invalid = MeasuredRoom.Wall(id: UUID(), start: SIMD2(.nan, 0), end: SIMD2(1, 0), height: 2, confidence: "high")
-        XCTAssertThrowsError(try MeasuredRoom(walls: rectangle() + [invalid]))
+        XCTAssertThrowsError(try MeasuredRoom(walls: [invalid])) { error in
+            XCTAssertTrue(error.localizedDescription.contains("1 wall(s)"))
+        }
+        let room = try MeasuredRoom(walls: rectangle() + [invalid])
+        XCTAssertEqual(room.walls.count, 4)
+        XCTAssertEqual(room.excludedWallCount, 1)
+        XCTAssertFalse(room.hasRoomExtent)
+        XCTAssertTrue(room.shareText.contains("1 unusable"))
+    }
+
+    func testCollinearWallsRemainAvailableWithoutClaimingRoomWidth() throws {
         let line = MeasuredRoom.Wall(id: UUID(), start: .zero, end: SIMD2(5, 0), height: 2, confidence: "high")
-        XCTAssertThrowsError(try MeasuredRoom(walls: [line, line, line]))
+        let room = try MeasuredRoom(walls: [line, line, line])
+        XCTAssertFalse(room.hasRoomExtent)
+        XCTAssertFalse(room.shareText.contains("Scanned span:"))
+    }
+
+    func testBuild43SavedRoomsStillDecode() throws {
+        let room = try MeasuredRoom(walls: rectangle())
+        let data = try JSONEncoder().encode(room)
+        var legacy = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        legacy.removeValue(forKey: "excludedWallCount")
+        let restored = try JSONDecoder().decode(MeasuredRoom.self, from: JSONSerialization.data(withJSONObject: legacy))
+        XCTAssertTrue(restored.hasRoomExtent)
+        XCTAssertEqual(restored.id, room.id)
     }
 
     func testIrregularOutlineRetainsIndividualWallsAndDoesNotClaimFloorArea() throws {

@@ -23,19 +23,34 @@ struct MeasuredRoom: Codable, Identifiable, Sendable {
     let spanLength: Float
     let spanWidth: Float
     let wallHeight: Float
+    let excludedWallCount: Int?
+
+    var hasRoomExtent: Bool {
+        walls.count >= 3 && (excludedWallCount ?? 0) == 0
+            && spanLength.isFinite && spanWidth.isFinite && min(spanLength, spanWidth) > 0.1
+    }
+
+    var coverageMessage: String {
+        if hasRoomExtent { return "\(walls.count) walls captured. Check the outline for missing walls." }
+        return "Partial scan: \(walls.count) valid wall(s), \(excludedWallCount ?? 0) unusable wall(s). Individual wall dimensions are available; the overall room size is not established."
+    }
 
     enum ValidationError: LocalizedError {
-        case incomplete
+        case noValidWalls(detected: Int)
         var errorDescription: String? {
-            "Too little room geometry was captured. Scan every wall, including corners and the floor-to-wall edges, then finish again."
+            switch self {
+            case .noValidWalls(let count):
+                return "RoomPlan returned \(count) wall(s), but none had usable dimensions. Start a new scan. Share diagnostics if this repeats."
+            }
         }
     }
 
-    init(walls: [Wall], name: String = "Room", date: Date = .now) throws {
-        guard walls.count >= 3, walls.allSatisfy(\.isValid),
-              let reference = walls.max(by: { $0.length < $1.length }) else {
-            throw ValidationError.incomplete
+    init(walls detectedWalls: [Wall], name: String = "Room", date: Date = .now) throws {
+        let walls = detectedWalls.filter(\.isValid)
+        guard let reference = walls.max(by: { $0.length < $1.length }) else {
+            throw ValidationError.noValidWalls(detected: detectedWalls.count)
         }
+        excludedWallCount = detectedWalls.count - walls.count
         let axis = simd_normalize(reference.end - reference.start)
         let perpendicular = SIMD2<Float>(-axis.y, axis.x)
         // Work relative to one wall to avoid translation-dependent rounding.
@@ -44,25 +59,26 @@ struct MeasuredRoom: Codable, Identifiable, Sendable {
         let y = points.map { simd_dot($0, perpendicular) }
         let a = x.max()! - x.min()!
         let b = y.max()! - y.min()!
-        guard a.isFinite, b.isFinite, min(a, b) > 0.1 else {
-            throw ValidationError.incomplete
-        }
         id = UUID()
         self.date = date
         self.name = name
         self.walls = walls
-        spanLength = max(a, b)
-        spanWidth = min(a, b)
+        spanLength = a.isFinite && b.isFinite ? max(a, b) : 0
+        spanWidth = a.isFinite && b.isFinite ? min(a, b) : 0
         wallHeight = walls.map(\.height).max()!
     }
 
     var shareText: String {
-        ([name, "Scanned span: \(Self.dimension(spanLength)) × \(Self.dimension(spanWidth))",
-          "Maximum wall height: \(Self.dimension(wallHeight))",
-          "Approximate scanned extent; missing walls and recesses affect the result. Not floor area."]
-         + walls.enumerated().map { index, wall in
-             "Wall \(index + 1): \(Self.dimension(wall.length)) long × \(Self.dimension(wall.height)) high (\(wall.confidence) confidence)"
-         }).joined(separator: "\n")
+        var lines = [name, coverageMessage]
+        if hasRoomExtent {
+            lines += ["Scanned span: \(Self.dimension(spanLength)) × \(Self.dimension(spanWidth))",
+                      "Maximum wall height: \(Self.dimension(wallHeight))",
+                      "Approximate scanned extent; missing walls and recesses affect the result. Not floor area."]
+        }
+        lines += walls.enumerated().map { index, wall in
+            "Wall \(index + 1): \(Self.dimension(wall.length)) long × \(Self.dimension(wall.height)) high (\(wall.confidence) confidence)"
+        }
+        return lines.joined(separator: "\n")
     }
 
     static func dimension(_ meters: Float) -> String {

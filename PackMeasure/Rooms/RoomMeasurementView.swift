@@ -26,6 +26,8 @@ struct RoomMeasurementView: View {
                     } label: {
                         VStack(alignment: .leading) {
                             Text(room.name)
+                            Text(room.hasRoomExtent ? "\(room.walls.count) walls" : "Partial scan · \(room.walls.count) walls")
+                                .font(.caption).foregroundStyle(.secondary)
                             Text(room.date, style: .date).font(.caption).foregroundStyle(.secondary)
                         }
                     }
@@ -55,6 +57,23 @@ private struct RoomScanSheet: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var cameraReady = false
     @State private var finishing = false
+    @State private var detectedWallCount = 0
+    @State private var scanID = UUID()
+    @State private var diagnostics = "No RoomPlan result received yet."
+
+    private var diagnosticReport: String {
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"
+        return "PackMeasure build \(build) room scan \(scanID)\nlive_wall_count=\(detectedWallCount)\n\(diagnostics)\nfailure=\(failure ?? "none")"
+    }
+
+    private func retry() {
+        scanID = UUID()
+        detectedWallCount = 0
+        finishing = false
+        result = nil
+        failure = nil
+        diagnostics = "No RoomPlan result received yet."
+    }
     @State private var result: MeasuredRoom?
     @State private var failure: String?
     @State private var saveFailure: String?
@@ -70,13 +89,26 @@ private struct RoomScanSheet: View {
                         RoomResultView(room: result)
                     }
                 } else if let failure {
-                    ContentUnavailableView("Scan interrupted", systemImage: "exclamationmark.triangle", description: Text(failure))
+                    VStack {
+                        ContentUnavailableView("Room scan needs another try", systemImage: "exclamationmark.triangle", description: Text(failure))
+                        Button("Start new scan", action: retry).buttonStyle(.borderedProminent)
+                        ShareLink("Share room diagnostics", item: diagnosticReport)
+                            .padding(.bottom)
+                    }
                 } else if cameraReady {
-                    RoomCaptureBridge(finishing: finishing) { outcome in
+                    RoomCaptureBridge(finishing: finishing, onProgress: { detectedWallCount = $0 },
+                                      onDiagnostic: { diagnostics = $0 }) { outcome in
                         switch outcome {
                         case .success(let room): result = room
                         case .failure(let error): failure = error.localizedDescription
                         }
+                    }
+                    .id(scanID)
+                    .overlay(alignment: .top) {
+                        Text(detectedWallCount == 0
+                             ? "Looking for walls — move slowly and follow the highlights"
+                             : "\(detectedWallCount) wall(s) detected — include every corner")
+                            .font(.subheadline).padding(10).background(.regularMaterial, in: Capsule()).padding()
                     }
                     .overlay(alignment: .bottom) {
                         if finishing {
@@ -92,9 +124,18 @@ private struct RoomScanSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } }
+                ToolbarItem(placement: .bottomBar) {
+                    if result != nil {
+                        HStack {
+                            Button("Scan again", action: retry)
+                            Spacer()
+                            ShareLink("Diagnostics", item: diagnosticReport)
+                        }
+                    }
+                }
                 ToolbarItem(placement: .confirmationAction) {
                     if var room = result {
-                        Button("Save") {
+                        Button(room.hasRoomExtent ? "Save" : "Save partial") {
                             let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
                             room.name = trimmed.isEmpty ? "Room" : trimmed
                             do { try store.save(room); dismiss() }
@@ -144,12 +185,15 @@ private struct RoomResultView: View {
                 RoomOutlineView(walls: room.walls).frame(height: 240)
                     .accessibilityLabel("Top view of \(room.walls.count) captured walls; wall numbers match the list below")
             }
-            Section("Approximate scanned extent") {
-                LabeledContent("Long span", value: MeasuredRoom.dimension(room.spanLength))
-                LabeledContent("Short span", value: MeasuredRoom.dimension(room.spanWidth))
-                LabeledContent("Maximum wall height", value: MeasuredRoom.dimension(room.wallHeight))
-                Text("Spans follow the longest captured wall. Missing walls can understate the room; recesses and irregular shapes affect the extent. This is not floor area or a verified ceiling height.")
-                    .font(.footnote).foregroundStyle(.secondary)
+            Section(room.hasRoomExtent ? "Approximate scanned extent" : "Partial room scan") {
+                Text(room.coverageMessage).font(.subheadline)
+                if room.hasRoomExtent {
+                    LabeledContent("Long span", value: MeasuredRoom.dimension(room.spanLength))
+                    LabeledContent("Short span", value: MeasuredRoom.dimension(room.spanWidth))
+                    LabeledContent("Maximum wall height", value: MeasuredRoom.dimension(room.wallHeight))
+                    Text("Spans follow the longest captured wall. Missing walls can understate the room; recesses and irregular shapes affect the extent. This is not floor area or a verified ceiling height.")
+                        .font(.footnote).foregroundStyle(.secondary)
+            }
             }
             Section("Wall dimensions") {
                 ForEach(Array(room.walls.enumerated()), id: \.element.id) { index, wall in
