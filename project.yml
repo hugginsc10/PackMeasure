@@ -29,7 +29,7 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         ITSAppUsesNonExemptEncryption: false
         LSRequiresIPhoneOS: true
-        NSCameraUsageDescription: PackMeasure uses the camera and LiDAR depth sensor to measure boxes and objects.
+        NSCameraUsageDescription: PackMeasure uses the camera and LiDAR depth sensor to measure objects and rooms.
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
         UIApplicationSupportsIndirectInputEvents: true

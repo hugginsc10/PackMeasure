@@ -13,6 +13,8 @@
 		0A2EDE96AA8A58C7E6E2F0A0 /* TargetLockFrameValidation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69219302EBBBE2A09187AD59 /* TargetLockFrameValidation.swift */; };
 		0C12718BED3478DDF2846719 /* ManualEntryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D4A5310F76E7632DEA4C529 /* ManualEntryView.swift */; };
 		13855B2BFED482DBF1472A02 /* PhotoRigidItemMultiplicityGuard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 794FA5965F3F52912B316BA7 /* PhotoRigidItemMultiplicityGuard.swift */; };
+		1915EB01A5B88F2FF59C252E /* RoomCaptureBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C66533043B4A308E46178DB /* RoomCaptureBridge.swift */; };
+		1F1706B9EA3236E1556A5F46 /* RoomMeasurementView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D78C355F0AE0E49B188853BA /* RoomMeasurementView.swift */; };
 		23B04DCD21AD16AA858727A7 /* CrowdedSceneScannerCopyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35F790361B7F4DCB86144CDD /* CrowdedSceneScannerCopyTests.swift */; };
 		24CD468E2F570CF8B84E5789 /* TargetLockFailureIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C6E548E7BEE68145D8AF56D /* TargetLockFailureIntegrationTests.swift */; };
 		30BBD6FD335F3F0136F0B5BE /* GravityAlignedBoundingBoxEstimatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01DA76636D28E2A195DBE9FC /* GravityAlignedBoundingBoxEstimatorTests.swift */; };
@@ -25,6 +27,7 @@
 		42AD551A4A6F786DDA2A25F6 /* PhotoObjectMeasurementTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53B7914EAEB1EDE13DA87022 /* PhotoObjectMeasurementTests.swift */; };
 		505B39CB31D0CC5449424178 /* ScannerSheetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84DFB60E2C6A4BA85E8C1AA0 /* ScannerSheetView.swift */; };
 		5108F38EA742072EDA5538BB /* MeasurementMath.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A6E5BC93C71F94AB333A1BF /* MeasurementMath.swift */; };
+		53B242F56BD9E49BFDED92C1 /* RoomMeasurementTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DD24F78E32CFCC6178E6DAA /* RoomMeasurementTests.swift */; };
 		53E91AADA18D60E722530171 /* PackingPlanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACE91F472F72AC07FEC8432F /* PackingPlanner.swift */; };
 		5E0B34A313A28EA94D945649 /* ScannerCapturePolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87791FBEF3FF3863B53EF421 /* ScannerCapturePolicyTests.swift */; };
 		5E9AA3639748D36667D1C43C /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CF21F67461D439CFC0A0C93 /* AppModel.swift */; };
@@ -54,6 +57,7 @@
 		C8136BC099CE8509D7A85305 /* MeasuredItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = CED5108414CFCAEB40DF57B3 /* MeasuredItem.swift */; };
 		CC0218C6FD04167826F2EDC3 /* DepthRegionSegmenterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C14B613C8CDA24C77CB2EDC9 /* DepthRegionSegmenterTests.swift */; };
 		D9E1CF22D55F27672D4E453A /* MeasurementARFrameIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0971E06A518DCBB2BE79A263 /* MeasurementARFrameIntegrationTests.swift */; };
+		DEC369DB5280E36E34433F9D /* MeasuredRoom.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2DB7F61AD75E4D179543D0F5 /* MeasuredRoom.swift */; };
 		DFC589F73318DFDF2A834553 /* PackingVehicles.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0037980CC25246BD96274DD7 /* PackingVehicles.swift */; };
 		E481A09E4252F3209E588661 /* PackingPlannerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E719F590D3FE9941D195518 /* PackingPlannerTests.swift */; };
 		F78E0F38BDC44E3CBE11ABC5 /* PackingModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E12DBF221D2E3F67479FE70 /* PackingModels.swift */; };
@@ -80,8 +84,10 @@
 		0BEC26224D7E1CD00B41CDF5 /* MeasurementEstimatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeasurementEstimatorTests.swift; sourceTree = "<group>"; };
 		0C6E548E7BEE68145D8AF56D /* TargetLockFailureIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TargetLockFailureIntegrationTests.swift; sourceTree = "<group>"; };
 		0CF21F67461D439CFC0A0C93 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
+		0DD24F78E32CFCC6178E6DAA /* RoomMeasurementTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoomMeasurementTests.swift; sourceTree = "<group>"; };
 		1AA05B83704FCB14040623FB /* GuidedBoxWorkflowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuidedBoxWorkflowTests.swift; sourceTree = "<group>"; };
 		217FC74C59206B041DFB1042 /* GravityAlignedBoundingBoxEstimator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GravityAlignedBoundingBoxEstimator.swift; sourceTree = "<group>"; };
+		2DB7F61AD75E4D179543D0F5 /* MeasuredRoom.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeasuredRoom.swift; sourceTree = "<group>"; };
 		35CC0B9C38D98D8F0A49EDD3 /* SingleShotObjectMeasurementTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SingleShotObjectMeasurementTests.swift; sourceTree = "<group>"; };
 		35F790361B7F4DCB86144CDD /* CrowdedSceneScannerCopyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrowdedSceneScannerCopyTests.swift; sourceTree = "<group>"; };
 		3D4A5310F76E7632DEA4C529 /* ManualEntryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ManualEntryView.swift; sourceTree = "<group>"; };
@@ -100,6 +106,7 @@
 		69219302EBBBE2A09187AD59 /* TargetLockFrameValidation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TargetLockFrameValidation.swift; sourceTree = "<group>"; };
 		6BE6168006D3968F71532364 /* Build33ScannerPresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Build33ScannerPresentationTests.swift; sourceTree = "<group>"; };
 		6C32970059157769F21557D7 /* GuidedBoxWorkflow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuidedBoxWorkflow.swift; sourceTree = "<group>"; };
+		6C66533043B4A308E46178DB /* RoomCaptureBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoomCaptureBridge.swift; sourceTree = "<group>"; };
 		6E12DBF221D2E3F67479FE70 /* PackingModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PackingModels.swift; sourceTree = "<group>"; };
 		720B306F033EEFA5D3D7BADE /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		77EE721A9A7420432B19066B /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
@@ -123,6 +130,7 @@
 		D1FD36B27E413AA99055CB3E /* TargetLock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TargetLock.swift; sourceTree = "<group>"; };
 		D1FDBE8DEE3F3C0C88A2B2D8 /* MeasurementEstimator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeasurementEstimator.swift; sourceTree = "<group>"; };
 		D6C55F1052A5849E765D593B /* GuidedBoxMeasurement.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuidedBoxMeasurement.swift; sourceTree = "<group>"; };
+		D78C355F0AE0E49B188853BA /* RoomMeasurementView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoomMeasurementView.swift; sourceTree = "<group>"; };
 		DA64797949F43B846C4EDD69 /* SingleShotObjectMeasurement.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SingleShotObjectMeasurement.swift; sourceTree = "<group>"; };
 		EBD9C0747FAF688B3E0DFB24 /* ScannerARFrameAdapters.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScannerARFrameAdapters.swift; sourceTree = "<group>"; };
 		EFC2C247D8D005E9F20D3D31 /* ScannerTargetProjection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScannerTargetProjection.swift; sourceTree = "<group>"; };
@@ -166,6 +174,14 @@
 			path = Services;
 			sourceTree = "<group>";
 		};
+		1E9D34C477A08CE1847ED2A8 /* Rooms */ = {
+			isa = PBXGroup;
+			children = (
+				0DD24F78E32CFCC6178E6DAA /* RoomMeasurementTests.swift */,
+			);
+			path = Rooms;
+			sourceTree = "<group>";
+		};
 		357F00626456922FCFC8A164 /* Scan */ = {
 			isa = PBXGroup;
 			children = (
@@ -207,6 +223,7 @@
 				B9E081672C02985D42710156 /* RootPlaceholderView.swift */,
 				18C0BEC3C24FEDD1348E55B2 /* Core */,
 				53C23AC357E385BFD9880408 /* Models */,
+				A3998CF79816D1A011196F11 /* Rooms */,
 				0A60B85F9FCA05C8CFDB0E48 /* Scan */,
 				A1A2FB0C19A8C9441080CAD9 /* Scanner */,
 				1CA9A427545D50C3BDC80A39 /* Services */,
@@ -257,6 +274,7 @@
 				A95C05B5C8AAFBFBE93F5F88 /* PackMeasureTests.swift */,
 				EF55120B79DC16D1E08DDA9F /* Geometry */,
 				ED5EA5D42E70F1ED10BB220C /* Packing */,
+				1E9D34C477A08CE1847ED2A8 /* Rooms */,
 				357F00626456922FCFC8A164 /* Scan */,
 				5E257FE4DB6F6AA6C43111A4 /* Scanner */,
 				4089BD5673DEE233B6B9ADC4 /* UIInventory */,
@@ -282,6 +300,16 @@
 				EBD9C0747FAF688B3E0DFB24 /* ScannerARFrameAdapters.swift */,
 			);
 			path = Scanner;
+			sourceTree = "<group>";
+		};
+		A3998CF79816D1A011196F11 /* Rooms */ = {
+			isa = PBXGroup;
+			children = (
+				2DB7F61AD75E4D179543D0F5 /* MeasuredRoom.swift */,
+				6C66533043B4A308E46178DB /* RoomCaptureBridge.swift */,
+				D78C355F0AE0E49B188853BA /* RoomMeasurementView.swift */,
+			);
+			path = Rooms;
 			sourceTree = "<group>";
 		};
 		A5654DC13CC521A5140A57D2 /* Packing */ = {
@@ -425,6 +453,7 @@
 				FEF5BA8AADA1DCA7C9A86C38 /* InventoryStore.swift in Sources */,
 				0C12718BED3478DDF2846719 /* ManualEntryView.swift in Sources */,
 				C8136BC099CE8509D7A85305 /* MeasuredItem.swift in Sources */,
+				DEC369DB5280E36E34433F9D /* MeasuredRoom.swift in Sources */,
 				FECF4963AE2114674A0CC66B /* MeasurementARView.swift in Sources */,
 				72B2BD9B3F2229A3E60FD7C9 /* MeasurementEstimator.swift in Sources */,
 				5108F38EA742072EDA5538BB /* MeasurementMath.swift in Sources */,
@@ -434,6 +463,8 @@
 				DFC589F73318DFDF2A834553 /* PackingVehicles.swift in Sources */,
 				5F68845EACD6F3268807135E /* PhotoObjectMeasurement.swift in Sources */,
 				13855B2BFED482DBF1472A02 /* PhotoRigidItemMultiplicityGuard.swift in Sources */,
+				1915EB01A5B88F2FF59C252E /* RoomCaptureBridge.swift in Sources */,
+				1F1706B9EA3236E1556A5F46 /* RoomMeasurementView.swift in Sources */,
 				C65D41867508C7250DFFCF99 /* RootPlaceholderView.swift in Sources */,
 				3F1C7314799EEF37503422B4 /* ScannerARFrameAdapters.swift in Sources */,
 				505B39CB31D0CC5449424178 /* ScannerSheetView.swift in Sources */,
@@ -463,6 +494,7 @@
 				E481A09E4252F3209E588661 /* PackingPlannerTests.swift in Sources */,
 				42AD551A4A6F786DDA2A25F6 /* PhotoObjectMeasurementTests.swift in Sources */,
 				7209CA6F8F01E61291C59272 /* PhotoRigidItemMultiplicityGuardTests.swift in Sources */,
+				53B242F56BD9E49BFDED92C1 /* RoomMeasurementTests.swift in Sources */,
 				948887BBF3D249A4522DDB48 /* ScannerCameraZoomTests.swift in Sources */,
 				5E0B34A313A28EA94D945649 /* ScannerCapturePolicyTests.swift in Sources */,
 				41EEA24F349C4C2AE650B9EC /* ScannerOrchestrationTests.swift in Sources */,
