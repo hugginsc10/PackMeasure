@@ -20,6 +20,24 @@ struct ScannerOrchestrationTests {
     )
 
     @Test @MainActor
+    func captureDiagnosticsRejectStaleCallbacksAndKeepRecentAttempts() {
+        let state = ScannerSheetView.ScannerStateModel()
+        state.recordCaptureDiagnostic("stale", requestID: state.captureRequestID + 1,
+                                      seriesID: state.measurementSeriesID)
+        state.recordCaptureDiagnostic("stale series", requestID: state.captureRequestID,
+                                      seriesID: state.measurementSeriesID + 1)
+        #expect(state.captureDiagnostics.isEmpty)
+        for attempt in 0..<15 {
+            state.recordCaptureDiagnostic("attempt \(attempt)", requestID: state.captureRequestID,
+                                          seriesID: state.measurementSeriesID)
+        }
+        #expect(state.captureDiagnostics.count == 12)
+        #expect(state.captureDiagnostics.first == "attempt 3")
+        #expect(state.captureDiagnostics.last == "attempt 14")
+        #expect(state.captureDiagnosticsReport.contains("success does not imply multi-angle acceptance"))
+    }
+
+    @Test @MainActor
     func defaultsToBoxAutomaticPhotosAndGeneralItemDisablesRigidGuard() {
         let state = ScannerSheetView.ScannerStateModel()
 

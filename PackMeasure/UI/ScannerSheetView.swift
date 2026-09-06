@@ -166,6 +166,22 @@ struct ScannerSheetView: View {
         private(set) var measurementWorkflow = MultiAngleMeasurementWorkflow()
         private(set) var capturedAngleRecords: [ScannerRecordedAngleCapture] = []
         private(set) var measurementSubject = TargetLockSubject.box
+        private(set) var captureDiagnostics: [String] = []
+
+        var captureDiagnosticsReport: String {
+            let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown"
+            let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"
+            return (["PackMeasure \(version) (\(build)) scan diagnostics",
+                     "Frame extraction results only; success does not imply multi-angle acceptance or accurate dimensions."]
+                    + captureDiagnostics).joined(separator: "\n\n")
+        }
+
+        func recordCaptureDiagnostic(_ report: String, requestID: Int, seriesID: Int) {
+            guard requestID == captureRequestID, seriesID == measurementSeriesID else { return }
+            captureDiagnostics.append(report)
+            if captureDiagnostics.count > 12 { captureDiagnostics.removeFirst(captureDiagnostics.count - 12) }
+        }
+
         private(set) var measurementMode = ScannerMeasurementMode.automaticPhotos
         private(set) var automaticTargetPrompt: PhotoTargetSelectionPrompt?
         private(set) var targetLockLifecycle = TargetLockLifecycle()
@@ -1358,6 +1374,15 @@ struct ScannerSheetView: View {
             .navigationTitle("Scan Item")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    if !scannerState.captureDiagnostics.isEmpty {
+                        ShareLink(item: scannerState.captureDiagnosticsReport) {
+                            Label("Share scan diagnostics", systemImage: "square.and.arrow.up")
+                        }
+                        .accessibilityLabel("Share scan diagnostics")
+                    }
+                }
+
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") {
                         closeScanner()
