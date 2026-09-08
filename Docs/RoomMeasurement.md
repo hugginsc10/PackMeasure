@@ -3,7 +3,7 @@
 Choose **Measure a room** on the home screen, then **Scan a room**. On a supported
 LiDAR iPhone, allow the camera and follow RoomPlan's coaching. Walk slowly around
 one room, including every corner, doorway, and floor-to-wall edge. Tap **Finish**,
-review the numbered outline and wall dimensions, name the room, and tap **Save**.
+review the outline and wall dimensions, name the room, and tap **Save**.
 Saved rooms are separate from the moving inventory. Share measurements from the
 saved room detail. All storage is local; no scan is uploaded by the app.
 
@@ -54,3 +54,20 @@ capture the rest of the room. Save/reopen both partial and fuller results.
 Screenshots IMG_5573/5574 and the user's live-wall-highlights report establish
 that Build 43's post-processing validation failed, but do not identify which
 validation condition fired or prove a particular RoomPlan fault.
+
+## Interactive floorplan
+
+Open a saved room (or a new scan result) and tap **Explore floorplan**. Pinch to
+zoom up to 8x and drag to pan. Double-tap to zoom in; double-tap beyond 3x to
+return to the overview. **Fit** restores the whole outline.
+
+Tap a wall or its number to highlight it and read its saved length, height,
+and capture confidence. The wall menu and previous/next buttons also provide
+access to every segment. Badges remain readable as you zoom; overlapping badges
+are hidden until space is available, with the selected wall taking priority.
+Low-confidence walls are orange, and the selected wall is teal. **Done** returns
+to the saved result. Viewing does not modify the scan or its measurements.
+
+Viewer validation: select walls at fit and zoomed scale, pan and select again,
+restore Fit, choose a crowded segment from the menu, and reopen the saved room.
+Repeat on a one-wall partial scan. Capture accuracy remains a separate check.
