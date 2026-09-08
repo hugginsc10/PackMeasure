@@ -178,12 +178,19 @@ private struct RoomScanSheet: View {
 
 private struct RoomResultView: View {
     let room: MeasuredRoom
+    @State private var exploring = false
 
     var body: some View {
         List {
             Section("Scanned outline") {
-                RoomOutlineView(walls: room.walls).frame(height: 240)
-                    .accessibilityLabel("Top view of \(room.walls.count) captured walls; wall numbers match the list below")
+                Button { exploring = true } label: {
+                    VStack {
+                        RoomFloorplanPreview(walls: room.walls).frame(height: 240)
+                        Label("Explore floorplan", systemImage: "arrow.up.left.and.arrow.down.right")
+                    }
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Explore floorplan, zoom and select walls")
             }
             Section(room.hasRoomExtent ? "Approximate scanned extent" : "Partial room scan") {
                 Text(room.coverageMessage).font(.subheadline)
@@ -212,30 +219,6 @@ private struct RoomResultView: View {
             }
         }
         .navigationTitle(room.name)
-    }
-}
-
-private struct RoomOutlineView: View {
-    let walls: [MeasuredRoom.Wall]
-    var body: some View {
-        Canvas { context, size in
-            let points = walls.flatMap { [$0.start, $0.end] }
-            guard let minX = points.map(\.x).min(), let maxX = points.map(\.x).max(),
-                  let minY = points.map(\.y).min(), let maxY = points.map(\.y).max() else { return }
-            let scale = min((size.width - 40) / CGFloat(max(0.1, maxX - minX)),
-                            (size.height - 40) / CGFloat(max(0.1, maxY - minY)))
-            func point(_ p: SIMD2<Float>) -> CGPoint {
-                CGPoint(x: size.width / 2 + CGFloat(p.x - (minX + maxX) / 2) * scale,
-                        y: size.height / 2 + CGFloat(p.y - (minY + maxY) / 2) * scale)
-            }
-            for (index, wall) in walls.enumerated() {
-                let start = point(wall.start), end = point(wall.end)
-                var path = Path()
-                path.move(to: start); path.addLine(to: end)
-                context.stroke(path, with: .color(wall.confidence == "low" ? .orange : .blue), lineWidth: 3)
-                context.draw(Text("\(index + 1)").font(.caption.bold()),
-                             at: CGPoint(x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 - 10))
-            }
-        }
+        .fullScreenCover(isPresented: $exploring) { RoomFloorplanView(room: room) }
     }
 }
