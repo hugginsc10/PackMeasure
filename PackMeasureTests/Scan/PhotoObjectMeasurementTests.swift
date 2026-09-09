@@ -4,6 +4,55 @@ import simd
 @testable import PackMeasure
 
 final class PhotoObjectMeasurementTests: XCTestCase {
+    func testFailedEdgeCaptureRetainsMaskEvidenceWithoutChangingRejection() throws {
+        let labels = try boxMask(width: 10, height: 10, x: 0...5, y: 2...7)
+        var reports: [String] = []
+        let processor = ScannerAutomaticPhotoFrameProcessor(
+            prompt: .target(normalizedImagePoint: SIMD2<Float>(0.3, 0.5)),
+            measurement: permissiveMeasurement
+        )
+        XCTAssertThrowsError(try processor.makePointCloud(
+            labelMask: labels,
+            depthGrid: populatedDepthGrid(width: 10, height: 10),
+            calibration: calibration(imageWidth: 10, imageHeight: 10),
+            recordEvidence: { reports.append($0) }
+        )) { error in
+            XCTAssertEqual(error as? PhotoObjectMeasurementError,
+                           .maskTouchesImageEdge(stage: .sourceMask))
+        }
+        let report = reports.joined(separator: "\n")
+        XCTAssertTrue(report.contains("mask=source size=10x10 count=36 bounds_xyxy=0,2,5,7"))
+        XCTAssertTrue(report.contains("mask=expected"))
+        XCTAssertTrue(report.contains("mask=retained"))
+        XCTAssertTrue(report.contains("mask=alternate"))
+        XCTAssertTrue(report.contains("touches_edge=true"))
+    }
+
+    func testEvidenceMapPreservesThinEdgesAndIsBounded() {
+        let evidence = PhotoMaskEvidence(name: "test", width: 1920, height: 1440) { x, y in
+            (x == 0 && y == 720) || (x == 1919 && y == 1439)
+        }
+        XCTAssertEqual(evidence.count, 2)
+        XCTAssertEqual(evidence.bounds, "0,720,1919,1439")
+        XCTAssertEqual(evidence.edges, [1, 1, 0, 1])
+        XCTAssertEqual(evidence.rows.count, 24)
+        XCTAssertTrue(evidence.rows.allSatisfy { $0.count == 32 })
+        XCTAssertEqual(evidence.rows.joined().filter { $0 == "#" }.count, 2)
+    }
+
+    func testEvidenceDoesNotChangeAcceptedPointCloud() throws {
+        let mask = try boxMask(width: 10, height: 10, x: 2...7, y: 2...7)
+        let grid = populatedDepthGrid(width: 10, height: 10)
+        let camera = calibration(imageWidth: 10, imageHeight: 10)
+        let baseline = try permissiveMeasurement.makePointCloud(labelMask: mask, depthGrid: grid, calibration: camera)
+        var reports: [String] = []
+        let observed = try permissiveMeasurement.makePointCloud(labelMask: mask, depthGrid: grid,
+            calibration: camera, recordEvidence: { reports.append($0) })
+        XCTAssertEqual(observed.worldPoints, baseline.worldPoints)
+        XCTAssertEqual(observed.maskQuality, baseline.maskQuality)
+        XCTAssertFalse(reports.isEmpty)
+    }
+
     func testExplicitTargetSelectsTappedInstanceInsteadOfCenteredInstance() throws {
         let labels = try labelMask(
             [
