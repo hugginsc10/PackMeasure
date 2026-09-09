@@ -824,6 +824,7 @@ struct MeasurementARView: UIViewRepresentable {
             var lastRejection: CenteredTargetRejection?
             var lastCalibration: FrameCalibrationDiagnostics?
             var lastPhotoFailure: SingleShotCaptureFailure?
+            var targetMaskEvidence: String?
             var capturePath = SingleShotCapturePath.visionMask
             var fallbackTrigger: SingleShotCaptureFailure?
             var fallbackResult = SingleShotFallbackResult.notAttempted
@@ -886,6 +887,7 @@ struct MeasurementARView: UIViewRepresentable {
             let path: SingleShotCapturePath
             let fallbackTrigger: SingleShotCaptureFailure?
             let fallbackResult: SingleShotFallbackResult
+            var targetMaskEvidence: String? = nil
 
             static let visionMask = SingleShotCaptureRoute(
                 path: .visionMask,
@@ -2673,6 +2675,7 @@ struct MeasurementARView: UIViewRepresentable {
             _ route: SingleShotCaptureRoute,
             to capture: inout CaptureAccumulator
         ) {
+            capture.targetMaskEvidence = route.targetMaskEvidence
             capture.capturePath = route.path
             capture.fallbackTrigger = route.fallbackTrigger
             capture.fallbackResult = route.fallbackResult
@@ -3006,21 +3009,34 @@ struct MeasurementARView: UIViewRepresentable {
                 return .failed(.depthGridUnreadable, nil, .visionMask)
             }
 
+            var evidence: [String] = []
+            func withEvidence(_ sample: SingleShotFrameSample) -> SingleShotFrameSample {
+                switch sample {
+                case .accepted(let points, let diagnostics, let outline, var route):
+                    route.targetMaskEvidence = evidence.joined(separator: "\n")
+                    return .accepted(points, diagnostics, outline, route)
+                case .failed(let failure, let diagnostics, var route):
+                    route.targetMaskEvidence = evidence.joined(separator: "\n")
+                    return .failed(failure, diagnostics, route)
+                }
+            }
+            evidence.append("mask_adapter_v1 coordinates=raw_camera_image prompt=\(String(describing: processor?.prompt))")
             let labelMask: PhotoInstanceLabelMask
             do {
                 labelMask = try foregroundInstanceLabelMask(
                     from: frame.capturedImage,
-                    processor: processor
+                    processor: processor,
+                    recordEvidence: { evidence.append($0) }
                 )
             } catch let error as PhotoTargetSelectionError {
-                return .failed(.targetSelection(error), nil, .visionMask)
+                return withEvidence(.failed(.targetSelection(error), nil, .visionMask))
             } catch let error as ForegroundMaskAdapterError {
-                return frameSample(
+                return withEvidence(frameSample(
                     after: .foreground(error),
                     from: frame,
                     grid: grid,
                     hasExplicitTarget: processor != nil
-                )
+                ))
             } catch {
                 let error = error as NSError
                 return .failed(
@@ -3050,14 +3066,16 @@ struct MeasurementARView: UIViewRepresentable {
                         depthGrid: grid,
                         calibration: calibration,
                         protectedEdgeMarginPixels:
-                            policy.protectedEdgeMarginPixels
+                            policy.protectedEdgeMarginPixels,
+                        recordEvidence: { evidence.append($0) }
                     )
                 } else {
                     pointCloud = try PhotoObjectMeasurement(policy: policy)
                         .makePointCloud(
                             labelMask: labelMask,
                             depthGrid: grid,
-                            calibration: calibration
+                            calibration: calibration,
+                            recordEvidence: { evidence.append($0) }
                         )
                 }
                 let diagnostics = FrameCalibrationDiagnostics(
@@ -3070,21 +3088,21 @@ struct MeasurementARView: UIViewRepresentable {
                     rigidItemMultiplicityEvaluation:
                         pointCloud.rigidItemMultiplicityEvaluation
                 )
-                return .accepted(
+                return withEvidence(.accepted(
                     pointCloud.worldPoints,
                     diagnostics,
                     pointCloud.objectOutline,
                     .visionMask
-                )
+                ))
             } catch let error as PhotoTargetSelectionError {
-                return .failed(.targetSelection(error), nil, .visionMask)
+                return withEvidence(.failed(.targetSelection(error), nil, .visionMask))
             } catch let error as PhotoObjectMeasurementError {
-                return frameSample(
+                return withEvidence(frameSample(
                     after: .photo(error),
                     from: frame,
                     grid: grid,
                     hasExplicitTarget: processor != nil
-                )
+                ))
             } catch {
                 let error = error as NSError
                 return .failed(
@@ -3273,7 +3291,8 @@ struct MeasurementARView: UIViewRepresentable {
 
         private func foregroundInstanceLabelMask(
             from pixelBuffer: CVPixelBuffer,
-            processor: ScannerAutomaticPhotoFrameProcessor?
+            processor: ScannerAutomaticPhotoFrameProcessor?,
+            recordEvidence: ((String) -> Void)? = nil
         ) throws -> PhotoInstanceLabelMask {
             try autoreleasepool {
                 let request = VNGenerateForegroundInstanceMaskRequest()
@@ -3315,6 +3334,12 @@ struct MeasurementARView: UIViewRepresentable {
                     )
                 }
 
+                if let recordEvidence {
+                    recordEvidence(PhotoMaskEvidence(name: "vision_foreground", width: lowResolutionMask.width,
+                        height: lowResolutionMask.height) { x, y in
+                            lowResolutionMask.labels[y * lowResolutionMask.width + x] != 0
+                        }.report)
+                }
                 let selected: PhotoSelectedInstanceMask
                 do {
                     if let processor {
@@ -3342,6 +3367,11 @@ struct MeasurementARView: UIViewRepresentable {
                     )
                 }
 
+                if let recordEvidence {
+                    recordEvidence("vision_selected_label=\(selected.label)")
+                    recordEvidence(PhotoMaskEvidence(name: "vision_selected", width: selected.width,
+                        height: selected.height, contains: selected.contains).report)
+                }
                 let scaledMask: CVPixelBuffer
                 do {
                     // Keep the request and scaled-mask generation in the same
@@ -3859,6 +3889,7 @@ struct MeasurementARView: UIViewRepresentable {
             multiplicity=\(multiplicityAssessment) route=\(multiplicityRoute) reason=\(multiplicityIndeterminateReason)
             length_m=\(lengthMeters) width_m=\(widthMeters) height_m=\(heightMeters)
             estimation_failure=\(failureDescription) geometry_error=\(geometryErrorDescription)
+            \(capture.targetMaskEvidence ?? "mask_evidence=unavailable_before_selection")
             """
             let requestID = capture.requestID
             let seriesID = capture.measurementSeriesID

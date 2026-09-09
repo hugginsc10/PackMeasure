@@ -2011,6 +2011,52 @@ struct PhotoWorldPointProjector: Sendable {
     }
 }
 
+/// Bounded, image-free mask evidence. Coordinates are raw camera-image pixels,
+/// not portrait preview coordinates. Each # bin contains at least one pixel;
+/// the map is diagnostic occupancy, never measurement geometry.
+struct PhotoMaskEvidence: Equatable, Sendable {
+    let name: String
+    let width: Int
+    let height: Int
+    let count: Int
+    let bounds: String
+    let edges: [Int] // left, right, top, bottom; corner pixels count on both edges
+    let rows: [String]
+
+    init(name: String, width: Int, height: Int, margin: Int = 0,
+         contains: (Int, Int) -> Bool) {
+        self.name = name
+        self.width = width
+        self.height = height
+        let columns = min(32, width), rowCount = min(24, height)
+        var bins = Array(repeating: false, count: columns * rowCount)
+        var count = 0, left = width, right = -1, top = height, bottom = -1
+        var edges = [0, 0, 0, 0]
+        for y in 0..<height {
+            for x in 0..<width where contains(x, y) {
+                count += 1
+                left = min(left, x); right = max(right, x)
+                top = min(top, y); bottom = max(bottom, y)
+                if x <= margin { edges[0] += 1 }
+                if x >= width - 1 - margin { edges[1] += 1 }
+                if y <= margin { edges[2] += 1 }
+                if y >= height - 1 - margin { edges[3] += 1 }
+                bins[(y * rowCount / height) * columns + x * columns / width] = true
+            }
+        }
+        self.count = count
+        self.bounds = count == 0 ? "none" : "\(left),\(top),\(right),\(bottom)"
+        self.edges = edges
+        self.rows = (0..<rowCount).map { y in
+            (0..<columns).map { bins[y * columns + $0] ? "#" : "." }.joined()
+        }
+    }
+
+    var report: String {
+        "mask=\(name) size=\(width)x\(height) count=\(count) bounds_xyxy=\(bounds) edge_lrtb=\(edges.map(String.init).joined(separator: ","))\n" + rows.joined(separator: "\n")
+    }
+}
+
 struct PhotoObjectPointCloud: Sendable {
     let selectedLabel: UInt32
     let worldPoints: [SIMD3<Float>]
@@ -2043,7 +2089,8 @@ struct PhotoObjectMeasurement: Sendable {
         labelMask: PhotoInstanceLabelMask,
         depthGrid: DepthGrid,
         calibration: PhotoCameraCalibration,
-        prompt: PhotoTargetSelectionPrompt? = nil
+        prompt: PhotoTargetSelectionPrompt? = nil,
+        recordEvidence: ((String) -> Void)? = nil
     ) throws -> PhotoObjectPointCloud {
         try policy.validate()
         guard hasMatchingAspectRatio(labelMask, calibration) else {
@@ -2051,6 +2098,12 @@ struct PhotoObjectMeasurement: Sendable {
         }
 
         let selected = try instanceSelector.select(in: labelMask, prompt: prompt)
+        if let recordEvidence {
+            recordEvidence("mask_evidence_v1 coordinates=raw_camera_image map=occupied_bins margin=\(policy.protectedEdgeMarginPixels) label=\(selected.label) prompt=\(String(describing: prompt))")
+            recordEvidence(PhotoMaskEvidence(name: "source", width: selected.width,
+                height: selected.height, margin: policy.protectedEdgeMarginPixels,
+                contains: selected.contains).report)
+        }
         let quality = selected.quality(edgeMarginPixels: policy.protectedEdgeMarginPixels)
         guard quality.areaFraction >= policy.minimumMaskAreaFraction else {
             throw PhotoObjectMeasurementError.maskAreaTooSmall(
@@ -2083,6 +2136,14 @@ struct PhotoObjectMeasurement: Sendable {
             depthGrid: depthGrid,
             normalizedImagePoint: explicitTargetPoint
         )
+        if let recordEvidence {
+            for (name, mask) in [("expected", filteredMasks.targetExpectationDepthMask),
+                                 ("retained", filteredMasks.retainedDepthMask),
+                                 ("alternate", filteredMasks.provenAlternateDepthMask)] {
+                recordEvidence(PhotoMaskEvidence(name: name, width: mask.width,
+                    height: mask.height, contains: mask.contains).report)
+            }
+        }
         if let explicitTargetPoint,
            let targetOwnershipGuard,
            let ambiguity = targetOwnershipGuard.ambiguity(
@@ -2095,6 +2156,7 @@ struct PhotoObjectMeasurement: Sendable {
             edgeMarginPixels: policy.protectedEdgeMarginPixels,
             excluding: filteredMasks.provenAlternateDepthMask
         )
+        recordEvidence?("source_after_filter count=\(targetQuality.selectedPixelCount) touches_edge=\(targetQuality.touchesProtectedEdge)")
         guard !targetQuality.touchesProtectedEdge else {
             throw PhotoObjectMeasurementError.maskTouchesImageEdge(stage: .sourceMask)
         }
