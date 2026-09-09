@@ -9,32 +9,54 @@ struct RoomMeasurementView: View {
     private let store = RoomScanStore()
 
     var body: some View {
-        List {
-            Section {
-                Button("Scan a room", systemImage: "viewfinder") { scanning = true }
-                    .disabled(!RoomCaptureSession.isSupported)
-                Text(RoomCaptureSession.isSupported
-                     ? "Walk slowly around one room. Capture every wall, corner, and floor edge."
-                     : "Room scanning requires a supported LiDAR iPhone. It is unavailable in the simulator.")
-                    .font(.footnote).foregroundStyle(.secondary)
-            }
-            Section("Saved rooms") {
-                if rooms.isEmpty { Text("No room scans yet.").foregroundStyle(.secondary) }
-                ForEach(rooms) { room in
-                    NavigationLink {
-                        RoomResultView(room: room)
-                    } label: {
-                        VStack(alignment: .leading) {
-                            Text(room.name)
-                            Text(room.hasRoomExtent ? "\(room.walls.count) walls" : "Partial scan · \(room.walls.count) walls")
-                                .font(.caption).foregroundStyle(.secondary)
-                            Text(room.date, style: .date).font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                VStack(alignment: .leading, spacing: 16) {
+                    MeasureEyebrow(text: "Spatial capture")
+                    Text("Your space, mapped.").font(.system(.title, design: .rounded).bold())
+                    Text(RoomCaptureSession.isSupported
+                         ? "Move through your room to capture its walls and dimensions."
+                         : "Room capture needs a supported LiDAR iPhone. Saved floorplans are available below.")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                    Button { scanning = true } label: {
+                        Label("Scan a room", systemImage: "viewfinder")
+                    }.buttonStyle(MeasurePrimaryButton()).disabled(!RoomCaptureSession.isSupported)
+                }.measurePanel()
+                HStack {
+                    MeasureEyebrow(text: "Saved spaces")
+                    Spacer()
+                    Text("\(rooms.count)").font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary)
                 }
-            }
+                if rooms.isEmpty {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Image(systemName: "square.dashed").font(.largeTitle).foregroundStyle(MeasureStyle.accent)
+                        Text("Make room for your first scan.").font(.headline)
+                        Text("Save a room to revisit its floorplan and individual wall measurements.")
+                            .font(.subheadline).foregroundStyle(.secondary)
+                    }.measurePanel()
+                }
+                ForEach(rooms) { room in
+                    NavigationLink { RoomResultView(room: room) } label: {
+                        VStack(alignment: .leading, spacing: 12) {
+                            RoomFloorplanPreview(walls: room.walls).frame(height: 150)
+                                .background(MeasureStyle.background, in: RoundedRectangle(cornerRadius: 16))
+                            HStack {
+                                VStack(alignment: .leading, spacing: 5) {
+                                    Text(room.name).font(.headline).foregroundStyle(.primary)
+                                    Text(room.hasRoomExtent ? "\(room.walls.count) wall segments" : "Partial scan · \(room.walls.count) segments")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Image(systemName: "arrow.up.right").foregroundStyle(MeasureStyle.accent)
+                            }
+                            Text(room.date, style: .date).font(.caption).foregroundStyle(.secondary)
+                        }.measurePanel()
+                    }.buttonStyle(.plain)
+                }
+            }.padding(20)
         }
-        .navigationTitle("Room dimensions")
+        .measureScreen()
+        .navigationTitle("Rooms")
         .task { reload() }
         .fullScreenCover(isPresented: $scanning, onDismiss: reload) {
             RoomScanSheet(store: store)
@@ -91,7 +113,7 @@ private struct RoomScanSheet: View {
                 } else if let failure {
                     VStack {
                         ContentUnavailableView("Room scan needs another try", systemImage: "exclamationmark.triangle", description: Text(failure))
-                        Button("Start new scan", action: retry).buttonStyle(.borderedProminent)
+                        Button("Start new scan", action: retry).buttonStyle(MeasurePrimaryButton())
                         ShareLink("Share room diagnostics", item: diagnosticReport)
                             .padding(.bottom)
                     }
@@ -120,6 +142,7 @@ private struct RoomScanSheet: View {
                     ProgressView("Checking camera access…")
                 }
             }
+            .measureScreen()
             .navigationTitle(result == nil ? "Scan room" : "Review room")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -181,44 +204,59 @@ private struct RoomResultView: View {
     @State private var exploring = false
 
     var body: some View {
-        List {
-            Section("Scanned outline") {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
                 Button { exploring = true } label: {
-                    VStack {
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            MeasureEyebrow(text: "Floorplan")
+                            Spacer()
+                            Image(systemName: "arrow.up.left.and.arrow.down.right").foregroundStyle(MeasureStyle.accent)
+                        }
                         RoomFloorplanPreview(walls: room.walls).frame(height: 240)
-                        Label("Explore floorplan", systemImage: "arrow.up.left.and.arrow.down.right")
+                        HStack {
+                            Text("Explore floorplan").font(.headline)
+                            Spacer()
+                            Image(systemName: "arrow.right")
+                        }.foregroundStyle(MeasureStyle.accent)
+                        Text("Zoom, pan, and select a wall.").font(.caption).foregroundStyle(.secondary)
+                    }.measurePanel()
+                }.buttonStyle(.plain).accessibilityLabel("Explore floorplan, zoom and select walls")
+                VStack(alignment: .leading, spacing: 18) {
+                    MeasureEyebrow(text: room.hasRoomExtent ? "Scanned extent" : "Partial scan")
+                    Text(room.coverageMessage).font(.subheadline).foregroundStyle(.secondary)
+                    if room.hasRoomExtent {
+                        MeasureMetric(title: "Long span", value: MeasuredRoom.dimension(room.spanLength))
+                        Divider()
+                        MeasureMetric(title: "Short span", value: MeasuredRoom.dimension(room.spanWidth))
+                        Divider()
+                        MeasureMetric(title: "Maximum wall height", value: MeasuredRoom.dimension(room.wallHeight))
+                        Text("Approximate captured extent, not floor area or verified ceiling height. Missing walls and recesses can affect these spans.")
+                            .font(.footnote).foregroundStyle(.secondary)
                     }
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Explore floorplan, zoom and select walls")
-            }
-            Section(room.hasRoomExtent ? "Approximate scanned extent" : "Partial room scan") {
-                Text(room.coverageMessage).font(.subheadline)
-                if room.hasRoomExtent {
-                    LabeledContent("Long span", value: MeasuredRoom.dimension(room.spanLength))
-                    LabeledContent("Short span", value: MeasuredRoom.dimension(room.spanWidth))
-                    LabeledContent("Maximum wall height", value: MeasuredRoom.dimension(room.wallHeight))
-                    Text("Spans follow the longest captured wall. Missing walls can understate the room; recesses and irregular shapes affect the extent. This is not floor area or a verified ceiling height.")
-                        .font(.footnote).foregroundStyle(.secondary)
-            }
-            }
-            Section("Wall dimensions") {
-                ForEach(Array(room.walls.enumerated()), id: \.element.id) { index, wall in
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Wall \(index + 1)").font(.headline)
-                        Text("Length: \(MeasuredRoom.dimension(wall.length))")
-                        Text("Height: \(MeasuredRoom.dimension(wall.height))")
-                        Text("\(wall.confidence.capitalized) confidence").font(.caption).foregroundStyle(.secondary)
+                }.measurePanel()
+                DisclosureGroup {
+                    ForEach(Array(room.walls.enumerated()), id: \.element.id) { index, wall in
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Wall \(index + 1)").font(.headline)
+                            LabeledContent("Length", value: MeasuredRoom.dimension(wall.length))
+                            LabeledContent("Height", value: MeasuredRoom.dimension(wall.height))
+                            Text("\(wall.confidence.capitalized) capture confidence").font(.caption).foregroundStyle(.secondary)
+                        }.font(.subheadline).padding(.vertical, 12)
+                        if index < room.walls.count - 1 { Divider() }
                     }
-                }
-            }
-            Section {
-                ShareLink("Share measurements", item: room.shareText)
-                Text("Compare with a tape or laser measure before relying on these dimensions. Room scans are saved separately from moving inventory.")
+                } label: {
+                    Label("Wall measurements · \(room.walls.count)", systemImage: "ruler").font(.headline)
+                }.measurePanel()
+                ShareLink(item: room.shareText) {
+                    Label("Share measurements", systemImage: "square.and.arrow.up")
+                }.buttonStyle(MeasurePrimaryButton())
+                Text("Check dimensions with a tape or laser measure before relying on them. Room scans are separate from moving inventory.")
                     .font(.footnote).foregroundStyle(.secondary)
-            }
+            }.padding(20)
         }
-        .navigationTitle(room.name)
+        .measureScreen()
+        .navigationTitle(room.name).navigationBarTitleDisplayMode(.inline)
         .fullScreenCover(isPresented: $exploring) { RoomFloorplanView(room: room) }
     }
 }

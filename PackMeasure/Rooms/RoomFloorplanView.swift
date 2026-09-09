@@ -73,7 +73,7 @@ struct RoomFloorplanPreview: View {
         Canvas { context, size in
             for (index, line) in FloorplanGeometry(walls: walls, size: size).segments.enumerated() {
                 var path = Path(); path.move(to: line.start); path.addLine(to: line.end)
-                context.stroke(path, with: .color(walls[index].confidence == "low" ? .orange : .blue), lineWidth: 3)
+                context.stroke(path, with: .color(walls[index].confidence == "low" ? .orange : MeasureStyle.accent), lineWidth: 3)
             }
         }
         .accessibilityHidden(true)
@@ -90,8 +90,11 @@ struct RoomFloorplanView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                Text("Pinch to zoom · Drag to pan · Tap a wall")
-                    .font(.footnote).foregroundStyle(.secondary).padding(.vertical, 10)
+                HStack {
+                    MeasureEyebrow(text: "Plan view")
+                    Spacer()
+                    Text("Pinch · Pan · Select").font(.caption).foregroundStyle(.secondary)
+                }.padding(.horizontal, 20).padding(.vertical, 12)
                 FloorplanScrollView(walls: room.walls, selected: $selected, reset: reset, zoomRequest: zoomRequest)
                     .clipped()
                     .accessibilityLabel("Interactive scanned floorplan")
@@ -121,22 +124,33 @@ struct RoomFloorplanView: View {
                     }
                     if let selected, room.walls.indices.contains(selected) {
                         let wall = room.walls[selected]
-                        LabeledContent("Length", value: MeasuredRoom.dimension(wall.length))
-                        LabeledContent("Height", value: MeasuredRoom.dimension(wall.height))
+                        ViewThatFits(in: .horizontal) {
+                            HStack(spacing: 16) {
+                                MeasureMetric(title: "Length", value: MeasuredRoom.dimension(wall.length))
+                                MeasureMetric(title: "Height", value: MeasuredRoom.dimension(wall.height))
+                            }
+                            VStack(alignment: .leading, spacing: 12) {
+                                MeasureMetric(title: "Length", value: MeasuredRoom.dimension(wall.length))
+                                MeasureMetric(title: "Height", value: MeasuredRoom.dimension(wall.height))
+                            }
+                        }
                         Text("\(wall.confidence.capitalized) capture confidence").font(.caption).foregroundStyle(.secondary)
                     } else {
-                        LabeledContent("Length", value: "—")
-                        LabeledContent("Height", value: "—")
+                        HStack(spacing: 16) {
+                            MeasureMetric(title: "Length", value: "—")
+                            MeasureMetric(title: "Height", value: "—")
+                        }
                         Text("Select a wall to see its dimensions.").font(.caption).foregroundStyle(.secondary)
                     }
                 }
-                .padding().background(.regularMaterial)
+                .padding(20)
+                .background(MeasureStyle.panel, in: UnevenRoundedRectangle(topLeadingRadius: 24, topTrailingRadius: 24))
             }
-            .background(Color(uiColor: .secondarySystemBackground))
+            .background(MeasureStyle.background)
             .navigationTitle("Floorplan").navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) { Button("Fit") { reset += 1 } }
+
             }
         }
     }
@@ -269,19 +283,28 @@ private final class FloorplanDrawing: UIView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     override func draw(_ rect: CGRect) {
         let geometry = geometry
+        let dots = UIBezierPath()
+        for x in stride(from: CGFloat(12), through: bounds.width, by: 28) {
+            for y in stride(from: CGFloat(12), through: bounds.height, by: 28) {
+                dots.append(UIBezierPath(ovalIn: CGRect(x: x, y: y, width: 1, height: 1)))
+            }
+        }
+        UIColor.white.withAlphaComponent(0.09).setFill(); dots.fill()
         for (index, line) in geometry.segments.enumerated() {
             let path = UIBezierPath(); path.move(to: line.start); path.addLine(to: line.end)
-            let color: UIColor = index == selected ? .systemTeal : walls[index].confidence == "low" ? .systemOrange : .systemBlue
+            let color: UIColor = index == selected ? UIColor(MeasureStyle.violet) : walls[index].confidence == "low" ? .systemOrange : UIColor(MeasureStyle.accent)
             color.setStroke(); path.lineWidth = (index == selected ? 6 : 3)
             path.lineCapStyle = .round; path.stroke()
         }
         for label in geometry.labels(zoom: 1, selected: selected) {
-            (label.index == selected ? UIColor.systemTeal : UIColor.secondarySystemBackground).setFill()
-            UIBezierPath(roundedRect: label.rect, cornerRadius: 7).fill()
+            if label.index == selected {
+                UIColor(MeasureStyle.violet).setFill()
+                UIBezierPath(roundedRect: label.rect, cornerRadius: 7).fill()
+            }
             let text = "\(label.index + 1)" as NSString
             let attributes: [NSAttributedString.Key: Any] = [
                 .font: UIFont.monospacedDigitSystemFont(ofSize: 13, weight: .semibold),
-                .foregroundColor: UIColor.label
+                .foregroundColor: label.index == selected ? UIColor(MeasureStyle.background) : UIColor.white
             ]
             let size = text.size(withAttributes: attributes)
             text.draw(at: CGPoint(x: label.rect.midX - size.width / 2, y: label.rect.midY - size.height / 2), withAttributes: attributes)
