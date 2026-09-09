@@ -85,3 +85,15 @@ lines. The floorplan has one Fit control and a compact measurement inspector.
 This release does not change capture geometry, validation, saved data formats,
 packing calculations, or accuracy claims. Existing room and inventory files remain
 compatible. Check navigation, capture, save/reopen, and inventory edits on iPhone.
+
+## Build 47 wall labels
+
+The interactive floorplan defaults to **Lengths**, displaying each visible wall's
+saved length in feet to one decimal place, matching the detail panel. Switch to
+**Wall IDs** to cross-reference the wall list. Selection still identifies the wall
+in the inspector and shows both metric and imperial dimensions.
+
+Label rectangles use the rendered text size for collision suppression and taps.
+Labels sit clear of their own wall; crowded labels are hidden until zoom creates
+room. Switching label modes preserves the selected wall and viewport. Small
+library previews remain unlabeled. Measurements and saved room files are unchanged.

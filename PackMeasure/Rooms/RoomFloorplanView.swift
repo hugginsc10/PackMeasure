@@ -1,6 +1,18 @@
 import SwiftUI
 import UIKit
 
+enum FloorplanLabelMode: String, CaseIterable {
+    case lengths = "Lengths"
+    case wallIDs = "Wall IDs"
+
+    func text(for wall: MeasuredRoom.Wall, index: Int) -> String {
+        switch self {
+        case .lengths: String(format: "%.1f ft", wall.length * 3.28084)
+        case .wallIDs: String(index + 1)
+        }
+    }
+}
+
 /// Projects saved metric geometry without changing the underlying measurements.
 struct FloorplanGeometry {
     let segments: [(start: CGPoint, end: CGPoint)]
@@ -42,7 +54,7 @@ struct FloorplanGeometry {
     }
 
     /// Constant screen-size badges, with selected wall taking precedence.
-    func labels(zoom: CGFloat, selected: Int?) -> [(index: Int, rect: CGRect)] {
+    func labels(zoom: CGFloat, selected: Int?, sizes: [CGSize]? = nil) -> [(index: Int, rect: CGRect)] {
         let zoom = max(1, zoom)
         let order = segments.indices.sorted { a, b in
             if a == b { return false }
@@ -53,12 +65,15 @@ struct FloorplanGeometry {
         var result: [(index: Int, rect: CGRect)] = []
         for index in order {
             let line = segments[index]
-            let width = CGFloat(String(index + 1).count * 9 + 14) / zoom
+            let size = sizes.flatMap { $0.indices.contains(index) ? $0[index] : nil }
+                ?? CGSize(width: String(index + 1).count * 9 + 14, height: 24)
+            let width = size.width / zoom, height = size.height / zoom
             let dx = line.end.x - line.start.x, dy = line.end.y - line.start.y
             let length = max(0.001, hypot(dx, dy))
-            let rect = CGRect(x: (line.start.x + line.end.x) / 2 - dy / length * 26 / zoom - width / 2,
-                              y: (line.start.y + line.end.y) / 2 + dx / length * 26 / zoom - 12 / zoom,
-                              width: width, height: 24 / zoom)
+            let offset = max(26 / zoom, abs(dy) / length * width / 2 + abs(dx) / length * height / 2 + 8 / zoom)
+            let rect = CGRect(x: (line.start.x + line.end.x) / 2 - dy / length * offset - width / 2,
+                              y: (line.start.y + line.end.y) / 2 + dx / length * offset - height / 2,
+                              width: width, height: height)
             if !result.contains(where: { $0.rect.insetBy(dx: -4 / zoom, dy: -4 / zoom).intersects(rect) }) {
                 result.append((index, rect))
             }
@@ -86,6 +101,7 @@ struct RoomFloorplanView: View {
     @State private var selected: Int?
     @State private var reset = 0
     @State private var zoomRequest = 0
+    @State private var labelMode: FloorplanLabelMode = .lengths
 
     var body: some View {
         NavigationStack {
@@ -95,7 +111,12 @@ struct RoomFloorplanView: View {
                     Spacer()
                     Text("Pinch · Pan · Select").font(.caption).foregroundStyle(.secondary)
                 }.padding(.horizontal, 20).padding(.vertical, 12)
-                FloorplanScrollView(walls: room.walls, selected: $selected, reset: reset, zoomRequest: zoomRequest)
+                Picker("Floorplan labels", selection: $labelMode) {
+                    ForEach(FloorplanLabelMode.allCases, id: \.self) { mode in
+                        Text(mode.rawValue).tag(mode)
+                    }
+                }.pickerStyle(.segmented).padding(.horizontal, 20).padding(.bottom, 12)
+                FloorplanScrollView(walls: room.walls, selected: $selected, reset: reset, zoomRequest: zoomRequest, labelMode: labelMode)
                     .clipped()
                     .accessibilityLabel("Interactive scanned floorplan")
                 VStack(alignment: .leading, spacing: 10) {
@@ -166,6 +187,7 @@ private struct FloorplanScrollView: UIViewRepresentable {
     @Binding var selected: Int?
     let reset: Int
     let zoomRequest: Int
+    let labelMode: FloorplanLabelMode
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeUIView(context: Context) -> FloorplanScrollContainer {
@@ -182,6 +204,7 @@ private struct FloorplanScrollView: UIViewRepresentable {
     func updateUIView(_ view: FloorplanScrollContainer, context: Context) {
         context.coordinator.parent = self
         view.drawing.selected = selected
+        view.drawing.labelMode = labelMode
         if view.reset != reset { view.reset = reset; view.fit() }
         if view.zoomRequest != zoomRequest {
             let factor: CGFloat = zoomRequest > view.zoomRequest ? 2 : 0.5
@@ -211,7 +234,7 @@ private struct FloorplanScrollView: UIViewRepresentable {
             guard let view = gesture.view as? FloorplanScrollContainer else { return }
             let point = gesture.location(in: view.drawing)
             let geometry = view.drawing.geometry
-            parent.selected = geometry.labels(zoom: 1, selected: parent.selected)
+            parent.selected = view.drawing.labels
                 .first(where: { $0.rect.contains(point) })?.index
                 ?? geometry.nearestWall(to: point, tolerance: 22)
         }
@@ -269,6 +292,15 @@ private final class FloorplanScrollContainer: UIScrollView {
 private final class FloorplanDrawing: UIView {
     var walls: [MeasuredRoom.Wall] = []
     var selected: Int?
+    var labelMode: FloorplanLabelMode = .lengths
+    private let labelFont = UIFont.monospacedDigitSystemFont(ofSize: 13, weight: .semibold)
+    var labels: [(index: Int, rect: CGRect)] {
+        let sizes = walls.enumerated().map { index, wall in
+            let size = (labelMode.text(for: wall, index: index) as NSString).size(withAttributes: [.font: labelFont])
+            return CGSize(width: ceil(size.width) + 14, height: max(24, ceil(size.height) + 8))
+        }
+        return geometry.labels(zoom: 1, selected: selected, sizes: sizes)
+    }
     var zoom: CGFloat = 1
     var offset: CGPoint = .zero
     var geometry: FloorplanGeometry {
@@ -296,14 +328,14 @@ private final class FloorplanDrawing: UIView {
             color.setStroke(); path.lineWidth = (index == selected ? 6 : 3)
             path.lineCapStyle = .round; path.stroke()
         }
-        for label in geometry.labels(zoom: 1, selected: selected) {
+        for label in labels {
             if label.index == selected {
                 UIColor(MeasureStyle.violet).setFill()
                 UIBezierPath(roundedRect: label.rect, cornerRadius: 7).fill()
             }
-            let text = "\(label.index + 1)" as NSString
+            let text = labelMode.text(for: walls[label.index], index: label.index) as NSString
             let attributes: [NSAttributedString.Key: Any] = [
-                .font: UIFont.monospacedDigitSystemFont(ofSize: 13, weight: .semibold),
+                .font: labelFont,
                 .foregroundColor: label.index == selected ? UIColor(MeasureStyle.background) : UIColor.white
             ]
             let size = text.size(withAttributes: attributes)
