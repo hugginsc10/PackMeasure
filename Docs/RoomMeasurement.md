@@ -65,9 +65,23 @@ Tap a wall or its number to highlight it and read its saved length, height,
 and capture confidence. The wall menu and previous/next buttons also provide
 access to every segment. Badges remain readable as you zoom; overlapping badges
 are hidden until space is available, with the selected wall taking priority.
-Low-confidence walls are orange, and the selected wall is teal. **Done** returns
+Low-confidence walls are orange, and the selected wall is violet. **Done** returns
 to the saved result. Viewing does not modify the scan or its measurements.
 
 Viewer validation: select walls at fit and zoomed scale, pan and select again,
 restore Fit, choose a crowded segment from the menu, and reopen the saved room.
 Repeat on a one-wall partial scan. Capture accuracy remains a separate check.
+
+## Build 46 visual refresh
+
+Measure, Rooms, and Load tabs separate capture, saved floorplans, and moving
+inventory. The Measure dashboard also links directly to rooms and the load.
+Graphite surfaces, cyan actions, rounded measurement typography, and consistent
+cards carry across room results, manual entry, scanner controls, and load planning.
+The app uses a dark appearance. Low-confidence walls stay orange; selection is
+violet. Unselected wall badges no longer have opaque backgrounds that obscure
+lines. The floorplan has one Fit control and a compact measurement inspector.
+
+This release does not change capture geometry, validation, saved data formats,
+packing calculations, or accuracy claims. Existing room and inventory files remain
+compatible. Check navigation, capture, save/reopen, and inventory edits on iPhone.

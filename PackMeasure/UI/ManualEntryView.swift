@@ -168,6 +168,13 @@ struct ManualEntryView: View {
     var body: some View {
         NavigationStack {
             Form {
+                Group {
+                Section {
+                    VStack(alignment: .leading, spacing: 12) {
+                        MeasureEyebrow(text: "Manual measurement")
+                        Text("Add an item.").font(.title2.bold())
+                    }.padding(.vertical, 8)
+                }.listRowBackground(MeasureStyle.panel)
                 Section("Item") {
                     TextField("Item name", text: $draft.name)
                         .focused($focusedField, equals: .name)
@@ -238,7 +245,9 @@ struct ManualEntryView: View {
                             .foregroundStyle(.orange)
                     }
                 }
+                }.listRowBackground(MeasureStyle.panel)
             }
+            .measureScreen()
             .navigationTitle("Enter dimensions")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
