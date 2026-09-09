@@ -1,6 +1,7 @@
 @preconcurrency import ARKit
 @preconcurrency import AVFoundation
 import Foundation
+import CoreImage
 import OSLog
 import QuartzCore
 import RealityKit
@@ -3097,6 +3098,20 @@ struct MeasurementARView: UIViewRepresentable {
             } catch let error as PhotoTargetSelectionError {
                 return withEvidence(.failed(.targetSelection(error), nil, .visionMask))
             } catch let error as PhotoObjectMeasurementError {
+                if error == .maskTouchesImageEdge(stage: .sourceMask),
+                   let processor, processor.measurement.rigidItemMultiplicityGuard != nil,
+                   let refined = focusedBoxPointCloud(frame: frame, grid: grid,
+                       calibration: calibration, original: labelMask, processor: processor,
+                       recordEvidence: { evidence.append($0) }) {
+                    let diagnostics = FrameCalibrationDiagnostics(
+                        rawRegionPixelCount: refined.maskQuality.selectedPixelCount,
+                        retainedRegionPixelCount: refined.depthSupport.supportedSampleCount,
+                        regionCoverage: refined.depthSupport.coverage,
+                        absoluteUpNormal: nil, elevationAboveFloorMeters: nil, floorEstimate: nil,
+                        rigidItemMultiplicityEvaluation: refined.rigidItemMultiplicityEvaluation)
+                    return withEvidence(.accepted(refined.worldPoints, diagnostics,
+                        refined.objectOutline, .visionMask))
+                }
                 return withEvidence(frameSample(
                     after: .photo(error),
                     from: frame,
@@ -3111,6 +3126,63 @@ struct MeasurementARView: UIViewRepresentable {
                     .visionMask
                 )
             }
+        }
+
+        /// Re-segment the same frozen RGB frame; all geometry still uses its
+        /// original aligned depth and calibration, with unchanged quality gates.
+        private func focusedBoxPointCloud(frame: ARFrame, grid: DepthGrid,
+            calibration: PhotoCameraCalibration, original: PhotoInstanceLabelMask,
+            processor: ScannerAutomaticPhotoFrameProcessor,
+            recordEvidence: @escaping (String) -> Void) -> PhotoObjectPointCloud? {
+            guard original.width == calibration.imageWidth, original.height == calibration.imageHeight,
+                  case .target(let target) = processor.prompt,
+                  let originalSelection = try? processor.selectForeground(in: original) else { return nil }
+            let image = CIImage(cvPixelBuffer: frame.capturedImage)
+            let context = CIContext(options: [.cacheIntermediates: false])
+            var candidates: [PhotoInstanceLabelMask] = []
+            for window in PhotoFocusWindow.candidates(width: original.width, height: original.height, target: target) {
+                recordEvidence("focus_window xywh=\(window.x),\(window.y),\(window.width),\(window.height)")
+                // Core Image uses bottom-left rectangles; Vision prompts use top-left.
+                let rect = CGRect(x: window.x, y: original.height - window.y - window.height,
+                                  width: window.width, height: window.height)
+                guard let cropped = context.createCGImage(image, from: rect) else { continue }
+                let focused = ScannerAutomaticPhotoFrameProcessor(
+                    prompt: .target(normalizedImagePoint: window.prompt(target,
+                        imageWidth: original.width, imageHeight: original.height)),
+                    measurement: processor.measurement)
+                do {
+                    let mask = try foregroundInstanceLabelMask(from: frame.capturedImage,
+                        processor: focused,
+                        recordEvidence: recordEvidence,
+                        handlerOverride: VNImageRequestHandler(cgImage: cropped, options: [:]))
+                    let selected = try focused.selectForeground(in: mask)
+                    guard let registered = try window.registered(selected, imageWidth: original.width,
+                        imageHeight: original.height) else {
+                        recordEvidence("focus_rejected=crop_boundary_or_registration")
+                        continue
+                    }
+                    for previous in candidates {
+                        guard let consensus = try PhotoFocusedSelectionConsensus.merge(previous, registered,
+                            within: originalSelection) else { continue }
+                        recordEvidence("focus_consensus=accepted_masks checking_geometry=true")
+                        do {
+                            let cloud = try processor.makePointCloud(labelMask: consensus, depthGrid: grid,
+                                calibration: calibration,
+                                protectedEdgeMarginPixels: max(1, min(original.width, original.height) / 50),
+                                recordEvidence: recordEvidence)
+                            recordEvidence("focus_result=accepted_geometry")
+                            return cloud
+                        } catch {
+                            recordEvidence("focus_geometry_rejected=\(String(describing: error))")
+                        }
+                    }
+                    candidates.append(registered)
+                } catch {
+                    recordEvidence("focus_rejected=\(String(describing: error))")
+                }
+            }
+            recordEvidence("focus_result=no_acceptable_consensus")
+            return nil
         }
 
         /// Converts raw camera-image contours into a portrait-oriented image
@@ -3292,11 +3364,12 @@ struct MeasurementARView: UIViewRepresentable {
         private func foregroundInstanceLabelMask(
             from pixelBuffer: CVPixelBuffer,
             processor: ScannerAutomaticPhotoFrameProcessor?,
-            recordEvidence: ((String) -> Void)? = nil
+            recordEvidence: ((String) -> Void)? = nil,
+            handlerOverride: VNImageRequestHandler? = nil
         ) throws -> PhotoInstanceLabelMask {
             try autoreleasepool {
                 let request = VNGenerateForegroundInstanceMaskRequest()
-                let requestHandler = VNImageRequestHandler(
+                let requestHandler = handlerOverride ?? VNImageRequestHandler(
                     cvPixelBuffer: pixelBuffer,
                     options: [:]
                 )

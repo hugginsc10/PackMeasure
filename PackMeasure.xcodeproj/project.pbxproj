@@ -27,6 +27,7 @@
 		3F8DAB8D08081610B9AF1FD8 /* Build33ScannerPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C629A3830F96014BAFE75FC /* Build33ScannerPresentation.swift */; };
 		41EEA24F349C4C2AE650B9EC /* ScannerOrchestrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04C3A3BE062880DD78498C42 /* ScannerOrchestrationTests.swift */; };
 		42AD551A4A6F786DDA2A25F6 /* PhotoObjectMeasurementTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53B7914EAEB1EDE13DA87022 /* PhotoObjectMeasurementTests.swift */; };
+		4686024849ABEC08C80352D2 /* PhotoFocusedSelectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 784ED28CDB66EA0B31292EF4 /* PhotoFocusedSelectionTests.swift */; };
 		505B39CB31D0CC5449424178 /* ScannerSheetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84DFB60E2C6A4BA85E8C1AA0 /* ScannerSheetView.swift */; };
 		5108F38EA742072EDA5538BB /* MeasurementMath.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A6E5BC93C71F94AB333A1BF /* MeasurementMath.swift */; };
 		53B242F56BD9E49BFDED92C1 /* RoomMeasurementTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DD24F78E32CFCC6178E6DAA /* RoomMeasurementTests.swift */; };
@@ -52,6 +53,7 @@
 		9C825739E009739E0C6D92F7 /* SingleShotObjectMeasurementTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35CC0B9C38D98D8F0A49EDD3 /* SingleShotObjectMeasurementTests.swift */; };
 		9D2E80DD19A13FA9C3143DC2 /* GuidedBoxWorkflowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1AA05B83704FCB14040623FB /* GuidedBoxWorkflowTests.swift */; };
 		A720D5AAF27EB5F337F4A187 /* TargetLockFrameValidationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 072DD19BDDC569526BD4D6C1 /* TargetLockFrameValidationTests.swift */; };
+		AB67D63C030489854EF2E9D4 /* PhotoFocusedSelection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09DDC1DB756B85AD4464C98A /* PhotoFocusedSelection.swift */; };
 		AFA54B21D376DF7B453E6AA6 /* SingleShotObjectMeasurement.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA64797949F43B846C4EDD69 /* SingleShotObjectMeasurement.swift */; };
 		B39AADAB17187469145C4D4A /* GeometryModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E7680F43D417158C818E786 /* GeometryModels.swift */; };
 		B4AD52C415CCBB88280E366C /* GravityAlignedBoundingBoxEstimator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 217FC74C59206B041DFB1042 /* GravityAlignedBoundingBoxEstimator.swift */; };
@@ -84,6 +86,7 @@
 		04C3A3BE062880DD78498C42 /* ScannerOrchestrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScannerOrchestrationTests.swift; sourceTree = "<group>"; };
 		072DD19BDDC569526BD4D6C1 /* TargetLockFrameValidationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TargetLockFrameValidationTests.swift; sourceTree = "<group>"; };
 		0971E06A518DCBB2BE79A263 /* MeasurementARFrameIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeasurementARFrameIntegrationTests.swift; sourceTree = "<group>"; };
+		09DDC1DB756B85AD4464C98A /* PhotoFocusedSelection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoFocusedSelection.swift; sourceTree = "<group>"; };
 		0BEC26224D7E1CD00B41CDF5 /* MeasurementEstimatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeasurementEstimatorTests.swift; sourceTree = "<group>"; };
 		0C6E548E7BEE68145D8AF56D /* TargetLockFailureIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TargetLockFailureIntegrationTests.swift; sourceTree = "<group>"; };
 		0CF21F67461D439CFC0A0C93 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
@@ -115,6 +118,7 @@
 		6E12DBF221D2E3F67479FE70 /* PackingModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PackingModels.swift; sourceTree = "<group>"; };
 		720B306F033EEFA5D3D7BADE /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		77EE721A9A7420432B19066B /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
+		784ED28CDB66EA0B31292EF4 /* PhotoFocusedSelectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoFocusedSelectionTests.swift; sourceTree = "<group>"; };
 		790431810A5597537D5F330C /* PhotoObjectMeasurement.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoObjectMeasurement.swift; sourceTree = "<group>"; };
 		794FA5965F3F52912B316BA7 /* PhotoRigidItemMultiplicityGuard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoRigidItemMultiplicityGuard.swift; sourceTree = "<group>"; };
 		84DFB60E2C6A4BA85E8C1AA0 /* ScannerSheetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScannerSheetView.swift; sourceTree = "<group>"; };
@@ -151,6 +155,7 @@
 				961BDEF98B3781473174BC5A /* GuidedBoxCaptureSession.swift */,
 				D6C55F1052A5849E765D593B /* GuidedBoxMeasurement.swift */,
 				6C32970059157769F21557D7 /* GuidedBoxWorkflow.swift */,
+				09DDC1DB756B85AD4464C98A /* PhotoFocusedSelection.swift */,
 				790431810A5597537D5F330C /* PhotoObjectMeasurement.swift */,
 				794FA5965F3F52912B316BA7 /* PhotoRigidItemMultiplicityGuard.swift */,
 				EFC2C247D8D005E9F20D3D31 /* ScannerTargetProjection.swift */,
@@ -196,6 +201,7 @@
 				BBC72194BFCDC43AE94CAA34 /* GuidedBoxCaptureSessionTests.swift */,
 				AE9A446CAB13BE0B780048E1 /* GuidedBoxMeasurementTests.swift */,
 				1AA05B83704FCB14040623FB /* GuidedBoxWorkflowTests.swift */,
+				784ED28CDB66EA0B31292EF4 /* PhotoFocusedSelectionTests.swift */,
 				53B7914EAEB1EDE13DA87022 /* PhotoObjectMeasurementTests.swift */,
 				5E80BC43F70739A5A94D60D9 /* PhotoRigidItemMultiplicityGuardTests.swift */,
 				35CC0B9C38D98D8F0A49EDD3 /* SingleShotObjectMeasurementTests.swift */,
@@ -471,6 +477,7 @@
 				F78E0F38BDC44E3CBE11ABC5 /* PackingModels.swift in Sources */,
 				53E91AADA18D60E722530171 /* PackingPlanner.swift in Sources */,
 				DFC589F73318DFDF2A834553 /* PackingVehicles.swift in Sources */,
+				AB67D63C030489854EF2E9D4 /* PhotoFocusedSelection.swift in Sources */,
 				5F68845EACD6F3268807135E /* PhotoObjectMeasurement.swift in Sources */,
 				13855B2BFED482DBF1472A02 /* PhotoRigidItemMultiplicityGuard.swift in Sources */,
 				1915EB01A5B88F2FF59C252E /* RoomCaptureBridge.swift in Sources */,
@@ -504,6 +511,7 @@
 				09B7FEF948AAD6D288F89342 /* MeasurementEstimatorTests.swift in Sources */,
 				3D0B36D28510CAD37D056EE5 /* PackMeasureTests.swift in Sources */,
 				E481A09E4252F3209E588661 /* PackingPlannerTests.swift in Sources */,
+				4686024849ABEC08C80352D2 /* PhotoFocusedSelectionTests.swift in Sources */,
 				42AD551A4A6F786DDA2A25F6 /* PhotoObjectMeasurementTests.swift in Sources */,
 				7209CA6F8F01E61291C59272 /* PhotoRigidItemMultiplicityGuardTests.swift in Sources */,
 				53B242F56BD9E49BFDED92C1 /* RoomMeasurementTests.swift in Sources */,
@@ -602,7 +610,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 48;
+				CURRENT_PROJECT_VERSION = 49;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = SMCQX7ZNDA;
 				ENABLE_NS_ASSERTIONS = NO;
@@ -696,7 +704,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 48;
+				CURRENT_PROJECT_VERSION = 49;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = SMCQX7ZNDA;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
