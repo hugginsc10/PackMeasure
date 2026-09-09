@@ -48,6 +48,29 @@ final class FloorplanGeometryTests: XCTestCase {
         XCTAssertEqual(geometry.labels(zoom: 1, selected: 0)[0].rect.height, 24)
     }
 
+    func testLengthLabelsUseSavedLengthAndKeepWallIDsAvailable() {
+        let sample = wall([10, 20], [13.81, 20])
+        XCTAssertEqual(FloorplanLabelMode.lengths.text(for: sample, index: 18), "12.5 ft")
+        XCTAssertEqual(FloorplanLabelMode.wallIDs.text(for: sample, index: 18), "19")
+        XCTAssertEqual(FloorplanLabelMode.lengths.text(for: wall([0, 0], [0.16, 0]), index: 0), "0.5 ft")
+    }
+
+    func testLengthBadgeSizesDriveCollisionAndSelectedHitRegion() {
+        let walls = (0..<12).map { i in wall([Float(i), 0], [Float(i + 1), 0]) }
+        let geometry = FloorplanGeometry(walls: walls, size: CGSize(width: 350, height: 300))
+        let sizes = walls.map { _ in CGSize(width: 80, height: 26) }
+        let labels = geometry.labels(zoom: 1, selected: 5, sizes: sizes)
+        XCTAssertEqual(labels.first?.index, 5)
+        XCTAssertEqual(labels.first?.rect.width, 80)
+        XCTAssertTrue(labels[0].rect.contains(CGPoint(x: labels[0].rect.maxX - 1, y: labels[0].rect.midY)))
+        XCTAssertLessThan(labels.count, geometry.labels(zoom: 1, selected: 5).count)
+        let zoomed = geometry.transformed(zoom: 4, offset: .zero).labels(zoom: 1, selected: 5, sizes: sizes)
+        XCTAssertGreaterThan(zoomed.count, labels.count)
+        for (index, label) in labels.enumerated() {
+            for other in labels.dropFirst(index + 1) { XCTAssertFalse(label.rect.intersects(other.rect)) }
+        }
+    }
+
     func testEmptyGeometryHasNoSelectableWallsOrLabels() {
         let geometry = FloorplanGeometry(walls: [], size: CGSize(width: 300, height: 500))
         XCTAssertNil(geometry.nearestWall(to: .zero, tolerance: 22))
