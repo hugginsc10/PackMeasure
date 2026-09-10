@@ -319,6 +319,22 @@ struct MeasurementCaptureEvidence: Equatable, Sendable {
     let estimate: MeasurementEstimate
     let pointCloudConfidence: ScanConfidence
     let geometryCenter: SIMD3<Float>
+    /// Exact yaw-oriented volume accepted by the geometry estimator. Synthetic
+    /// evidence used by higher-level policies may omit bounds rather than
+    /// inventing target authority it did not observe.
+    let targetLockBounds: TargetLockBounds?
+
+    init(
+        estimate: MeasurementEstimate,
+        pointCloudConfidence: ScanConfidence,
+        geometryCenter: SIMD3<Float>,
+        targetLockBounds: TargetLockBounds? = nil
+    ) {
+        self.estimate = estimate
+        self.pointCloudConfidence = pointCloudConfidence
+        self.geometryCenter = geometryCenter
+        self.targetLockBounds = targetLockBounds
+    }
 }
 
 enum MeasurementCaptureEvidenceOutcome: Equatable, Sendable {
@@ -636,17 +652,22 @@ struct MultiAngleMeasurementWorkflow: Equatable, Sendable {
     private mutating func recordUnresolved(
         _ capture: MeasurementAngleCapture
     ) -> MultiAngleMeasurementProgress {
-        for reference in captures {
-            switch viewpointPolicy.validate(capture, against: reference) {
-            case .distinct:
-                continue
-            case .tooSimilar:
-                progress = .needsAnotherAngle(
-                    reason: .viewpointTooSimilar,
-                    acceptedCount: captures.count
-                )
-                return progress
-            }
+        // Every comparison angle must add one complete horizontal viewpoint:
+        // both the baseline and heading thresholds must pass against the same
+        // retained capture. With one saved angle this preserves the strict
+        // second-angle rule. With two saved angles, the elevated final photo
+        // may resemble one prior view as long as it is fully distinct from the
+        // other; requiring it to differ from both created a physical retry loop
+        // without adding a new measurement-quality guarantee.
+        let addsHorizontalViewpoint = captures.isEmpty || captures.contains {
+            viewpointPolicy.validate(capture, against: $0) == .distinct
+        }
+        guard addsHorizontalViewpoint else {
+            progress = .needsAnotherAngle(
+                reason: .viewpointTooSimilar,
+                acceptedCount: captures.count
+            )
+            return progress
         }
 
         // Keep the first two horizontally independent views even when their
@@ -691,7 +712,16 @@ struct MultiAngleMeasurementWorkflow: Equatable, Sendable {
                 return progress
             }
 
-            let agreeingPairs: [(indices: [Int], captures: [MeasurementAngleCapture])] = [
+            // Angle 3 may resemble one saved view so the user can satisfy the
+            // required height change without an artificial orbit retry. The
+            // pair that actually resolves dimensions must still be horizontally
+            // independent, however; otherwise a repeated view could reinforce
+            // its own viewpoint-specific overestimate and outvote the only
+            // independent measurement.
+            let independentAgreeingPairs: [(
+                indices: [Int],
+                captures: [MeasurementAngleCapture]
+            )] = [
                 (indices: [0, 1], captures: [captures[0], captures[1]]),
                 (indices: [0, 2], captures: [captures[0], captures[2]]),
                 (indices: [1, 2], captures: [captures[1], captures[2]]),
@@ -700,14 +730,18 @@ struct MultiAngleMeasurementWorkflow: Equatable, Sendable {
                     pair.captures[0].evidence,
                     pair.captures[1].evidence
                 )
+                    && viewpointPolicy.validate(
+                        pair.captures[0],
+                        against: pair.captures[1]
+                    ) == .distinct
             }
 
-            guard !agreeingPairs.isEmpty else {
+            guard !independentAgreeingPairs.isEmpty else {
                 progress = .inconsistent(.dimensionsInconsistent)
                 return progress
             }
 
-            if agreeingPairs.count == 3,
+            if independentAgreeingPairs.count == 3,
                let estimate = consensusPolicy.consensusEstimate(
                    from: captures,
                    totalAngleCount: 3
@@ -716,9 +750,18 @@ struct MultiAngleMeasurementWorkflow: Equatable, Sendable {
                 return progress
             }
 
-            let selectedPair = agreeingPairs.max { first, second in
-                upperEnvelopeVolume(first.captures) < upperEnvelopeVolume(second.captures)
-            }!
+            // Select the most conservative envelope with a stable ordering.
+            // Volume alone is not a total order: two different shapes can have
+            // the same volume, and `max(by:)` would then make capture order
+            // decide which dimensions are reported.
+            let selectedPair = independentAgreeingPairs.dropFirst().reduce(
+                independentAgreeingPairs[0]
+            ) { selected, candidate in
+                consensusPair(
+                    candidate.captures,
+                    isPreferredOver: selected.captures
+                ) ? candidate : selected
+            }
             guard let estimate = consensusPolicy.consensusEstimate(
                 from: selectedPair.captures,
                 totalAngleCount: 3
@@ -745,11 +788,33 @@ struct MultiAngleMeasurementWorkflow: Equatable, Sendable {
         return progress
     }
 
-    private func upperEnvelopeVolume(_ captures: [MeasurementAngleCapture]) -> Double {
-        guard let estimate = consensusPolicy.consensusEstimate(from: captures) else {
-            return 0
+    private func consensusPair(
+        _ candidate: [MeasurementAngleCapture],
+        isPreferredOver current: [MeasurementAngleCapture]
+    ) -> Bool {
+        guard let candidateEstimate = consensusPolicy.consensusEstimate(from: candidate) else {
+            return false
         }
-        return estimate.lengthMeters * estimate.widthMeters * estimate.heightMeters
+        guard let currentEstimate = consensusPolicy.consensusEstimate(from: current) else {
+            return true
+        }
+
+        let candidateDimensions = candidateEstimate.normalizedDimensions
+        let currentDimensions = currentEstimate.normalizedDimensions
+        let candidateVolume = candidateDimensions.reduce(1, *)
+        let currentVolume = currentDimensions.reduce(1, *)
+        if candidateVolume != currentVolume {
+            return candidateVolume > currentVolume
+        }
+        if candidateDimensions != currentDimensions {
+            return currentDimensions.lexicographicallyPrecedes(candidateDimensions)
+        }
+        if candidateEstimate.confidence.rank != currentEstimate.confidence.rank {
+            // When the geometry is otherwise identical, retain the more
+            // cautious confidence instead of making ordering inflate it.
+            return candidateEstimate.confidence.rank < currentEstimate.confidence.rank
+        }
+        return candidateEstimate.sampleCount > currentEstimate.sampleCount
     }
 }
 
@@ -831,7 +896,16 @@ enum MeasurementEstimator {
                     frameCount: frameCount
                 ),
                 pointCloudConfidence: pointCloudConfidence,
-                geometryCenter: geometry.center
+                geometryCenter: geometry.center,
+                targetLockBounds: TargetLockBounds(
+                    center: geometry.center,
+                    halfExtents: SIMD3<Float>(
+                        Float(geometry.dimensions.lengthMeters / 2),
+                        Float(geometry.dimensions.heightMeters / 2),
+                        Float(geometry.dimensions.widthMeters / 2)
+                    ),
+                    yawRadians: geometry.yawRadians
+                )
             )
         )
     }

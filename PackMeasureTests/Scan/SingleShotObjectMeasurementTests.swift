@@ -119,8 +119,59 @@ struct SingleShotObjectMeasurementTests {
             (.ambiguousForegroundInstances(labels: [1, 2]), .isolation, "F02"),
             (.maskAreaTooSmall(actual: 0.01, minimum: 0.03), .isolation, "F03"),
             (.maskAreaTooLarge(actual: 0.9, maximum: 0.85), .framing, "F04"),
-            (.maskTouchesImageEdge, .framing, "F05"),
+            (.maskTouchesImageEdge(stage: .sourceMask), .framing, "F05"),
+            (.maskTouchesImageEdge(stage: .previewOutline), .framing, "F05"),
             (.noReticleDepthSurface, .isolation, "F06"),
+            (
+                .targetOwnershipAmbiguous(
+                    .narrowBridge(
+                        PhotoNarrowBridgeOwnershipEvidence(
+                            erosionRadiusPixels: 2,
+                            primaryRegionPixelCount: 240,
+                            secondaryRegionPixelCount: 80,
+                            selectedPixelCount: 344,
+                            exteriorExcursionPixels: 12
+                        )
+                    )
+                ),
+                .isolation,
+                "F10"
+            ),
+            (
+                .multipleRigidItemsDetected(
+                    PhotoRigidItemMultiplicityEvaluation(
+                        assessment: .multipleRigidItems(
+                            PhotoRigidItemMultiplicityEvidence(
+                                splitHeightFraction: 0.5,
+                                maximumBoundaryShiftMeters: 0.1,
+                                normalizedBoundaryShift: 0.2,
+                                significantBoundaryCount: 3
+                            )
+                        ),
+                        finitePointCount: 256,
+                        minimumPointCount: 160,
+                        usableBinCount: 20,
+                        comparableSplitCount: 4,
+                        indeterminateReason: nil
+                    )
+                ),
+                .isolation,
+                "F08"
+            ),
+            (
+                .rigidItemMultiplicityUncertain(
+                    PhotoRigidItemMultiplicityEvaluation(
+                        assessment: .insufficientEvidence,
+                        finitePointCount: 160,
+                        minimumPointCount: 160,
+                        usableBinCount: 6,
+                        comparableSplitCount: 0,
+                        indeterminateReason: .noComparableSplit
+                    )
+                ),
+                .isolation,
+                "F09"
+            ),
             (.insufficientDepthSamples(actual: 31, minimum: 48), .depth, "D01"),
             (.insufficientDepthCoverage(actual: 0.42, minimum: 0.6), .depth, "D02"),
             (.insufficientHorizontalDepthSupport(actual: 0.51, minimum: 0.65), .depth, "D03"),
@@ -143,6 +194,58 @@ struct SingleShotObjectMeasurementTests {
             #expect(error.diagnosticCode == code)
             #expect(!error.diagnosticDescription.isEmpty)
         }
+    }
+
+    @Test
+    func f05DiagnosticsDistinguishSourceMaskFromPreviewOutline() {
+        let source = PhotoObjectMeasurementError.maskTouchesImageEdge(
+            stage: .sourceMask
+        )
+        let preview = PhotoObjectMeasurementError.maskTouchesImageEdge(
+            stage: .previewOutline
+        )
+
+        #expect(source.diagnosticCode == "F05")
+        #expect(preview.diagnosticCode == "F05")
+        #expect(source.diagnosticDescription.contains("stage=source_mask"))
+        #expect(preview.diagnosticDescription.contains("stage=preview_outline"))
+    }
+
+    @Test
+    func f09DiagnosticsPreserveOneBoundaryEvidenceAndProfileCoverage() {
+        let candidate = PhotoRigidItemMultiplicityEvidence(
+            splitHeightFraction: 0.175,
+            maximumBoundaryShiftMeters: 0.14,
+            normalizedBoundaryShift: 0.22,
+            significantBoundaryCount: 1,
+            basis: .strongSingleBoundary,
+            maximumQualifyingNoiseMeters: 0.004,
+            lowerBodyHeightFraction: 0.175,
+            upperBodyHeightFraction: 0.825,
+            lowerBodyPointFraction: 0.15,
+            upperBodyPointFraction: 0.85
+        )
+        let evaluation = PhotoRigidItemMultiplicityEvaluation(
+            assessment: .insufficientEvidence,
+            finitePointCount: 320,
+            minimumPointCount: 160,
+            usableBinCount: 20,
+            comparableSplitCount: 14,
+            indeterminateReason: .oneStrongBoundary,
+            eligibleSplitCount: 14,
+            candidateEvidence: candidate
+        )
+
+        let diagnostic = PhotoObjectMeasurementError
+            .rigidItemMultiplicityUncertain(evaluation)
+            .diagnosticDescription
+
+        #expect(diagnostic.contains("assessment_route=strong_single_boundary"))
+        #expect(diagnostic.contains("eligible_splits=14"))
+        #expect(diagnostic.contains("comparable_split_fraction=1.000000"))
+        #expect(diagnostic.contains("boundary_basis=strong_single_boundary"))
+        #expect(diagnostic.contains("maximum_boundary_shift_meters=0.140000"))
+        #expect(diagnostic.contains("lower_body_point_fraction=0.150000"))
     }
 
     @Test
@@ -218,7 +321,20 @@ struct SingleShotObjectMeasurementTests {
             .photo(.ambiguousForegroundInstances(labels: [1, 2])),
             .photo(.maskAreaTooSmall(actual: 0.01, minimum: 0.03)),
             .photo(.maskAreaTooLarge(actual: 0.90, maximum: 0.85)),
-            .photo(.maskTouchesImageEdge),
+            .photo(.maskTouchesImageEdge(stage: .sourceMask)),
+            .photo(
+                .targetOwnershipAmbiguous(
+                    .narrowBridge(
+                        PhotoNarrowBridgeOwnershipEvidence(
+                            erosionRadiusPixels: 2,
+                            primaryRegionPixelCount: 240,
+                            secondaryRegionPixelCount: 80,
+                            selectedPixelCount: 344,
+                            exteriorExcursionPixels: 12
+                        )
+                    )
+                )
+            ),
             .photo(.noReticleDepthSurface),
             .photo(.insufficientDepthSamples(actual: 24, minimum: 48)),
             .photo(.insufficientDepthCoverage(actual: 0.40, minimum: 0.60)),
@@ -259,30 +375,47 @@ struct SingleShotObjectMeasurementTests {
 
     @Test
     func singleShotOutcomeEstimatesBoxFromOnePhoto() throws {
+        // Give every vertical profile bin enough independent depth samples to
+        // prove one rigid footprint under the fail-closed Box guard.
+        let width = 48
+        let height = 48
+        var labels = Array(repeating: UInt32.zero, count: width * height)
+        for y in 1..<(height - 1) {
+            for x in 1..<(width - 1) {
+                labels[y * width + x] = 5
+            }
+        }
+        let labelMask = try PhotoInstanceLabelMask(
+            width: width,
+            height: height,
+            labels: labels
+        )
+        let depthGrid = populatedBoxDepthGrid(width: width, height: height)
+        let cameraCalibration = calibration(imageWidth: width, imageHeight: height)
+        do {
+            let pointCloud = try PhotoObjectMeasurement(policy: testPolicy).makePointCloud(
+                labelMask: labelMask,
+                depthGrid: depthGrid,
+                calibration: cameraCalibration
+            )
+            #expect(pointCloud.rigidItemMultiplicityEvaluation?.assessment == .singleRigidItem)
+        } catch {
+            Issue.record("expected a verified single-box point cloud, got \(error)")
+            return
+        }
         let outcome = SingleShotObjectMeasurement.outcome(
-            labelMask: try labelMask(
-                [
-                    [0, 0, 0, 0, 0, 0, 0, 0],
-                    [0, 5, 5, 5, 5, 5, 5, 0],
-                    [0, 5, 5, 5, 5, 5, 5, 0],
-                    [0, 5, 5, 5, 5, 5, 5, 0],
-                    [0, 5, 5, 5, 5, 5, 5, 0],
-                    [0, 5, 5, 5, 5, 5, 5, 0],
-                    [0, 5, 5, 5, 5, 5, 5, 0],
-                    [0, 0, 0, 0, 0, 0, 0, 0],
-                ]
-            ),
-            depthGrid: populatedBoxDepthGrid(width: 8, height: 8),
-            calibration: calibration(imageWidth: 8, imageHeight: 8),
+            labelMask: labelMask,
+            depthGrid: depthGrid,
+            calibration: cameraCalibration,
             policy: testPolicy
         )
 
         guard case .success(let estimate) = outcome else {
-            Issue.record("expected one-photo single-shot estimate to succeed")
+            Issue.record("expected one-photo single-shot estimate to succeed, got \(outcome)")
             return
         }
         #expect(estimate.frameCount == 1)
-        #expect(estimate.sampleCount >= 16)
+        #expect(estimate.sampleCount >= 160)
         #expect(estimate.lengthMeters > 0)
         #expect(estimate.widthMeters > 0)
         #expect(estimate.heightMeters > 0)
