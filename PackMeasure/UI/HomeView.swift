@@ -5,60 +5,93 @@ struct HomeView: View {
     @State private var manualEntryPresented = false
 
     var body: some View {
-        NavigationStack {
-            List {
-                spaceNeededSection
-                loadMixSection
-                vehicleSection
-                inventorySection
-                Section("Design an insert") {
-                    NavigationLink {
-                        InteriorLibraryView()
-                    } label: {
-                        Label("Measure a drawer interior", systemImage: "square.dashed.inset.filled")
-                    }
+        TabView {
+            NavigationStack {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 20) {
+                        VStack(alignment: .leading, spacing: 12) {
+                            MeasureEyebrow(text: "Measure • Plan • Move")
+                            Text("Know your space.")
+                                .font(.system(.largeTitle, design: .rounded).bold())
+                            Text("From a single item to the room around it.")
+                                .font(.subheadline).foregroundStyle(.secondary)
+                            BlueprintArtwork().frame(height: 140)
+                        }
+                        .measurePanel()
+                        NavigationLink {
+                            RoomMeasurementView()
+                        } label: {
+                            MeasureActionLabel(title: "Measure a room", subtitle: "Capture walls. Explore your floorplan.", symbol: "viewfinder")
+                        }.buttonStyle(.plain)
+                        NavigationLink {
+                            InteriorLibraryView()
+                        } label: {
+                            MeasureActionLabel(title: "Measure a drawer interior", subtitle: "Trace irregular outlines. Design a fitted insert.", symbol: "square.dashed.inset.filled")
+                        }.buttonStyle(.plain)
+                        Button { appModel.showingScanner = true } label: {
+                            MeasureActionLabel(title: "Scan an item", subtitle: "Measure boxes, furniture, and more.", symbol: "shippingbox")
+                        }.buttonStyle(.plain)
+                        Button { manualEntryPresented = true } label: {
+                            Label("Enter dimensions manually", systemImage: "ruler")
+                                .font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity, minHeight: 48)
+                        }.buttonStyle(.bordered)
+                        NavigationLink {
+                            PackingDashboardView(manualEntryPresented: $manualEntryPresented)
+                        } label: {
+                            HStack {
+                                MeasureEyebrow(text: "View your load")
+                                Spacer()
+                                Text("\(appModel.planningSummary.pieceCount) pieces")
+                                    .font(.system(.subheadline, design: .monospaced)).foregroundStyle(.secondary)
+                                Image(systemName: "arrow.right")
+                            }.frame(minHeight: 48)
+                        }.buttonStyle(.plain)
+                    }.padding(20)
                 }
-                planningDisclaimerSection
-            }
-            .navigationTitle("PackMeasure")
-            .safeAreaInset(edge: .bottom) {
-                entryActions
-            }
-            .sheet(isPresented: scannerPresented) {
-                ScannerSheetView()
-                    .environment(appModel)
-            }
-            .sheet(isPresented: $manualEntryPresented) {
-                ManualEntryView()
-                    .environment(appModel)
-            }
-            .alert(
-                "PackMeasure",
-                isPresented: bannerPresented,
-                actions: {
-                    Button("OK", role: .cancel) {
-                        appModel.bannerMessage = nil
-                    }
-                },
-                message: {
-                    Text(appModel.bannerMessage ?? "")
-                }
-            )
+                .measureScreen()
+                .navigationTitle("PackMeasure").navigationBarTitleDisplayMode(.inline)
+            }.tabItem { Label("Measure", systemImage: "viewfinder") }
+            NavigationStack { RoomMeasurementView() }
+                .tabItem { Label("Rooms", systemImage: "square.split.2x2") }
+            NavigationStack { PackingDashboardView(manualEntryPresented: $manualEntryPresented) }
+                .tabItem { Label("Load", systemImage: "shippingbox") }
         }
+        .tint(MeasureStyle.accent)
+        .sheet(isPresented: Binding(get: { appModel.showingScanner }, set: { appModel.showingScanner = $0 })) {
+            ScannerSheetView().environment(appModel)
+        }
+        .sheet(isPresented: $manualEntryPresented) { ManualEntryView().environment(appModel) }
+        .alert("PackMeasure", isPresented: Binding(get: { appModel.bannerMessage != nil }, set: { if !$0 { appModel.bannerMessage = nil } })) {
+            Button("OK", role: .cancel) { appModel.bannerMessage = nil }
+        } message: { Text(appModel.bannerMessage ?? "") }
     }
+}
 
-    private var scannerPresented: Binding<Bool> {
-        Binding(
-            get: { appModel.showingScanner },
-            set: { appModel.showingScanner = $0 }
-        )
-    }
 
-    private var bannerPresented: Binding<Bool> {
-        Binding(
-            get: { appModel.bannerMessage != nil },
-            set: { if !$0 { appModel.bannerMessage = nil } }
-        )
+private struct PackingDashboardView: View {
+    @Environment(AppModel.self) private var appModel
+    @Binding var manualEntryPresented: Bool
+
+    var body: some View {
+        List {
+            Section {
+                VStack(alignment: .leading, spacing: 10) {
+                    MeasureEyebrow(text: "Move planning")
+                    Text("Everything adds up.").font(.system(.title2, design: .rounded).bold())
+                    Text("Build your inventory. Find the space you need.").font(.subheadline).foregroundStyle(.secondary)
+                }.padding(.vertical, 8)
+            }.listRowBackground(MeasureStyle.panel)
+            spaceNeededSection.listRowBackground(MeasureStyle.panel)
+            loadMixSection.listRowBackground(MeasureStyle.panel)
+            vehicleSection.listRowBackground(MeasureStyle.panel)
+            inventorySection.listRowBackground(MeasureStyle.panel)
+            planningDisclaimerSection.listRowBackground(Color.clear)
+        }
+        .navigationTitle("Your load")
+        .measureScreen()
+        .safeAreaInset(edge: .bottom) {
+            entryActions
+        }
     }
 
     private var loadMixSelection: Binding<PackingLoadMix> {
@@ -189,33 +222,15 @@ struct HomeView: View {
     }
 
     private var entryActions: some View {
-        VStack(spacing: 8) {
-            Button {
-                appModel.showingScanner = true
-            } label: {
-                Label("Scan an item", systemImage: "camera.viewfinder")
-                    .font(.headline)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 4)
-            }
-            .buttonStyle(.borderedProminent)
-            .accessibilityHint("Opens the LiDAR camera to measure a box or object")
-
-            Button {
-                manualEntryPresented = true
-            } label: {
-                Label("Enter dimensions", systemImage: "ruler")
-                    .font(.headline)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 2)
-            }
-            .buttonStyle(.bordered)
-            .accessibilityHint("Opens a form to type an item's dimensions in inches")
-        }
-        .controlSize(.large)
-        .padding(.horizontal)
-        .padding(.vertical, 8)
-        .background(.bar)
+        HStack(spacing: 12) {
+            Button { appModel.showingScanner = true } label: {
+                Label("Scan item", systemImage: "viewfinder")
+            }.buttonStyle(MeasurePrimaryButton())
+            Button { manualEntryPresented = true } label: {
+                Image(systemName: "ruler").font(.title3).frame(width: 52, height: 52)
+                    .background(MeasureStyle.panel, in: RoundedRectangle(cornerRadius: 18))
+            }.accessibilityLabel("Enter dimensions manually")
+        }.padding(.horizontal, 20).padding(.vertical, 8).background(MeasureStyle.background)
     }
 
     private var allowancePercent: Int {
@@ -234,12 +249,13 @@ private struct SummaryTile: View {
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
             Text(value)
-                .font(.title3.bold())
+                .font(.system(.title2, design: .rounded).bold()).monospacedDigit()
                 .contentTransition(.numericText())
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding()
-        .background(.quaternary, in: RoundedRectangle(cornerRadius: 16))
+        .background(MeasureStyle.panel, in: RoundedRectangle(cornerRadius: 20))
+        .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(MeasureStyle.line, lineWidth: 1))
     }
 }
 
@@ -438,6 +454,7 @@ private struct ItemPackingEditorView: View {
                 Text("Leave this off for liquids, plants, appliances, and fragile or upright-only furniture.")
             }
         }
+        .measureScreen()
         .navigationTitle("Packing details")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {

@@ -166,6 +166,22 @@ struct ScannerSheetView: View {
         private(set) var measurementWorkflow = MultiAngleMeasurementWorkflow()
         private(set) var capturedAngleRecords: [ScannerRecordedAngleCapture] = []
         private(set) var measurementSubject = TargetLockSubject.box
+        private(set) var captureDiagnostics: [String] = []
+
+        var captureDiagnosticsReport: String {
+            let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown"
+            let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"
+            return (["PackMeasure \(version) (\(build)) scan diagnostics",
+                     "Frame extraction results only; success does not imply multi-angle acceptance or accurate dimensions."]
+                    + captureDiagnostics).joined(separator: "\n\n")
+        }
+
+        func recordCaptureDiagnostic(_ report: String, requestID: Int, seriesID: Int) {
+            guard requestID == captureRequestID, seriesID == measurementSeriesID else { return }
+            captureDiagnostics.append(report)
+            if captureDiagnostics.count > 12 { captureDiagnostics.removeFirst(captureDiagnostics.count - 12) }
+        }
+
         private(set) var measurementMode = ScannerMeasurementMode.automaticPhotos
         private(set) var automaticTargetPrompt: PhotoTargetSelectionPrompt?
         private(set) var targetLockLifecycle = TargetLockLifecycle()
@@ -1242,6 +1258,7 @@ struct ScannerSheetView: View {
                 ) {
                     if let estimate = scannerState.estimate {
                         Form {
+                            Group {
                         if case let .retryRequired(message) = reviewState {
                             Section(retryPresentation.sectionTitle) {
                                 retryDiagnosticLabel(message)
@@ -1249,6 +1266,7 @@ struct ScannerSheetView: View {
                         }
 
                         Section(ScannerResultCopy.sizeSectionTitle) {
+                            MeasureEyebrow(text: "Capture result")
                             Text(
                                 "\(MeasurementMath.inchString(from: estimate.lengthMeters)) × " +
                                 "\(MeasurementMath.inchString(from: estimate.widthMeters)) × " +
@@ -1293,6 +1311,7 @@ struct ScannerSheetView: View {
                                 Toggle("Safe to turn on its side", isOn: $mayRotate)
                             }
                         }
+                            }.listRowBackground(MeasureStyle.panel)
                         }
                         .frame(
                             minHeight: showsRetainedAngleRetry ? 220 : nil,
@@ -1302,6 +1321,7 @@ struct ScannerSheetView: View {
                         .layoutPriority(showsRetainedAngleRetry ? 1 : 0)
                     } else if !scannerState.capturedEstimates.isEmpty {
                         Form {
+                            Group {
                         if case let .retryRequired(message) = reviewState {
                             Section(retryPresentation.sectionTitle) {
                                 retryDiagnosticLabel(message)
@@ -1328,9 +1348,10 @@ struct ScannerSheetView: View {
                         if let message = reviewState.additionalAngleMessage {
                             Section("Next step") {
                                 Label(message, systemImage: "camera.rotate")
-                                    .foregroundStyle(.blue)
+                                    .foregroundStyle(MeasureStyle.accent)
                             }
                         }
+                            }.listRowBackground(MeasureStyle.panel)
                         }
                         .frame(
                             minHeight: showsRetainedAngleRetry ? 220 : nil,
@@ -1355,9 +1376,19 @@ struct ScannerSheetView: View {
                 actionBar
             }
             .padding()
-            .navigationTitle("Scan Item")
+            .measureScreen()
+            .navigationTitle("Scan item")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    if !scannerState.captureDiagnostics.isEmpty {
+                        ShareLink(item: scannerState.captureDiagnosticsReport) {
+                            Label("Share scan diagnostics", systemImage: "square.and.arrow.up")
+                        }
+                        .accessibilityLabel("Share scan diagnostics")
+                    }
+                }
+
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") {
                         closeScanner()
@@ -1471,7 +1502,7 @@ struct ScannerSheetView: View {
             Button("Close") {
                 closeScanner()
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(MeasurePrimaryButton())
         case .failed where scannerState.isPreparingForAiming:
             ProgressView(ScannerActionCopy.preparingPreview)
                 .padding(.horizontal)
@@ -1515,7 +1546,7 @@ struct ScannerSheetView: View {
                 Button("Close") {
                     closeScanner()
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(MeasurePrimaryButton())
             case .measured:
                 measurementActionBar
             default:
@@ -1542,6 +1573,7 @@ struct ScannerSheetView: View {
 
             Button("Back to photos") {
                 scannerState.clearGuidedCapture(for: .exit)
+
             }
             .buttonStyle(.bordered)
             .accessibilityHint("Discards the guided measurement and starts a fresh photo scan")
@@ -1554,7 +1586,7 @@ struct ScannerSheetView: View {
                 if scannerState.measurementMode == .automaticPhotos {
                     if scannerState.estimate == nil {
                         measureButton
-                            .buttonStyle(.borderedProminent)
+                            .buttonStyle(MeasurePrimaryButton())
                     } else {
                         measureButton
                             .buttonStyle(.bordered)
@@ -1572,7 +1604,7 @@ struct ScannerSheetView: View {
                     Button("Save item") {
                         saveItem(estimate)
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(MeasurePrimaryButton())
                     .disabled(!reviewState.canSave)
                     .accessibilityHint(
                         reviewState.canSave
@@ -1600,7 +1632,7 @@ struct ScannerSheetView: View {
             } label: {
                 Label(retryPresentation.actionTitle, systemImage: "arrow.clockwise")
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(MeasurePrimaryButton())
             .accessibilityIdentifier(ScannerBuild33AccessibilityID.retryPrimaryAction)
             .accessibilityHint(retryPresentation.actionHint)
         }
@@ -1618,7 +1650,7 @@ struct ScannerSheetView: View {
             } label: {
                 Label(ScannerActionCopy.compareAnotherAngle, systemImage: "camera.rotate")
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(MeasurePrimaryButton())
         }
     }
 

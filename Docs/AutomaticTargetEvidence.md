@@ -1,0 +1,9 @@
+# Failed automatic-target evidence
+
+Build 48 adds image-free mask evidence to the existing Share scan diagnostics report. It does not change target selection, quality thresholds, fallback routing, or measurement acceptance. This is the first diagnostic iteration for touching-box failures; it is not a claimed isolation fix.
+
+The Vision adapter records its foreground occupancy before prompt selection and its selected component before scaling. Thus a failed match can retain foreground evidence even when there is no selected component. Every selected source mask is summarized before area/depth checks. When depth filtering succeeds, expected-target, retained-depth and proven-alternate masks are also summarized before ownership and source-edge checks. A later rejection retains these summaries in the exact request/series report.
+
+Each summary includes dimensions, selected pixel count, inclusive pixel bounds, left/right/top/bottom protected-edge counts and an occupancy map of at most 32 columns by 24 rows. A # means at least one selected pixel was in that bin, preserving thin continuations. Bounds and edge counters use full resolution. Coordinates are raw camera-image coordinates, not the portrait preview. Source edge counts use the reported protected margin; depth maps use zero margin and are diagnostic only. Retained pixels are not accepted world points or dimensions. No RGB pixels, depth values or world coordinates are added. Reports remain bounded to the existing 12-attempt history and are shared only by the user.
+
+On an iPhone, tap the intended box and take one automatic photo. If it fails, share the text report and the matching screenshot. Source versus expected/retained/alternate maps can show whether a mask spans neighboring objects and where depth filtering did or did not separate them. A failure before Vision produces a mask reports evidence unavailable. The four-point workflow is not required.

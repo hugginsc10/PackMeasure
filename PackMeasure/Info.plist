@@ -25,7 +25,7 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSCameraUsageDescription</key>
-	<string>PackMeasure uses the camera and LiDAR depth sensor to measure boxes and objects.</string>
+	<string>PackMeasure uses the camera and LiDAR depth sensor to measure objects and rooms.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

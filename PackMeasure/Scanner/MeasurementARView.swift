@@ -1,6 +1,7 @@
 @preconcurrency import ARKit
 @preconcurrency import AVFoundation
 import Foundation
+import CoreImage
 import OSLog
 import QuartzCore
 import RealityKit
@@ -824,6 +825,7 @@ struct MeasurementARView: UIViewRepresentable {
             var lastRejection: CenteredTargetRejection?
             var lastCalibration: FrameCalibrationDiagnostics?
             var lastPhotoFailure: SingleShotCaptureFailure?
+            var targetMaskEvidence: String?
             var capturePath = SingleShotCapturePath.visionMask
             var fallbackTrigger: SingleShotCaptureFailure?
             var fallbackResult = SingleShotFallbackResult.notAttempted
@@ -886,6 +888,7 @@ struct MeasurementARView: UIViewRepresentable {
             let path: SingleShotCapturePath
             let fallbackTrigger: SingleShotCaptureFailure?
             let fallbackResult: SingleShotFallbackResult
+            var targetMaskEvidence: String? = nil
 
             static let visionMask = SingleShotCaptureRoute(
                 path: .visionMask,
@@ -2673,6 +2676,7 @@ struct MeasurementARView: UIViewRepresentable {
             _ route: SingleShotCaptureRoute,
             to capture: inout CaptureAccumulator
         ) {
+            capture.targetMaskEvidence = route.targetMaskEvidence
             capture.capturePath = route.path
             capture.fallbackTrigger = route.fallbackTrigger
             capture.fallbackResult = route.fallbackResult
@@ -3006,21 +3010,34 @@ struct MeasurementARView: UIViewRepresentable {
                 return .failed(.depthGridUnreadable, nil, .visionMask)
             }
 
+            var evidence: [String] = []
+            func withEvidence(_ sample: SingleShotFrameSample) -> SingleShotFrameSample {
+                switch sample {
+                case .accepted(let points, let diagnostics, let outline, var route):
+                    route.targetMaskEvidence = evidence.joined(separator: "\n")
+                    return .accepted(points, diagnostics, outline, route)
+                case .failed(let failure, let diagnostics, var route):
+                    route.targetMaskEvidence = evidence.joined(separator: "\n")
+                    return .failed(failure, diagnostics, route)
+                }
+            }
+            evidence.append("mask_adapter_v1 coordinates=raw_camera_image prompt=\(String(describing: processor?.prompt))")
             let labelMask: PhotoInstanceLabelMask
             do {
                 labelMask = try foregroundInstanceLabelMask(
                     from: frame.capturedImage,
-                    processor: processor
+                    processor: processor,
+                    recordEvidence: { evidence.append($0) }
                 )
             } catch let error as PhotoTargetSelectionError {
-                return .failed(.targetSelection(error), nil, .visionMask)
+                return withEvidence(.failed(.targetSelection(error), nil, .visionMask))
             } catch let error as ForegroundMaskAdapterError {
-                return frameSample(
+                return withEvidence(frameSample(
                     after: .foreground(error),
                     from: frame,
                     grid: grid,
                     hasExplicitTarget: processor != nil
-                )
+                ))
             } catch {
                 let error = error as NSError
                 return .failed(
@@ -3050,14 +3067,16 @@ struct MeasurementARView: UIViewRepresentable {
                         depthGrid: grid,
                         calibration: calibration,
                         protectedEdgeMarginPixels:
-                            policy.protectedEdgeMarginPixels
+                            policy.protectedEdgeMarginPixels,
+                        recordEvidence: { evidence.append($0) }
                     )
                 } else {
                     pointCloud = try PhotoObjectMeasurement(policy: policy)
                         .makePointCloud(
                             labelMask: labelMask,
                             depthGrid: grid,
-                            calibration: calibration
+                            calibration: calibration,
+                            recordEvidence: { evidence.append($0) }
                         )
                 }
                 let diagnostics = FrameCalibrationDiagnostics(
@@ -3070,21 +3089,35 @@ struct MeasurementARView: UIViewRepresentable {
                     rigidItemMultiplicityEvaluation:
                         pointCloud.rigidItemMultiplicityEvaluation
                 )
-                return .accepted(
+                return withEvidence(.accepted(
                     pointCloud.worldPoints,
                     diagnostics,
                     pointCloud.objectOutline,
                     .visionMask
-                )
+                ))
             } catch let error as PhotoTargetSelectionError {
-                return .failed(.targetSelection(error), nil, .visionMask)
+                return withEvidence(.failed(.targetSelection(error), nil, .visionMask))
             } catch let error as PhotoObjectMeasurementError {
-                return frameSample(
+                if error == .maskTouchesImageEdge(stage: .sourceMask),
+                   let processor, processor.measurement.rigidItemMultiplicityGuard != nil,
+                   let refined = focusedBoxPointCloud(frame: frame, grid: grid,
+                       calibration: calibration, original: labelMask, processor: processor,
+                       recordEvidence: { evidence.append($0) }) {
+                    let diagnostics = FrameCalibrationDiagnostics(
+                        rawRegionPixelCount: refined.maskQuality.selectedPixelCount,
+                        retainedRegionPixelCount: refined.depthSupport.supportedSampleCount,
+                        regionCoverage: refined.depthSupport.coverage,
+                        absoluteUpNormal: nil, elevationAboveFloorMeters: nil, floorEstimate: nil,
+                        rigidItemMultiplicityEvaluation: refined.rigidItemMultiplicityEvaluation)
+                    return withEvidence(.accepted(refined.worldPoints, diagnostics,
+                        refined.objectOutline, .visionMask))
+                }
+                return withEvidence(frameSample(
                     after: .photo(error),
                     from: frame,
                     grid: grid,
                     hasExplicitTarget: processor != nil
-                )
+                ))
             } catch {
                 let error = error as NSError
                 return .failed(
@@ -3093,6 +3126,63 @@ struct MeasurementARView: UIViewRepresentable {
                     .visionMask
                 )
             }
+        }
+
+        /// Re-segment the same frozen RGB frame; all geometry still uses its
+        /// original aligned depth and calibration, with unchanged quality gates.
+        private func focusedBoxPointCloud(frame: ARFrame, grid: DepthGrid,
+            calibration: PhotoCameraCalibration, original: PhotoInstanceLabelMask,
+            processor: ScannerAutomaticPhotoFrameProcessor,
+            recordEvidence: @escaping (String) -> Void) -> PhotoObjectPointCloud? {
+            guard original.width == calibration.imageWidth, original.height == calibration.imageHeight,
+                  case .target(let target) = processor.prompt,
+                  let originalSelection = try? processor.selectForeground(in: original) else { return nil }
+            let image = CIImage(cvPixelBuffer: frame.capturedImage)
+            let context = CIContext(options: [.cacheIntermediates: false])
+            var candidates: [PhotoInstanceLabelMask] = []
+            for window in PhotoFocusWindow.candidates(width: original.width, height: original.height, target: target) {
+                recordEvidence("focus_window xywh=\(window.x),\(window.y),\(window.width),\(window.height)")
+                // Core Image uses bottom-left rectangles; Vision prompts use top-left.
+                let rect = CGRect(x: window.x, y: original.height - window.y - window.height,
+                                  width: window.width, height: window.height)
+                guard let cropped = context.createCGImage(image, from: rect) else { continue }
+                let focused = ScannerAutomaticPhotoFrameProcessor(
+                    prompt: .target(normalizedImagePoint: window.prompt(target,
+                        imageWidth: original.width, imageHeight: original.height)),
+                    measurement: processor.measurement)
+                do {
+                    let mask = try foregroundInstanceLabelMask(from: frame.capturedImage,
+                        processor: focused,
+                        recordEvidence: recordEvidence,
+                        handlerOverride: VNImageRequestHandler(cgImage: cropped, options: [:]))
+                    let selected = try focused.selectForeground(in: mask)
+                    guard let registered = try window.registered(selected, imageWidth: original.width,
+                        imageHeight: original.height) else {
+                        recordEvidence("focus_rejected=crop_boundary_or_registration")
+                        continue
+                    }
+                    for previous in candidates {
+                        guard let consensus = try PhotoFocusedSelectionConsensus.merge(previous, registered,
+                            within: originalSelection) else { continue }
+                        recordEvidence("focus_consensus=accepted_masks checking_geometry=true")
+                        do {
+                            let cloud = try processor.makePointCloud(labelMask: consensus, depthGrid: grid,
+                                calibration: calibration,
+                                protectedEdgeMarginPixels: max(1, min(original.width, original.height) / 50),
+                                recordEvidence: recordEvidence)
+                            recordEvidence("focus_result=accepted_geometry")
+                            return cloud
+                        } catch {
+                            recordEvidence("focus_geometry_rejected=\(String(describing: error))")
+                        }
+                    }
+                    candidates.append(registered)
+                } catch {
+                    recordEvidence("focus_rejected=\(String(describing: error))")
+                }
+            }
+            recordEvidence("focus_result=no_acceptable_consensus")
+            return nil
         }
 
         /// Converts raw camera-image contours into a portrait-oriented image
@@ -3273,11 +3363,13 @@ struct MeasurementARView: UIViewRepresentable {
 
         private func foregroundInstanceLabelMask(
             from pixelBuffer: CVPixelBuffer,
-            processor: ScannerAutomaticPhotoFrameProcessor?
+            processor: ScannerAutomaticPhotoFrameProcessor?,
+            recordEvidence: ((String) -> Void)? = nil,
+            handlerOverride: VNImageRequestHandler? = nil
         ) throws -> PhotoInstanceLabelMask {
             try autoreleasepool {
                 let request = VNGenerateForegroundInstanceMaskRequest()
-                let requestHandler = VNImageRequestHandler(
+                let requestHandler = handlerOverride ?? VNImageRequestHandler(
                     cvPixelBuffer: pixelBuffer,
                     options: [:]
                 )
@@ -3315,6 +3407,12 @@ struct MeasurementARView: UIViewRepresentable {
                     )
                 }
 
+                if let recordEvidence {
+                    recordEvidence(PhotoMaskEvidence(name: "vision_foreground", width: lowResolutionMask.width,
+                        height: lowResolutionMask.height) { x, y in
+                            lowResolutionMask.labels[y * lowResolutionMask.width + x] != 0
+                        }.report)
+                }
                 let selected: PhotoSelectedInstanceMask
                 do {
                     if let processor {
@@ -3342,6 +3440,11 @@ struct MeasurementARView: UIViewRepresentable {
                     )
                 }
 
+                if let recordEvidence {
+                    recordEvidence("vision_selected_label=\(selected.label)")
+                    recordEvidence(PhotoMaskEvidence(name: "vision_selected", width: selected.width,
+                        height: selected.height, contains: selected.contains).report)
+                }
                 let scaledMask: CVPixelBuffer
                 do {
                     // Keep the request and scaled-mask generation in the same
@@ -3848,6 +3951,24 @@ struct MeasurementARView: UIViewRepresentable {
                 .map { String($0.imageResolutionPixels.x) } ?? "none"
             let imageHeight = cameraProvenance
                 .map { String($0.imageResolutionPixels.y) } ?? "none"
+
+            let report = """
+            series=\(capture.measurementSeriesID) request=\(capture.requestID)
+            subject=\(multiplicityGuardEnabled ? "box" : "general_item") frame_result=\(resultDescription)
+            photo_failure=\(photoFailureCode) detail=\(photoFailureDetail)
+            target_reason=\(finalTargetReasonDescription) last_rejection=\(lastRejectionDescription)
+            points=\(capture.worldPoints.count) coverage=\(coverage)
+            mask_pixels=\(rawRegionPixels) retained_pixels=\(retainedRegionPixels)
+            multiplicity=\(multiplicityAssessment) route=\(multiplicityRoute) reason=\(multiplicityIndeterminateReason)
+            length_m=\(lengthMeters) width_m=\(widthMeters) height_m=\(heightMeters)
+            estimation_failure=\(failureDescription) geometry_error=\(geometryErrorDescription)
+            \(capture.targetMaskEvidence ?? "mask_evidence=unavailable_before_selection")
+            """
+            let requestID = capture.requestID
+            let seriesID = capture.measurementSeriesID
+            Task { @MainActor [weak self] in
+                self?.scannerState?.recordCaptureDiagnostic(report, requestID: requestID, seriesID: seriesID)
+            }
 
             Self.calibrationLogger.notice(
                 "scan_calibration request_id=\(capture.requestID, privacy: .public) measurement_series_id=\(capture.measurementSeriesID, privacy: .public) result=\(resultDescription, privacy: .public) attempts=\(capture.sampleAttemptCount, privacy: .public) accepted_frames=\(capture.frameCount, privacy: .public) rejected_frames=\(capture.rejectedFrameCount, privacy: .public) floor_rejected_frames=\(capture.floorRejectedFrameCount, privacy: .public) unavailable_frames=\(capture.unavailableFrameCount, privacy: .public) points=\(capture.worldPoints.count, privacy: .public) length_m=\(lengthMeters, privacy: .public) width_m=\(widthMeters, privacy: .public) height_m=\(heightMeters, privacy: .public) point_cloud_confidence=\(pointCloudConfidence, privacy: .public) camera_x=\(cameraX, privacy: .public) camera_y=\(cameraY, privacy: .public) camera_z=\(cameraZ, privacy: .public) camera_forward_x=\(cameraForwardX, privacy: .public) camera_forward_z=\(cameraForwardZ, privacy: .public) camera_zoom=\(cameraZoom, privacy: .public) camera_applied_display_zoom=\(appliedZoom, privacy: .public) camera_image_width=\(imageWidth, privacy: .public) camera_image_height=\(imageHeight, privacy: .public) camera_focal_x=\(focalX, privacy: .public) camera_focal_y=\(focalY, privacy: .public) camera_principal_x=\(principalX, privacy: .public) camera_principal_y=\(principalY, privacy: .public) camera_normalized_focal=\(normalizedFocalLength, privacy: .public) camera_horizontal_fov_rad=\(horizontalFieldOfView, privacy: .public) camera_vertical_fov_rad=\(verticalFieldOfView, privacy: .public) target_center_x=\(centerX, privacy: .public) target_center_y=\(centerY, privacy: .public) target_center_z=\(centerZ, privacy: .public) raw_region_pixels=\(rawRegionPixels, privacy: .public) retained_region_pixels=\(retainedRegionPixels, privacy: .public) coverage=\(coverage, privacy: .public) seed_abs_up_normal=\(seedUpNormal, privacy: .public) elevation_m=\(elevation, privacy: .public) background_floor_y_m=\(floorY, privacy: .public) floor_source=\(floorSource, privacy: .public) multiplicity_guard_enabled=\(multiplicityGuardEnabled, privacy: .public) multiplicity_assessment=\(multiplicityAssessment, privacy: .public) multiplicity_assessment_route=\(multiplicityRoute, privacy: .public) multiplicity_finite_points=\(multiplicityFinitePoints, privacy: .public) multiplicity_minimum_points=\(multiplicityMinimumPoints, privacy: .public) multiplicity_usable_bins=\(multiplicityUsableBins, privacy: .public) multiplicity_eligible_splits=\(multiplicityEligibleSplits, privacy: .public) multiplicity_comparable_splits=\(multiplicityComparableSplits, privacy: .public) multiplicity_comparable_split_fraction=\(multiplicityComparableSplitFraction, privacy: .public) multiplicity_indeterminate_reason=\(multiplicityIndeterminateReason, privacy: .public) multiplicity_boundary_basis=\(multiplicityBoundaryBasis, privacy: .public) multiplicity_boundary_count=\(multiplicityBoundaryCount, privacy: .public) multiplicity_maximum_boundary_shift_m=\(multiplicityMaximumBoundaryShift, privacy: .public) multiplicity_maximum_qualifying_noise_m=\(multiplicityMaximumQualifyingNoise, privacy: .public) multiplicity_lower_body_height_fraction=\(multiplicityLowerBodyHeightFraction, privacy: .public) multiplicity_upper_body_height_fraction=\(multiplicityUpperBodyHeightFraction, privacy: .public) multiplicity_lower_body_point_fraction=\(multiplicityLowerBodyPointFraction, privacy: .public) multiplicity_upper_body_point_fraction=\(multiplicityUpperBodyPointFraction, privacy: .public) target_reason=\(finalTargetReasonDescription, privacy: .public) last_frame_rejection=\(lastRejectionDescription, privacy: .public) capture_path=\(capturePath, privacy: .public) fallback_trigger_code=\(fallbackTriggerCode, privacy: .public) fallback_trigger_detail=\(fallbackTriggerDetail, privacy: .public) fallback_result=\(fallbackResult, privacy: .public) photo_failure_code=\(photoFailureCode, privacy: .public) photo_failure_detail=\(photoFailureDetail, privacy: .public) estimation_failure=\(failureDescription, privacy: .public) geometry_error=\(geometryErrorDescription, privacy: .public)"

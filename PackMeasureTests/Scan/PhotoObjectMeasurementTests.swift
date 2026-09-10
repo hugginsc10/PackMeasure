@@ -4,6 +4,55 @@ import simd
 @testable import PackMeasure
 
 final class PhotoObjectMeasurementTests: XCTestCase {
+    func testFailedEdgeCaptureRetainsMaskEvidenceWithoutChangingRejection() throws {
+        let labels = try boxMask(width: 10, height: 10, x: 0...5, y: 2...7)
+        var reports: [String] = []
+        let processor = ScannerAutomaticPhotoFrameProcessor(
+            prompt: .target(normalizedImagePoint: SIMD2<Float>(0.3, 0.5)),
+            measurement: permissiveMeasurement
+        )
+        XCTAssertThrowsError(try processor.makePointCloud(
+            labelMask: labels,
+            depthGrid: populatedDepthGrid(width: 10, height: 10),
+            calibration: calibration(imageWidth: 10, imageHeight: 10),
+            recordEvidence: { reports.append($0) }
+        )) { error in
+            XCTAssertEqual(error as? PhotoObjectMeasurementError,
+                           .maskTouchesImageEdge(stage: .sourceMask))
+        }
+        let report = reports.joined(separator: "\n")
+        XCTAssertTrue(report.contains("mask=source size=10x10 count=36 bounds_xyxy=0,2,5,7"))
+        XCTAssertTrue(report.contains("mask=expected"))
+        XCTAssertTrue(report.contains("mask=retained"))
+        XCTAssertTrue(report.contains("mask=alternate"))
+        XCTAssertTrue(report.contains("touches_edge=true"))
+    }
+
+    func testEvidenceMapPreservesThinEdgesAndIsBounded() {
+        let evidence = PhotoMaskEvidence(name: "test", width: 1920, height: 1440) { x, y in
+            (x == 0 && y == 720) || (x == 1919 && y == 1439)
+        }
+        XCTAssertEqual(evidence.count, 2)
+        XCTAssertEqual(evidence.bounds, "0,720,1919,1439")
+        XCTAssertEqual(evidence.edges, [1, 1, 0, 1])
+        XCTAssertEqual(evidence.rows.count, 24)
+        XCTAssertTrue(evidence.rows.allSatisfy { $0.count == 32 })
+        XCTAssertEqual(evidence.rows.joined().filter { $0 == "#" }.count, 2)
+    }
+
+    func testEvidenceDoesNotChangeAcceptedPointCloud() throws {
+        let mask = try boxMask(width: 10, height: 10, x: 2...7, y: 2...7)
+        let grid = populatedDepthGrid(width: 10, height: 10)
+        let camera = calibration(imageWidth: 10, imageHeight: 10)
+        let baseline = try permissiveMeasurement.makePointCloud(labelMask: mask, depthGrid: grid, calibration: camera)
+        var reports: [String] = []
+        let observed = try permissiveMeasurement.makePointCloud(labelMask: mask, depthGrid: grid,
+            calibration: camera, recordEvidence: { reports.append($0) })
+        XCTAssertEqual(observed.worldPoints, baseline.worldPoints)
+        XCTAssertEqual(observed.maskQuality, baseline.maskQuality)
+        XCTAssertFalse(reports.isEmpty)
+    }
+
     func testExplicitTargetSelectsTappedInstanceInsteadOfCenteredInstance() throws {
         let labels = try labelMask(
             [
@@ -1839,6 +1888,64 @@ final class PhotoObjectMeasurementTests: XCTestCase {
         XCTAssertEqual(points[3].x, 10.5, accuracy: 0.0001)
         XCTAssertEqual(points[3].y, 19.5, accuracy: 0.0001)
         XCTAssertEqual(points[3].z, 28, accuracy: 0.0001)
+    }
+
+    @MainActor
+    func testGeneralItemProductionPolicyPreservesNonBoxSilhouettes() throws {
+        let state = ScannerSheetView.ScannerStateModel()
+        XCTAssertTrue(state.setMeasurementSubject(.generalItem))
+        let measurement = state.automaticPhotoMeasurement
+        XCTAssertNil(measurement.rigidItemMultiplicityGuard)
+        XCTAssertEqual(measurement.policy, PhotoObjectMeasurementPolicy())
+        let size = 96
+        let fixtures: [(String, (Int, Int) -> Bool)] = [
+            ("round bin", { x, y in
+                let dx = Float(x - 48) / 25, dy = Float(y - 48) / 32
+                return dx * dx + dy * dy <= 1
+            }),
+            ("luggage with handle", { x, y in
+                ((24...72).contains(x) && (30...80).contains(y))
+                    || ((34...62).contains(x) && (15...35).contains(y)
+                        && !((40...56).contains(x) && (21...29).contains(y)))
+            }),
+            ("chair with back and legs", { x, y in
+                ((24...72).contains(x) && (16...57).contains(y))
+                    || ((24...35).contains(x) && (58...80).contains(y))
+                    || ((61...72).contains(x) && (58...80).contains(y))
+            }),
+            ("L-shaped furniture", { x, y in
+                ((20...39).contains(x) && (16...78).contains(y))
+                    || ((20...76).contains(x) && (57...78).contains(y))
+            })
+        ]
+        for (name, includes) in fixtures {
+            let labels = (0..<size * size).map { includes($0 % size, $0 / size) ? UInt32(5) : 0 }
+            let mask = try PhotoInstanceLabelMask(width: size, height: size, labels: labels)
+            let first = labels.firstIndex(of: 5)!
+            let target = SIMD2<Float>((Float(first % size) + 0.5) / Float(size),
+                                      (Float(first / size) + 0.5) / Float(size))
+            let cloud = try measurement.makePointCloud(labelMask: mask,
+                depthGrid: populatedDepthGrid(width: size, height: size),
+                calibration: calibration(imageWidth: size, imageHeight: size),
+                prompt: .target(normalizedImagePoint: target))
+            XCTAssertEqual(Set(cloud.depthSupport.indices), Set(labels.indices.filter { labels[$0] == 5 }), name)
+            XCTAssertNil(cloud.rigidItemMultiplicityEvaluation, name)
+        }
+    }
+
+    @MainActor
+    func testGeneralItemProductionPolicyStillRejectsPhotoEdgeClipping() throws {
+        let state = ScannerSheetView.ScannerStateModel()
+        XCTAssertTrue(state.setMeasurementSubject(.generalItem))
+        XCTAssertThrowsError(try state.automaticPhotoMeasurement.makePointCloud(
+            labelMask: boxMask(width: 96, height: 96, x: 0...60, y: 15...80),
+            depthGrid: populatedDepthGrid(width: 96, height: 96),
+            calibration: calibration(imageWidth: 96, imageHeight: 96),
+            prompt: .target(normalizedImagePoint: SIMD2(0.3, 0.5)))) { error in
+                guard case .maskTouchesImageEdge = error as? PhotoObjectMeasurementError else {
+                    return XCTFail("Unexpected rejection: \(error)")
+                }
+            }
     }
 
     private var permissiveMeasurement: PhotoObjectMeasurement {

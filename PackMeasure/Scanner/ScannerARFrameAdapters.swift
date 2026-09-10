@@ -19,7 +19,8 @@ struct ScannerAutomaticPhotoFrameProcessor: Sendable {
         labelMask: PhotoInstanceLabelMask,
         depthGrid: DepthGrid,
         calibration: PhotoCameraCalibration,
-        protectedEdgeMarginPixels: Int? = nil
+        protectedEdgeMarginPixels: Int? = nil,
+        recordEvidence: ((String) -> Void)? = nil
     ) throws -> PhotoObjectPointCloud {
         var configuredMeasurement = measurement
         if let protectedEdgeMarginPixels {
@@ -30,7 +31,8 @@ struct ScannerAutomaticPhotoFrameProcessor: Sendable {
             labelMask: labelMask,
             depthGrid: depthGrid,
             calibration: calibration,
-            prompt: prompt
+            prompt: prompt,
+            recordEvidence: recordEvidence
         )
     }
 }
