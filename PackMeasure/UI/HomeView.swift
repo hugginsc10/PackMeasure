@@ -11,6 +11,13 @@ struct HomeView: View {
                 loadMixSection
                 vehicleSection
                 inventorySection
+                Section("Design an insert") {
+                    NavigationLink {
+                        InteriorLibraryView()
+                    } label: {
+                        Label("Measure a drawer interior", systemImage: "square.dashed.inset.filled")
+                    }
+                }
                 planningDisclaimerSection
             }
             .navigationTitle("PackMeasure")
