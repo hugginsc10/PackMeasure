@@ -97,7 +97,7 @@ private struct PackingDashboardView: View {
     private var loadMixSelection: Binding<PackingLoadMix> {
         Binding(
             get: { appModel.loadMix },
-            set: appModel.setLoadMix
+            set: { appModel.setLoadMix($0) }
         )
     }
 
