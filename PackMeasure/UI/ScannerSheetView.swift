@@ -1506,37 +1506,45 @@ struct ScannerSheetView: View {
 
     @ViewBuilder
     private var guidedActionBar: some View {
-        switch scannerState.phase {
-        case .checkingSupport:
-            ProgressView(ScannerActionCopy.checkingSupport)
-                .padding(.horizontal)
-        case .unsupported:
-            Button("Close") {
-                closeScanner()
+        VStack(spacing: 10) {
+            switch scannerState.phase {
+            case .checkingSupport:
+                ProgressView(ScannerActionCopy.checkingSupport)
+                    .padding(.horizontal)
+            case .unsupported:
+                Button("Close") {
+                    closeScanner()
+                }
+                .buttonStyle(.borderedProminent)
+            case .measured:
+                measurementActionBar
+            default:
+                if let session = scannerState.guidedCaptureSession {
+                    ScannerGuidedCaptureControls(
+                        presentation: ScannerGuidedCapturePresentation(
+                            step: session.step,
+                            feedback: guidedPresentationFeedback
+                        ),
+                        isTakingPoint: session.pendingRequest != nil,
+                        actionsEnabled: guidedActionsEnabled,
+                        onBack: {
+                            _ = scannerState.guidedBack()
+                        },
+                        onTakePoint: {
+                            _ = scannerState.requestGuidedPointCapture()
+                        },
+                        onConfirm: {
+                            _ = scannerState.confirmGuidedCapture()
+                        }
+                    )
+                }
             }
-            .buttonStyle(.borderedProminent)
-        case .measured:
-            measurementActionBar
-        default:
-            if let session = scannerState.guidedCaptureSession {
-                ScannerGuidedCaptureControls(
-                    presentation: ScannerGuidedCapturePresentation(
-                        step: session.step,
-                        feedback: guidedPresentationFeedback
-                    ),
-                    isTakingPoint: session.pendingRequest != nil,
-                    actionsEnabled: guidedActionsEnabled,
-                    onBack: {
-                        _ = scannerState.guidedBack()
-                    },
-                    onTakePoint: {
-                        _ = scannerState.requestGuidedPointCapture()
-                    },
-                    onConfirm: {
-                        _ = scannerState.confirmGuidedCapture()
-                    }
-                )
+
+            Button("Back to photos") {
+                scannerState.clearGuidedCapture(for: .exit)
             }
+            .buttonStyle(.bordered)
+            .accessibilityHint("Discards the guided measurement and starts a fresh photo scan")
         }
     }
 
