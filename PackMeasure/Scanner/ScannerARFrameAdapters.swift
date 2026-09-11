@@ -223,7 +223,7 @@ struct ScannerTargetFrameEvidenceAdapter: Sendable {
         cameraTransform: simd_float4x4
     ) -> TargetLockFrameEvidence {
         let normalizedPreviewPoint = projectedPreviewPointPixels.flatMap {
-            normalizedPreviewPoint(
+            self.normalizedPreviewPoint(
                 projectedPointPixels: $0,
                 viewportSizePixels: viewportSizePixels
             )

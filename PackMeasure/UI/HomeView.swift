@@ -23,6 +23,11 @@ struct HomeView: View {
                         } label: {
                             MeasureActionLabel(title: "Measure a room", subtitle: "Capture walls. Explore your floorplan.", symbol: "viewfinder")
                         }.buttonStyle(.plain)
+                        NavigationLink {
+                            InteriorLibraryView()
+                        } label: {
+                            MeasureActionLabel(title: "Measure a drawer interior", subtitle: "Trace irregular outlines. Design a fitted insert.", symbol: "square.dashed.inset.filled")
+                        }.buttonStyle(.plain)
                         Button { appModel.showingScanner = true } label: {
                             MeasureActionLabel(title: "Scan an item", subtitle: "Measure boxes, furniture, and more.", symbol: "shippingbox")
                         }.buttonStyle(.plain)
@@ -92,7 +97,7 @@ private struct PackingDashboardView: View {
     private var loadMixSelection: Binding<PackingLoadMix> {
         Binding(
             get: { appModel.loadMix },
-            set: appModel.setLoadMix
+            set: { appModel.setLoadMix($0) }
         )
     }
 

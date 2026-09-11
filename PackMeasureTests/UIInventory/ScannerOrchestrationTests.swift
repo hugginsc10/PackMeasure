@@ -850,9 +850,10 @@ struct ScannerOrchestrationTests {
     }
 
     @Test @MainActor
-    func guidedInterruptionAndSessionResetReturnToFreshAutomaticSeries() {
+    func guidedExitAndLifecycleBoundariesReturnToFreshAutomaticSeries() {
         for boundary in [
-            GuidedBoxLifecycleBoundary.interruption,
+            GuidedBoxLifecycleBoundary.exit,
+            .interruption,
             .sessionReset,
         ] {
             let state = ScannerSheetView.ScannerStateModel()
@@ -880,6 +881,38 @@ struct ScannerOrchestrationTests {
             #expect(!state.requiresFreshCameraEvidence)
             #expect(state.canStartMeasurement)
         }
+    }
+
+    @Test @MainActor
+    func guidedExitRejectsPendingCallbacksEvenAfterReenteringGuidedMode() throws {
+        let state = ScannerSheetView.ScannerStateModel()
+        #expect(state.enterGuidedCorners(targetID: firstTargetID))
+        #expect(state.previewBecameReady())
+        #expect(state.requestGuidedPointCapture())
+        let request = try #require(state.beginGuidedCapture(requestedPose: stablePose))
+        let lateSample = guidedSample(for: request, worldPosition: .zero)
+
+        state.clearGuidedCapture(for: .exit)
+
+        #expect(state.measurementMode == .automaticPhotos)
+        #expect(state.guidedCaptureSession == nil)
+        #expect(state.requiresFreshCameraEvidence)
+        #expect(state.consumeGuidedCapture(lateSample) == .ignored(.inactive))
+        #expect(!state.guidedCaptureFailed(request: request, failure: .depthTimeout))
+        #expect(state.estimate == nil)
+
+        #expect(state.enterGuidedCorners(targetID: secondTargetID))
+        #expect(state.previewBecameReady())
+        #expect(state.requestGuidedPointCapture())
+        let freshRequest = try #require(state.beginGuidedCapture(requestedPose: stablePose))
+        #expect(
+            state.consumeGuidedCapture(lateSample) == .ignored(
+                .requestMismatch(expected: freshRequest.requestID, actual: request.requestID)
+            )
+        )
+        #expect(!state.guidedCaptureFailed(request: request, failure: .depthTimeout))
+        #expect(state.guidedCaptureSession?.pendingRequest == freshRequest)
+        #expect(state.guidedCaptureFeedback == nil)
     }
 
     @Test @MainActor
