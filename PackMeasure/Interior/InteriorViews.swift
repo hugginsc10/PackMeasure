@@ -100,7 +100,7 @@ struct InteriorReviewView: View {
                 TextField("Interior name", text: $record.name)
                 HStack {
                     Text("Usable height (mm)")
-                    TextField("Height", value: $record.heightMM, format: .number)
+                    TextField("Height", value: $record.heightMM, format: .number.precision(.fractionLength(1)))
                         .keyboardType(.decimalPad).multilineTextAlignment(.trailing)
                 }
                 Stepper("Side clearance: \(record.sideClearanceMM.formatted()) mm", value: $record.sideClearanceMM, in: 0...30, step: 0.5)
