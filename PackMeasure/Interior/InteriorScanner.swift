@@ -28,8 +28,43 @@ final class InteriorScanState {
     var error: String?
     var trackingInterrupted = false
     var result: InteriorMeasurement?
+    var sweepEnabled = true
+    var sweepSeed: SIMD3<Float>?
+    var sweepResult = InteriorSweepResult()
+    var stableSweepPreviews = 0
+    var diagnosticsRequest = 0
+    var sweepDiagnostics: String?
+    var interruptionReason: String?
+    var isSweeping: Bool { sweepEnabled && !manualPlacement && !automatic && !takingHeight && !pinned && result == nil }
+    var canReviewSweep: Bool { isSweeping && ready && !trackingInterrupted && sweepResult.ready && stableSweepPreviews >= 2 }
+
+    func receiveSweep(_ value: InteriorSweepResult, generation: UUID) {
+        guard generation == self.generation, isSweeping, !trackingInterrupted else { return }
+        if value.views == sweepResult.views { sweepResult.hint=value.hint; return }
+        let old=sweepResult.loops.flatMap{$0}, new=value.loops.flatMap{$0}
+        let matches = !old.isEmpty && old.count==new.count && value.loops.count==sweepResult.loops.count
+            && old.allSatisfy { a in new.contains { simd_distance(a,$0)<0.008 } }
+            && new.allSatisfy { a in old.contains { simd_distance(a,$0)<0.008 } }
+        stableSweepPreviews = new.isEmpty ? 0 : matches ? stableSweepPreviews+1 : 1
+        sweepResult=value; error=nil
+    }
+    func useSweepOutline() {
+        guard canReviewSweep, let seed=sweepSeed else { return }
+        loops=sweepResult.loops; pinned=true; sweepEnabled=false; selectedCorner=nil
+        if let height=sweepResult.height {
+            do { result=try InteriorGeometry.project(loops,heightPoint:seed+SIMD3(0,height,0)); error=nil }
+            catch { self.error=error.localizedDescription; takingHeight=true }
+        } else { takingHeight=true }
+    }
+    func chooseAnotherBase() {
+        generation=UUID(); requestID += 1; isCapturingPoint=false
+        sweepEnabled=true; sweepSeed=nil; sweepResult=InteriorSweepResult(); stableSweepPreviews=0
+        sweepDiagnostics=nil; loops=[[]]; preview=[]; pinned=false; automatic=false
+        manualPlacement=false; selectedCorner=nil; takingHeight=false; resumeCamera(); error=nil
+    }
 
     var prompt: String {
+        if isSweeping { return sweepSeed == nil ? "Tap the inside base of one drawer or shelf compartment. Then sweep slowly around it." : sweepResult.hint }
         if takingHeight { return "Choose a visible top edge above the traced base. Use the lowest height your insert must fit under." }
         if selectedCorner != nil { return photo == nil ? "Aim at the corrected floor corner, or freeze the view to place it precisely." : "Zoom in, then tap the correct location for the selected corner." }
         if automatic { return "Keep the whole base and its edges in view. Hold steady when the outline appears." }
@@ -76,6 +111,7 @@ final class InteriorScanState {
     }
     func findCorners() {
         guard !isCapturingPoint, result == nil else { return }
+        sweepEnabled=false
         resumeCamera(); manualPlacement = false
         automatic = true
         automaticSeed = nil
@@ -111,6 +147,8 @@ final class InteriorScanState {
     }
     func useManual() {
         guard !isCapturingPoint else { return }
+        if isSweeping && canReviewSweep { loops=sweepResult.loops; pinned=true }
+        sweepEnabled=false
         automatic = false; automaticSeed = nil; preview = []; stablePreviewFrames = 0
         manualPlacement = true; error = nil
     }
@@ -170,6 +208,7 @@ final class InteriorScanState {
     func invalidate(_ message: String) {
         // A saved review result no longer depends on a live world coordinate system.
         guard result == nil else { return }
+        let wasSweep=isSweeping
         generation = UUID(); resumeCamera(); ready = false; manualPlacement = false
         requestID += 1
         isCapturingPoint = false
@@ -182,7 +221,9 @@ final class InteriorScanState {
         pinned = false
         selectedCorner = nil
         takingHeight = false
-        error = message
+        sweepSeed=nil; sweepResult=InteriorSweepResult(); stableSweepPreviews=0; sweepEnabled=true
+        sweepDiagnostics=nil; interruptionReason=message
+        error = wasSweep ? "Camera tracking restarted. Tap the base when the camera is ready to begin a new sweep." : message
     }
 }
 
@@ -207,6 +248,16 @@ struct InteriorCamera: UIViewRepresentable {
             let expectedRequest = state.requestID
             Task { @MainActor [weak coordinator] in coordinator?.capture(requestID: expectedRequest) }
         }
+        if coordinator.lastDiagnosticsRequest != state.diagnosticsRequest {
+            coordinator.lastDiagnosticsRequest=state.diagnosticsRequest
+            let generation=state.generation
+            Task { @MainActor [weak coordinator] in
+                guard let coordinator else { return }
+                let report=await coordinator.sweepWorker.diagnostics(generation:generation)
+                guard coordinator.active, coordinator.state.generation==generation else { return }
+                coordinator.state.sweepDiagnostics = "Build 59 interior sweep\nLast interruption: \(coordinator.state.interruptionReason ?? "none")\n" + report
+            }
+        }
         coordinator.render()
 
     }
@@ -224,8 +275,18 @@ struct InteriorCamera: UIViewRepresentable {
         var lastRequest = 0
         var active = true
         var lastPreviewTime: TimeInterval = 0
+        let sweepWorker=InteriorSweepWorker()
+        var sweepBusy=false
+        var lastDiagnosticsRequest=0
+        var renderVersion=""
         @objc func selectCorner(_ gesture: UITapGestureRecognizer) {
             guard !state.automatic, !state.isCapturingPoint, state.photo == nil, let view else { return }
+            if state.isSweeping {
+                guard state.sweepSeed == nil, state.ready, view.bounds.width>0, view.bounds.height>0 else { return }
+                let p=gesture.location(in:view)
+                state.requestPoint(at:[Float(p.x/view.bounds.width),Float(p.y/view.bounds.height)])
+                return
+            }
             if !state.takingHeight {
                 for hit in view.hitTest(gesture.location(in: view), options: nil) {
                     guard let parts = hit.node.name?.split(separator: ":"), parts.count == 2,
@@ -242,8 +303,23 @@ struct InteriorCamera: UIViewRepresentable {
         }
         func render() {
             guard view != nil else { return }
+            // Avoid rebuilding SceneKit geometry for unrelated state/UI updates.
+            let version="\(state.generation)-\(state.sweepResult.views)-\(state.stableSweepPreviews)-\(state.isSweeping)-\(String(describing:state.sweepSeed))-\(state.loops)-\(state.preview)-\(String(describing:state.selectedCorner))-\(state.pinned)-\(state.takingHeight)"
+            guard renderVersion != version else { return }; renderVersion=version
             markers.childNodes.forEach { $0.removeFromParentNode() }
-            let loops = state.automatic ? state.preview : state.loops
+            let loops = state.isSweeping ? state.sweepResult.loops : state.automatic ? state.preview : state.loops
+            if state.isSweeping {
+                for point in state.sweepResult.coverage {
+                    let tile=SCNBox(width:0.007,height:0.001,length:0.007,chamferRadius:0)
+                    tile.firstMaterial?.lightingModel = .constant
+                    tile.firstMaterial?.diffuse.contents=UIColor.systemTeal.withAlphaComponent(0.5)
+                    let node=SCNNode(geometry:tile); node.simdPosition=point; markers.addChildNode(node)
+                }
+                if let seed=state.sweepSeed {
+                    let sphere=SCNSphere(radius:0.009); sphere.firstMaterial?.diffuse.contents=UIColor.yellow
+                    let node=SCNNode(geometry:sphere); node.simdPosition=seed; markers.addChildNode(node)
+                }
+            }
             for (loopIndex, loop) in loops.enumerated() {
                 for (pointIndex, point) in loop.enumerated() {
                     let selected = state.selectedCorner?.loop == loopIndex && state.selectedCorner?.point == pointIndex
@@ -254,7 +330,7 @@ struct InteriorCamera: UIViewRepresentable {
                     node.name = "\(loopIndex):\(pointIndex)"
                     node.simdPosition = point
                     markers.addChildNode(node)
-                    let close = state.automatic || state.pinned || state.takingHeight || loopIndex < loops.count - 1
+                    let close = state.isSweeping || state.automatic || state.pinned || state.takingHeight || loopIndex < loops.count - 1
                     guard pointIndex > 0 || (close && loop.count > 2) else { continue }
                     let previous = loop[(pointIndex + loop.count - 1) % loop.count]
                     let length = simd_distance(point, previous)
@@ -281,6 +357,18 @@ struct InteriorCamera: UIViewRepresentable {
             }
             state.ready = true; state.cameraStatus = "Camera ready"
             if state.photoRequested { freeze(frame) }
+            if state.isSweeping, let seed=state.sweepSeed, !sweepBusy, frame.timestamp-lastPreviewTime>=0.4,
+               let snapshot=InteriorSweepFrame(frame:frame) {
+                lastPreviewTime=frame.timestamp; sweepBusy=true
+                let generation=state.generation
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    let value=await sweepWorker.process(snapshot,seed:seed,generation:generation)
+                    sweepBusy=false
+                    guard active else { return }
+                    state.receiveSweep(value,generation:generation)
+                }
+            }
             guard state.automatic, !state.isCapturingPoint,
                   frame.timestamp - lastPreviewTime >= 0.35 else { return }
             lastPreviewTime = frame.timestamp
@@ -340,6 +428,18 @@ struct InteriorCamera: UIViewRepresentable {
         }
         func capture(requestID: Int, preview: Bool = false) {
             guard state.requestID == requestID, preview ? state.automatic : state.isCapturingPoint else { return }
+            if state.isSweeping {
+                defer { state.isCapturingPoint=false }
+                guard !state.trackingInterrupted, let view, let frame=view.session.currentFrame,
+                      let snapshot=InteriorSweepFrame(frame:frame) else { state.error="Hold still while the camera gets depth."; return }
+                let point=CGPoint(x:CGFloat(state.target.x),y:CGFloat(state.target.y)).applying(
+                    frame.displayTransform(for:.portrait,viewportSize:view.bounds.size).inverted())
+                guard let seed=snapshot.selectedBase(at:[Float(point.x),Float(point.y)]) else {
+                    state.error="Tap a visible patch on the flat inside base. A wall or shelf edge can’t select the base."; return
+                }
+                state.sweepSeed=seed; state.error=nil
+                return
+            }
             var previewSucceeded = false
             defer {
                 if state.automatic && !previewSucceeded {

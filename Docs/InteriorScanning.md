@@ -1,4 +1,78 @@
-# Drawer and cabinet scanning — Build 58
+# Drawer and cabinet scanning — Build 59
+
+## Automatic compartment sweep
+
+The default workflow is **Choose → Sweep → Review**. Tap a visible patch on the
+inside base of one drawer or shelf compartment (or use **Scan base at cross**).
+Move the phone slowly to show the base, sides and front. Teal patches show observed
+floor coverage. Keep the compartment stationary. The app calculates corners;
+individual corner placement is no longer the default capture workflow.
+
+**Review dimensions** appears after consecutive reconstructions agree across
+distinct views and a sufficiently covered underside provides clear height. If
+only the footprint is ready, **Use outline · set height** retains it and offers
+the existing height capture/entry. The user still reviews and saves explicitly.
+Automatic height estimates the observed overhead clearance; verify drawer closure,
+hinges, lips, taper and overhangs before manufacturing an insert.
+
+**Choose another base** clears this target without restarting the AR session.
+Manual correction and the older single-view detector remain in **Scan options**.
+Switching to manual correction retains a stable completed sweep outline, including
+its notches and obstacle loops. An incomplete sweep cannot invent a perimeter.
+
+### Reconstruction and evidence
+
+`InteriorSweepFrame` copies scene depth, confidence, depth-aligned luminance,
+calibration and pose from one fresh, normally tracked frame. A base selection fits
+a local level patch within two depth pixels of the tap. This is explicit target
+selection, not the exact-pixel measurement path used by manual corners; no remote
+surface or image-center fallback is used.
+
+`InteriorSweepWorker` processes immutable snapshots off the main actor, admitting
+at most one reconstruction at a time. Useful camera movement produces keyframes
+(approximately 18 mm translation or 3 degrees rotation); stationary repeats do not
+establish independent support. Collection is bounded to 40 keyframes within 1.2 m
+of the selected base. At that limit the existing evidence stays available; an
+incomplete result asks for a new selection from a clearer angle.
+
+The worker accumulates observed base patches, near-base vertical surface samples,
+and open-front edge samples. An open front needs observed depth beyond the base
+or a supported vertical trim face just below it, plus nearby base evidence and an
+image intensity change. Missing depth or an image edge alone
+does not close the outline. High-confidence measurements remain required.
+
+An 8 mm spatial grid identifies the connected target footprint and orders its
+boundaries. Supported lines are robustly fitted to the boundary samples and their
+intersections provide the final corner positions. The grid does not determine the
+reported dimensions. Disconnected neighboring floors are excluded. Concave
+boundaries and supported holes are preserved; no rectangle or convex hull is
+substituted. Unsupported borders, significant unknown interior patches, crossing
+geometry and inconsistent reconstruction prevent review.
+
+Overhead capture requires horizontal patches observed from below in at least two
+views, agreement between per-view heights, and broad spatial coverage of the
+footprint. It does not use a shelf's top face as its underside. Incomplete or
+inconsistent coverage leaves height for the user to capture or enter.
+
+Temporary non-normal tracking pauses acceptance. Interruption, relocalization,
+backgrounding or an actual session reset invalidates unfinished world coordinates.
+Generation checks prevent late worker output from entering a different scan.
+Completed review results remain intact. **Scan diagnostics** exports a bounded,
+replayable set of geometry keyframes and the latest interruption reason only when
+the user chooses to share; camera photographs are not included or saved.
+
+### Physical acceptance
+
+Synthetic tests cover partial views, open fronts, rotated/noisy geometry, notches,
+obstacles, missing boundaries, adjacent compartments, height coverage and session
+invalidation. They do not prove real-device accuracy or successful detection of
+every material, narrow detail or occluded edge. The first physical check is one
+empty drawer and the previously photographed cabinet compartment, with no corner
+taps: select the base, sweep, review, and compare width/depth/height with a ruler.
+Record any repeated prompt and share scan diagnostics if the outline stays
+incomplete. Small details and hidden obstructions still require inspection.
+
+## Retained manual workflow
 
 The interior workflow captures a level footprint with optional obstacle cutouts
 and one usable height for a fitted insert. Build 58 prioritizes obtaining an
