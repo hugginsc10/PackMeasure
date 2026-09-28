@@ -153,6 +153,28 @@ struct InteriorSweepTests {
         }
         #expect(state.canReviewSweep, "\(state.sweepResult.hint)")
     }
+    @Test func offsetDuplicateSideCollapsesToTheSideNearerTheBase() {
+        typealias L=InteriorSweep.Line
+        let lines=[L(normal:[0,1],offset:0,low:0,high:0.4),        // front
+                   L(normal:[1,0],offset:0,low:-0.3,high:0),       // side
+                   L(normal:[1,0],offset:-0.021,low:-0.06,high:0)] // sliver 2.1 cm beyond it
+        let runs=InteriorSweep.collapsingDuplicateSides([(0,[0.2,0]),(2,[-0.021,0.02]),(1,[0,0.1])],lines:lines,base:[0.1,0.1])
+        #expect(runs.map(\.line)==[0,1])
+    }
+    @Test func genuineShallowBendIsNotStraightenedAway() {
+        // Two edges 6° apart that meet where the outline turns are a real corner, even
+        // though they are too close to parallel to intersect reliably. Leave them for the
+        // corner checks rather than silently keeping one.
+        typealias L=InteriorSweep.Line
+        let bend=SIMD2<Float>(sin(6 * .pi/180),cos(6 * .pi/180))
+        let lines=[L(normal:[0,1],offset:0,low:0,high:0.4),                                   // front
+                   L(normal:[1,0],offset:0.4,low:-0.3,high:0),                                // right
+                   L(normal:[0,1],offset:0.3,low:0.2,high:0.4),                               // back, first part
+                   L(normal:bend,offset:simd_dot(bend,[0.2,0.3]),low:-0.2,high:0.0),           // back, bent 6°
+                   L(normal:[1,0],offset:0,low:-0.32,high:0)]                                 // left
+        let input: [InteriorSweep.Run]=[(0,[0.2,0]),(1,[0.4,0.15]),(2,[0.3,0.3]),(3,[0.199,0.3]),(4,[0,0.15])]
+        #expect(InteriorSweep.collapsingDuplicateSides(input,lines:lines,base:[0.1,0.1]).map(\.line)==[0,1,2,3,4])
+    }
     @Test func openFrontReachesObservedBaseDespiteBlurredDrop() throws {
         // Depth blur reports the drop inside the base; the base itself is seen to the edge.
         var map=InteriorSweep(seed:[0.1,0,0.1]), result=InteriorSweepResult()
