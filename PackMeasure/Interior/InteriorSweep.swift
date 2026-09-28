@@ -18,6 +18,9 @@ struct InteriorSweepResult: Sendable {
     var coverage: [SIMD3<Float>] = []
     var hint = "Sweep slowly across the base, sides and front edge."
     var views = 0
+    /// Views accepted over the whole sweep. Unlike `views` it keeps rising once the
+    /// budget is full, so consumers can tell a new reconstruction from a repeated one.
+    var revision = 0
     var boundaryCount = 0
     /// The outer outline once its edges resolve, even while an inner gap still needs
     /// coverage. Diagnostic only: `loops` stays empty until every ring resolves.
@@ -32,6 +35,7 @@ struct InteriorSweep: Sendable {
     let seed: SIMD3<Float>
     private(set) var observations: [InteriorSweepObservation] = []
     private(set) var rejectedViews = 0
+    private(set) var acceptedViews = 0
     static let cell: Float = 0.008
     static let radius: Float = 1.2
     /// Stored views; beyond this the most redundant view is replaced, not the new one refused.
@@ -97,7 +101,7 @@ struct InteriorSweep: Sendable {
         // A full map keeps the sweep useful: the stored view most redundant with another
         // gives way, so a late view that covers a remaining gap still counts.
         if observations.count >= Self.maxViews { observations.remove(at: mostRedundantView()) }
-        observations.append(value)
+        observations.append(value); acceptedViews += 1
         return reconstruct()
     }
 
@@ -124,7 +128,7 @@ struct InteriorSweep: Sendable {
     }
 
     func reconstruct() -> InteriorSweepResult {
-        var result = InteriorSweepResult(views: observations.count)
+        var result = InteriorSweepResult(views: observations.count, revision: acceptedViews)
         // A one-cell footprint accounts for the depth pixel's finite sampling area.
         // Its displacement is removed when the boundary is intersected below.
         var floorCells = Set<Cell>()

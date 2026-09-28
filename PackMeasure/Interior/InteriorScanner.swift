@@ -40,7 +40,7 @@ final class InteriorScanState {
 
     func receiveSweep(_ value: InteriorSweepResult, generation: UUID) {
         guard generation == self.generation, isSweeping, !trackingInterrupted else { return }
-        if value.views == sweepResult.views { sweepResult.hint=value.hint; return }
+        if value.revision == sweepResult.revision { sweepResult.hint=value.hint; return }
         let old=sweepResult.loops.flatMap{$0}, new=value.loops.flatMap{$0}
         let matches = !old.isEmpty && old.count==new.count && value.loops.count==sweepResult.loops.count
             && old.allSatisfy { a in new.contains { simd_distance(a,$0)<0.008 } }
@@ -304,7 +304,7 @@ struct InteriorCamera: UIViewRepresentable {
         func render() {
             guard view != nil else { return }
             // Avoid rebuilding SceneKit geometry for unrelated state/UI updates.
-            let version="\(state.generation)-\(state.sweepResult.views)-\(state.stableSweepPreviews)-\(state.isSweeping)-\(String(describing:state.sweepSeed))-\(state.loops)-\(state.preview)-\(String(describing:state.selectedCorner))-\(state.pinned)-\(state.takingHeight)"
+            let version="\(state.generation)-\(state.sweepResult.revision)-\(state.stableSweepPreviews)-\(state.isSweeping)-\(String(describing:state.sweepSeed))-\(state.loops)-\(state.preview)-\(String(describing:state.selectedCorner))-\(state.pinned)-\(state.takingHeight)"
             guard renderVersion != version else { return }; renderVersion=version
             markers.childNodes.forEach { $0.removeFromParentNode() }
             let loops = state.isSweeping ? state.sweepResult.loops : state.automatic ? state.preview : state.loops

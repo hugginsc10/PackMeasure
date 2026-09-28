@@ -126,18 +126,32 @@ struct InteriorSweepTests {
         let decoded=try JSONDecoder().decode([InteriorSweepObservation].self,from:encoded)
         #expect(decoded.count==40 && decoded[0].floor==map.observations[0].floor)
     }
+    /// An open rectangle whose base has one unobserved 5 cm patch.
+    func gapped(_ index: Int) -> InteriorSweepObservation {
+        var o=observation(index,loops:[rectangle],open:true)
+        o.floor=o.floor.filter { !((0.24...0.29).contains($0.x) && (0.12...0.17).contains($0.y)) }
+        return o
+    }
     @Test func fullSweepStillAcceptsViewsThatCoverALateGap() {
         // A gap left after the view budget fills must remain coverable, not a dead end.
         var map=InteriorSweep(seed:[0.1,0,0.1]), result=InteriorSweepResult()
-        for i in 0..<40 {
-            var o=observation(i,loops:[rectangle],open:true)
-            o.floor=o.floor.filter { !((0.24...0.29).contains($0.x) && (0.12...0.17).contains($0.y)) }
-            result=map.add(o)
-        }
+        for i in 0..<40 { result=map.add(gapped(i)) }
         #expect(!result.ready)
         for i in 40..<44 { result=map.add(observation(i,loops:[rectangle],open:true)) }
         #expect(map.observations.count==40)
         #expect(result.ready, "\(result.hint)")
+    }
+    @Test @MainActor func reviewUnlocksWhenAGapIsCoveredAfterTheViewBudgetIsFull() {
+        // Stored views stay at the budget once full; the scanner must still take each new
+        // reconstruction, or a late covering view can never enable review.
+        let state=InteriorScanState(); state.ready=true; state.sweepSeed=[0.1,0,0.1]
+        var map=InteriorSweep(seed:[0.1,0,0.1])
+        for i in 0..<40 { state.receiveSweep(map.add(gapped(i)),generation:state.generation) }
+        #expect(!state.canReviewSweep)
+        for i in 40..<44 {
+            state.receiveSweep(map.add(observation(i,loops:[rectangle],open:true)),generation:state.generation)
+        }
+        #expect(state.canReviewSweep, "\(state.sweepResult.hint)")
     }
     @Test func openFrontReachesObservedBaseDespiteBlurredDrop() throws {
         // Depth blur reports the drop inside the base; the base itself is seen to the edge.
@@ -222,10 +236,10 @@ struct InteriorSweepTests {
     }
     @Test @MainActor func sweepReviewNeedsStableGeometryAndPreservesLiDARHeight() throws {
         let state=InteriorScanState(); state.ready=true; state.sweepSeed=[0.1,0,0.1]
-        var r=run([rectangle],overhead:0.35); r.views=3
+        var r=run([rectangle],overhead:0.35); r.views=3; r.revision=3
         state.receiveSweep(r,generation:state.generation)
         #expect(!state.canReviewSweep)
-        r.views=4; state.receiveSweep(r,generation:state.generation)
+        r.views=4; r.revision=4; state.receiveSweep(r,generation:state.generation)
         #expect(state.canReviewSweep)
         state.useSweepOutline()
         let value=try #require(state.result)
@@ -234,8 +248,8 @@ struct InteriorSweepTests {
     @Test @MainActor func incompleteHeightGoesToHeightWithoutRetracingAndManualKeepsOutline() {
         for manual in [false,true] {
             let state=InteriorScanState(); state.ready=true; state.sweepSeed=[0.1,0,0.1]
-            var r=run([rectangle]); r.views=3; state.receiveSweep(r,generation:state.generation)
-            r.views=4; state.receiveSweep(r,generation:state.generation)
+            var r=run([rectangle]); r.views=3; r.revision=3; state.receiveSweep(r,generation:state.generation)
+            r.views=4; r.revision=4; state.receiveSweep(r,generation:state.generation)
             if manual { state.useManual(); #expect(state.pinned && state.manualPlacement) }
             else { state.useSweepOutline(); #expect(state.takingHeight && state.result==nil) }
             #expect(state.loops==r.loops)
@@ -253,8 +267,8 @@ struct InteriorSweepTests {
     }
     @Test @MainActor func temporaryLackOfTrackingCannotApproveOldEvidence() {
         let state=InteriorScanState(); state.ready=true; state.sweepSeed=[0.1,0,0.1]
-        var r=run([rectangle]); r.views=3; state.receiveSweep(r,generation:state.generation)
-        r.views=4; state.receiveSweep(r,generation:state.generation); state.ready=false
+        var r=run([rectangle]); r.views=3; r.revision=3; state.receiveSweep(r,generation:state.generation)
+        r.views=4; r.revision=4; state.receiveSweep(r,generation:state.generation); state.ready=false
         state.useSweepOutline()
         #expect(!state.pinned && state.result==nil && state.sweepResult.ready)
     }
