@@ -269,10 +269,13 @@ struct InteriorSweep: Sendable {
                     result.hint = ringIndex == 0 ? "Show the front edge and any unhighlighted sides." : "Show the gap or obstruction inside the base."
                     return result
                 }
-                if runs.last?.line != match { runs.append((match,p)) }
+                // Rings are traced with the observed base on the left of travel, for the outer
+                // outline and obstacle cutouts alike.
+                let edge = ring[(i+1)%ring.count]-ring[i]
+                if runs.last?.line != match { runs.append((match, p, simd_normalize(SIMD2(-edge.y, edge.x)))) }
             }
             if runs.first?.line == runs.last?.line { runs.removeFirst() }
-            runs = Self.collapsingDuplicateSides(runs, lines: lines, base: SIMD2(seed.x, seed.z))
+            runs = Self.collapsingDuplicateSides(runs, lines: lines)
             guard (3...200).contains(runs.count) else { result.hint = "Keep sweeping until the edges separate clearly."; return result }
             var polygon: [SIMD3<Float>] = []
             for i in runs.indices {
@@ -315,13 +318,16 @@ struct InteriorSweep: Sendable {
         return result
     }
 
-    typealias Run = (line: Int, at: SIMD2<Float>)
+    /// A stretch of ring matched to one line: where it starts, and the unit direction from
+    /// there into the observed base.
+    typealias Run = (line: Int, at: SIMD2<Float>, inward: SIMD2<Float>)
 
     /// Nearly parallel neighbours that do not meet where the outline turns are one side seen
-    /// as two surfaces (a trim, the wall beyond a cabinet): the one nearer the selected base
-    /// bounds the usable space, so it replaces both. Neighbours that do meet there are a real
-    /// shallow corner and are left for the corner checks, never straightened away.
-    static func collapsingDuplicateSides(_ input: [Run], lines: [Line], base: SIMD2<Float>) -> [Run] {
+    /// as two surfaces (a trim, the wall beyond a cabinet). The one lying further into the
+    /// observed base bounds the usable space, so it replaces both: that shrinks an outline and
+    /// grows an obstacle cutout. Neighbours that do meet there are a real shallow corner and
+    /// are left for the corner checks, never straightened away.
+    static func collapsingDuplicateSides(_ input: [Run], lines: [Line]) -> [Run] {
         var runs = input
         func duplicate(_ a: Int, _ b: Int, turn: SIMD2<Float>) -> Bool {
             let x=lines[a], y=lines[b], determinant=x.normal.x*y.normal.y-x.normal.y*y.normal.x
@@ -337,9 +343,12 @@ struct InteriorSweep: Sendable {
             for i in runs.indices {
                 let j = (i+1) % runs.count, same = runs[i].line == runs[j].line
                 guard same || duplicate(runs[i].line, runs[j].line, turn: runs[j].at) else { continue }
-                if !same, lines[runs[j].line].distance(base) < lines[runs[i].line].distance(base) {
-                    runs[i].line = runs[j].line
+                // How far each line lies into the base, measured at the turn between them.
+                func depth(_ line: Int) -> Float {
+                    let l = lines[line], at = runs[j].at
+                    return simd_dot(runs[j].inward, at - (simd_dot(l.normal, at) - l.offset)*l.normal)
                 }
+                if !same, depth(runs[j].line) > depth(runs[i].line) { runs[i].line = runs[j].line }
                 // Collapsing can leave one line on both sides of a removed run, so the
                 // same pass also joins identical neighbours (including across the seam).
                 runs.remove(at: j)

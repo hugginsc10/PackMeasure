@@ -158,8 +158,21 @@ struct InteriorSweepTests {
         let lines=[L(normal:[0,1],offset:0,low:0,high:0.4),        // front
                    L(normal:[1,0],offset:0,low:-0.3,high:0),       // side
                    L(normal:[1,0],offset:-0.021,low:-0.06,high:0)] // sliver 2.1 cm beyond it
-        let runs=InteriorSweep.collapsingDuplicateSides([(0,[0.2,0]),(2,[-0.021,0.02]),(1,[0,0.1])],lines:lines,base:[0.1,0.1])
+        let runs=InteriorSweep.collapsingDuplicateSides([(0,[0.2,0],[0,1]),(2,[-0.021,0.02],[1,0]),(1,[0,0.1],[1,0])],lines:lines)
         #expect(runs.map(\.line)==[0,1])
+    }
+    @Test func duplicateObstacleEdgeCollapsesOutwardToKeepTheObstacle() {
+        // Around an obstacle the conservative edge grows the cutout: duplicates of its right
+        // side at x=0.28 and x=0.30 must keep 0.30, even though 0.28 is nearer the seed.
+        typealias L=InteriorSweep.Line
+        let lines=[L(normal:[0,1],offset:0.10,low:0.2,high:0.29),     // obstacle bottom
+                   L(normal:[1,0],offset:0.28,low:-0.2,high:-0.1),    // right side, fit A
+                   L(normal:[1,0],offset:0.30,low:-0.2,high:-0.1),    // right side, fit B
+                   L(normal:[0,1],offset:0.20,low:0.2,high:0.29),     // obstacle top
+                   L(normal:[1,0],offset:0.20,low:-0.2,high:-0.1)]    // obstacle left
+        let runs=InteriorSweep.collapsingDuplicateSides([(0,[0.245,0.10],[0,-1]),(1,[0.29,0.13],[1,0]),(2,[0.29,0.17],[1,0]),
+                                                         (3,[0.245,0.20],[0,1]),(4,[0.20,0.15],[-1,0])],lines:lines)
+        #expect(runs.map(\.line)==[0,2,3,4])
     }
     @Test func genuineShallowBendIsNotStraightenedAway() {
         // Two edges 6° apart that meet where the outline turns are a real corner, even
@@ -172,8 +185,8 @@ struct InteriorSweepTests {
                    L(normal:[0,1],offset:0.3,low:0.2,high:0.4),                               // back, first part
                    L(normal:bend,offset:simd_dot(bend,[0.2,0.3]),low:-0.2,high:0.0),           // back, bent 6°
                    L(normal:[1,0],offset:0,low:-0.32,high:0)]                                 // left
-        let input: [InteriorSweep.Run]=[(0,[0.2,0]),(1,[0.4,0.15]),(2,[0.3,0.3]),(3,[0.199,0.3]),(4,[0,0.15])]
-        #expect(InteriorSweep.collapsingDuplicateSides(input,lines:lines,base:[0.1,0.1]).map(\.line)==[0,1,2,3,4])
+        let input: [InteriorSweep.Run]=[(0,[0.2,0],[0,1]),(1,[0.4,0.15],[-1,0]),(2,[0.3,0.3],[0,-1]),(3,[0.199,0.3],[0,-1]),(4,[0,0.15],[1,0])]
+        #expect(InteriorSweep.collapsingDuplicateSides(input,lines:lines).map(\.line)==[0,1,2,3,4])
     }
     @Test func fullSweepDropsAViewThatRepeatsAStoredPose() {
         // Returning to an earlier pose adds nothing new; it must not push out a unique view.
