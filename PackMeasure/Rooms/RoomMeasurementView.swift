@@ -88,6 +88,7 @@ struct RoomScanSheet: View {
     @State private var coachingTime = ProcessInfo.processInfo.systemUptime
     @State private var guidance: RoomCaptureGuidance
     @State private var scanID = UUID()
+    @State private var accessCheckedScan: UUID?
     @State private var recovery = RoomCaptureRecovery()
     @State private var diagnostics = "No RoomPlan result received yet."
 
@@ -129,6 +130,10 @@ struct RoomScanSheet: View {
                         ShareLink("Share room diagnostics", item: diagnosticReport)
                             .padding(.bottom)
                     }
+                    // Names the scan the access gate last evaluated, so UI tests can
+                    // prove a retry re-ran the gate. Identifiers are not spoken.
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("room-scan-failure-\(accessCheckedScan?.uuidString ?? "unchecked")")
                 } else if cameraReady {
                     liveCapture
                 } else {
@@ -151,11 +156,13 @@ struct RoomScanSheet: View {
         // denied first check leaves the sheet on "Checking camera access…".
         .task(id: scanID) {
             guard RoomCaptureSession.isSupported else {
+                accessCheckedScan = scanID
                 failure = "This device does not support LiDAR room capture."
                 return
             }
             let allowed = await AVCaptureDevice.requestAccess(for: .video)
             if Task.isCancelled { return }
+            accessCheckedScan = scanID
             if allowed { cameraReady = true }
             else { failure = "Allow camera access for PackMeasure in Settings, then start a new scan." }
         }
