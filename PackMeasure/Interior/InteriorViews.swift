@@ -79,10 +79,24 @@ struct InteriorReviewView: View {
     @State private var exporting = false
     @State private var document = InteriorSVGDocument(text: "")
     @State private var message: String?
+    @AppStorage(InteriorUnit.storageKey) private var unit: InteriorUnit = .inches
+    /// The numeric field being edited. Its uncommitted text would be read in the new unit,
+    /// so units cannot change until editing ends.
+    @FocusState private var editing: Field?
+    private enum Field: Hashable { case height, point(loop: Int, index: Int, axis: Int) }
     private var output: Result<[[InteriorPoint]], Error> { Result { try record.insertContours() } }
+    /// Edits a stored millimeter value in the chosen unit.
+    private func length(_ millimeters: Binding<Double>) -> Binding<Double> {
+        Binding(get: { unit.value(fromMillimeters: millimeters.wrappedValue) },
+                set: { millimeters.wrappedValue = unit.millimeters(from: $0) })
+    }
     var body: some View {
         Form {
-            Section("Inside footprint · millimeters") {
+            Section("Inside footprint · \(unit.title.lowercased())") {
+                Picker("Units", selection: $unit) {
+                    ForEach(InteriorUnit.allCases, id: \.self) { Text($0.title).tag($0) }
+                }.pickerStyle(.segmented).accessibilityIdentifier("interior-units").disabled(editing != nil)
+                if editing != nil { Text("Finish editing to change units.").font(.caption).foregroundStyle(.secondary) }
                 InteriorOutlineView(contours: record.contours, inset: try? output.get())
                     .frame(height: 220)
                 Text("Gray: captured boundary · Teal: insert footprint · Blank cutouts: obstacles")
@@ -90,8 +104,8 @@ struct InteriorReviewView: View {
                 if let outer = record.contours.first,
                    let minX = outer.map(\.x).min(), let maxX = outer.map(\.x).max(),
                    let minY = outer.map(\.y).min(), let maxY = outer.map(\.y).max() {
-                    LabeledContent("Overall span along first edge", value: "\((maxX - minX).formatted(.number.precision(.fractionLength(1)))) mm")
-                    LabeledContent("Overall span across first edge", value: "\((maxY - minY).formatted(.number.precision(.fractionLength(1)))) mm")
+                    LabeledContent("Overall span along first edge", value: unit.format(millimeters: maxX - minX))
+                    LabeledContent("Overall span across first edge", value: unit.format(millimeters: maxY - minY))
                 }
                 Text("Overall spans are bounding dimensions; an irregular insert must follow the outline.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -99,34 +113,38 @@ struct InteriorReviewView: View {
             Section("Insert settings") {
                 TextField("Interior name", text: $record.name)
                 HStack {
-                    Text("Usable height (mm)")
-                    TextField("Height", value: Binding(get: { record.heightMM }, set: { record.heightMM = $0; record.heightSource = .entered }), format: .number.precision(.fractionLength(1)))
+                    Text("Usable height (\(unit.symbol))")
+                    TextField("Height", value: length(Binding(get: { record.heightMM }, set: { record.heightMM = $0; record.heightSource = .entered })),
+                              format: .number.precision(.fractionLength(unit.fractionDigits)))
+                        .focused($editing, equals: .height)
                         .keyboardType(.decimalPad).multilineTextAlignment(.trailing)
                 }
                 Text(record.heightSource == .entered ? "Height entered by you" : record.heightSource == .lidar ? "Captured height · verify available space" : "Verify available height")
                     .font(.caption).foregroundStyle(.secondary)
-                Stepper("Side clearance: \(record.sideClearanceMM.formatted()) mm", value: $record.sideClearanceMM, in: 0...30, step: 0.5)
-                Stepper("Top clearance: \(record.topClearanceMM.formatted()) mm", value: $record.topClearanceMM, in: 0...30, step: 0.5)
+                Stepper("Side clearance: \(unit.format(millimeters: record.sideClearanceMM))", value: $record.sideClearanceMM, in: 0...30, step: 0.5)
+                Stepper("Top clearance: \(unit.format(millimeters: record.topClearanceMM))", value: $record.topClearanceMM, in: 0...30, step: 0.5)
                 Text("Side clearance is applied at every wall and around obstacles. A rectangular insert loses twice this amount per horizontal dimension. Top clearance is subtracted once from usable height.")
                     .font(.caption).foregroundStyle(.secondary)
                 if case .success = output {
-                    LabeledContent("Draft extrusion height", value: "\((record.heightMM - record.topClearanceMM).formatted(.number.precision(.fractionLength(1)))) mm")
+                    LabeledContent("Draft extrusion height", value: unit.format(millimeters: record.heightMM - record.topClearanceMM))
                 } else if case .failure(let error) = output {
                     Text(error.localizedDescription).foregroundStyle(.orange)
                 }
             }
             Section("Verify or correct the outline") {
-                Text("Coordinates are in mm, relative to point 1. The first edge defines the horizontal axis. Use physical measurements to correct points before exporting.")
+                Text("Coordinates are in \(unit.title.lowercased()), relative to point 1. The first edge defines the horizontal axis. Use physical measurements to correct points before exporting.")
                     .font(.caption).foregroundStyle(.secondary)
                 ForEach(record.contours.indices, id: \.self) { loopIndex in
                     DisclosureGroup(loopIndex == 0 ? "Inside perimeter" : "Obstacle \(loopIndex)") {
                         ForEach(record.contours[loopIndex].indices, id: \.self) { pointIndex in
                             HStack {
                                 Text("\(pointIndex + 1)")
-                                TextField("X (mm)", value: $record.contours[loopIndex][pointIndex].x, format: .number)
-                                    .accessibilityLabel("Point \(pointIndex + 1) X in millimeters")
-                                TextField("Y (mm)", value: $record.contours[loopIndex][pointIndex].y, format: .number)
-                                    .accessibilityLabel("Point \(pointIndex + 1) Y in millimeters")
+                                TextField("X (\(unit.symbol))", value: length($record.contours[loopIndex][pointIndex].x), format: .number)
+                                    .focused($editing, equals: .point(loop: loopIndex, index: pointIndex, axis: 0))
+                                    .accessibilityLabel("Point \(pointIndex + 1) X in \(unit.title.lowercased())")
+                                TextField("Y (\(unit.symbol))", value: length($record.contours[loopIndex][pointIndex].y), format: .number)
+                                    .focused($editing, equals: .point(loop: loopIndex, index: pointIndex, axis: 1))
+                                    .accessibilityLabel("Point \(pointIndex + 1) Y in \(unit.title.lowercased())")
                             }
                             .keyboardType(.numbersAndPunctuation)
                         }
@@ -162,6 +180,11 @@ struct InteriorReviewView: View {
                 Button("Save") {
                     do { try onSave(record); message = "Interior saved." } catch { message = error.localizedDescription }
                 }.disabled((try? output.get()) == nil).accessibilityIdentifier("save-interior-review")
+            }
+            // Decimal pads have no return key; this commits the value being edited.
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("Done") { editing = nil }
             }
         }
         .fileExporter(isPresented: $exporting, document: document, contentType: .svg, defaultFilename: "interior-insert") { result in
