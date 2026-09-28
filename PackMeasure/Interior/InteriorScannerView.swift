@@ -58,7 +58,8 @@ struct InteriorScannerView: View {
                             Button("How to scan", systemImage: "questionmark.circle") { showingHelp = true }
                             Button("Scan diagnostics", systemImage: "waveform.path.ecg") {
                                 state.sweepDiagnostics=supported ? nil : "Interior sweep requires a LiDAR device."
-                                state.diagnosticsRequest += 1; showingDiagnostics=true
+                                state.diagnosticsStorage=nil; showingDiagnostics=true
+                                if supported { Task { await state.prepareDiagnostics() } }
                             }
                             if state.isSweeping {
                                 Button("Place corners myself", systemImage: "hand.point.up.left") { state.useManual() }
@@ -81,6 +82,7 @@ struct InteriorScannerView: View {
                         Text("Share the captured geometry to help investigate this scan. Camera photographs are not included.")
                         if let report=state.sweepDiagnostics {
                             ShareLink("Share scan diagnostics", item:report).buttonStyle(.borderedProminent)
+                            if let storage=state.diagnosticsStorage { Text(storage).font(.footnote).foregroundStyle(.secondary) }
                         } else { ProgressView("Preparing diagnostics…") }
                     }.padding().navigationTitle("Scan diagnostics").navigationBarTitleDisplayMode(.inline)
                         .toolbar { ToolbarItem(placement:.confirmationAction) { Button("Done") { showingDiagnostics=false } } }
