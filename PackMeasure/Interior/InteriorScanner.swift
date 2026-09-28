@@ -32,8 +32,13 @@ final class InteriorScanState {
     var sweepSeed: SIMD3<Float>?
     var sweepResult = InteriorSweepResult()
     var stableSweepPreviews = 0
-    var diagnosticsRequest = 0
     var sweepDiagnostics: String?
+    /// Where the last report was kept on the device, or why it could not be.
+    var diagnosticsStorage: String?
+    /// Owned here rather than by the camera view, so a sweep's evidence stays available
+    /// after review replaces the camera (diagnostics must work from review too).
+    let sweepWorker = InteriorSweepWorker()
+    static let diagnosticsDirectory = URL.applicationSupportDirectory.appending(path: "PackMeasure/Diagnostics", directoryHint: .isDirectory)
     var interruptionReason: String?
     var isSweeping: Bool { sweepEnabled && !manualPlacement && !automatic && !takingHeight && !pinned && result == nil }
     var canReviewSweep: Bool { isSweeping && ready && !trackingInterrupted && sweepResult.ready && stableSweepPreviews >= 2 }
@@ -51,10 +56,31 @@ final class InteriorScanState {
     func useSweepOutline() {
         guard canReviewSweep, let seed=sweepSeed else { return }
         loops=sweepResult.loops; pinned=true; sweepEnabled=false; selectedCorner=nil
+        // Keep the sweep's evidence with the result: a copy on the device can be retrieved
+        // over USB even if sharing fails later.
+        Task { await prepareDiagnostics() }
         if let height=sweepResult.height {
             do { result=try InteriorGeometry.project(loops,heightPoint:seed+SIMD3(0,height,0)); error=nil }
             catch { self.error=error.localizedDescription; takingHeight=true }
         } else { takingHeight=true }
+    }
+    /// Builds the replayable sweep report from the worker (no camera view needed) and keeps
+    /// the latest copy on the device.
+    func prepareDiagnostics(saveTo directory: URL? = InteriorScanState.diagnosticsDirectory) async {
+        let generation = self.generation
+        let report = await sweepWorker.diagnostics(generation: generation)
+        guard generation == self.generation else { return }
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"
+        let text = "Build \(build) interior sweep\nLast interruption: \(interruptionReason ?? "none")\n" + report
+        sweepDiagnostics = text
+        guard let directory else { return }
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try Data(text.utf8).write(to: directory.appending(path: "last-interior-sweep.txt"), options: .atomic)
+            diagnosticsStorage = "A copy is kept on this iPhone for retrieval over USB."
+        } catch {
+            diagnosticsStorage = "Could not keep a copy on this iPhone: \(error.localizedDescription)"
+        }
     }
     func chooseAnotherBase() {
         generation=UUID(); requestID += 1; isCapturingPoint=false
@@ -248,16 +274,6 @@ struct InteriorCamera: UIViewRepresentable {
             let expectedRequest = state.requestID
             Task { @MainActor [weak coordinator] in coordinator?.capture(requestID: expectedRequest) }
         }
-        if coordinator.lastDiagnosticsRequest != state.diagnosticsRequest {
-            coordinator.lastDiagnosticsRequest=state.diagnosticsRequest
-            let generation=state.generation
-            Task { @MainActor [weak coordinator] in
-                guard let coordinator else { return }
-                let report=await coordinator.sweepWorker.diagnostics(generation:generation)
-                guard coordinator.active, coordinator.state.generation==generation else { return }
-                coordinator.state.sweepDiagnostics = "Build 59 interior sweep\nLast interruption: \(coordinator.state.interruptionReason ?? "none")\n" + report
-            }
-        }
         coordinator.render()
 
     }
@@ -275,9 +291,7 @@ struct InteriorCamera: UIViewRepresentable {
         var lastRequest = 0
         var active = true
         var lastPreviewTime: TimeInterval = 0
-        let sweepWorker=InteriorSweepWorker()
         var sweepBusy=false
-        var lastDiagnosticsRequest=0
         var renderVersion=""
         @objc func selectCorner(_ gesture: UITapGestureRecognizer) {
             guard !state.automatic, !state.isCapturingPoint, state.photo == nil, let view else { return }
@@ -363,7 +377,7 @@ struct InteriorCamera: UIViewRepresentable {
                 let generation=state.generation
                 Task { @MainActor [weak self] in
                     guard let self else { return }
-                    let value=await sweepWorker.process(snapshot,seed:seed,generation:generation)
+                    let value=await state.sweepWorker.process(snapshot,seed:seed,generation:generation)
                     sweepBusy=false
                     guard active else { return }
                     state.receiveSweep(value,generation:generation)
