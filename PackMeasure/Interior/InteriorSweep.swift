@@ -39,7 +39,8 @@ struct InteriorSweep: Sendable {
     private(set) var acceptedViews = 0
     /// Evidence cells each stored view contributes, kept in step with `observations`.
     private(set) var viewEvidence: [Set<Evidence>] = []
-    struct Evidence: Hashable, Sendable { var kind: UInt8; var cell: Cell }
+    /// One observed cell of one kind; underside cells also carry their height level.
+    struct Evidence: Hashable, Sendable { var kind: UInt8; var cell: Cell; var level = 0 }
     static let cell: Float = 0.008
     static let radius: Float = 1.2
     /// Stored views; beyond this the most redundant view is replaced, not the new one refused.
@@ -116,12 +117,16 @@ struct InteriorSweep: Sendable {
     }
 
     /// Cells of base, sides, front and (at the height estimate's 5 cm spacing) underside.
+    /// Underside cells are split into 1 cm levels, finer than the 12 mm agreement the height
+    /// needs, so a lower obstruction seen late is new evidence, not a repeat of a higher one.
     private func evidenceCells(of view: InteriorSweepObservation) -> Set<Evidence> {
         var cells = Set<Evidence>()
         for p in view.floor { cells.insert(.init(kind:0, cell:cell(p))) }
         for p in view.walls { cells.insert(.init(kind:1, cell:cell(p))) }
         for p in view.front { cells.insert(.init(kind:2, cell:cell(p))) }
-        for p in view.overhead { cells.insert(.init(kind:3, cell:.init(x:Int(floor(p.x/0.05)), y:Int(floor(p.z/0.05))))) }
+        for p in view.overhead {
+            cells.insert(.init(kind:3, cell:.init(x:Int(floor(p.x/0.05)), y:Int(floor(p.z/0.05))), level:Int(floor((p.y-seed.y)/0.01))))
+        }
         return cells
     }
 
@@ -129,14 +134,18 @@ struct InteriorSweep: Sendable {
     /// view, while edges and the underside need two that agree (`fitLines`, `overheadHeight`).
     static func support(_ kind: UInt8) -> Int { kind == 0 ? 1 : 2 }
 
-    /// When full, the stored view whose loss costs least gives way: fewest cells that would
-    /// fall below the support they need, then the pose nearest another view, then the older.
+    /// When full, the stored view whose loss costs least once the incoming view is kept gives
+    /// way: fewest cells that would fall below the support they need, then the pose nearest
+    /// another view, then the older.
     /// Close poses can still see different patches, so pose alone never decides. Nil when
     /// the incoming view brings no cell closer to its needed support.
     private func viewToReplace(adding incoming: Set<Evidence>) -> Int? {
         var seen: [Evidence: Int] = [:]
         for cells in viewEvidence { for e in cells { seen[e, default: 0] += 1 } }
         guard incoming.contains(where: { seen[$0, default: 0] < Self.support($0.kind) }) else { return nil }
+        // Price each stored view as if the incoming view were already kept: evidence it
+        // re-observes costs nothing to lose.
+        for e in incoming { seen[e, default: 0] += 1 }
         let cost = viewEvidence.map { cells in cells.reduce(0) { $0 + (seen[$1, default: 0] <= Self.support($1.kind) ? 1 : 0) } }
         guard let least = cost.min() else { return nil }
         func separation(_ a: InteriorSweepObservation, _ b: InteriorSweepObservation) -> Float {

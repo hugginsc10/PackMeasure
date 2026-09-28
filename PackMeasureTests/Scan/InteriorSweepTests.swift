@@ -209,6 +209,37 @@ struct InteriorSweepTests {
         result=map.add(observation(40,loops:[rectangle],open:true))   // a second view corroborates it
         #expect(result.ready, "\(result.hint)")
     }
+    @Test func lowerUndersideSeenLateIsNotTreatedAsARepeat() {
+        // Two views agreeing on a higher underside must not make a later, lower one look
+        // redundant: its height differs, so it is new evidence, and clearance must not be
+        // reported from the higher level alone.
+        var map=InteriorSweep(seed:[0.1,0,0.1]), result=InteriorSweepResult()
+        for i in 0..<38 { result=map.add(observation(i,loops:[rectangle],open:true)) }
+        for i in 38..<40 { result=map.add(observation(i,loops:[rectangle],open:true,overhead:0.40)) }
+        for i in 40..<42 { result=map.add(observation(i,loops:[rectangle],open:true,overhead:0.35)) }
+        #expect(map.observations.contains { $0.timestamp==41*0.4 })
+        #expect(result.height == nil || result.height! < 0.36, "\(String(describing: result.height))")
+    }
+    @Test func fullSweepCountsTheIncomingViewWhenChoosingAReplacement() {
+        // A candidate that re-observes one stored view's only patch makes that view free to
+        // replace; replacing another view instead would reopen that other view's patch.
+        func uncover(_ o: inout InteriorSweepObservation, _ x: ClosedRange<Float>, _ y: ClosedRange<Float>) {
+            o.floor=o.floor.filter { !(x.contains($0.x) && y.contains($0.y)) }
+        }
+        let ax: ClosedRange<Float>=0.04...0.10, ay: ClosedRange<Float>=0.04...0.10
+        let bx: ClosedRange<Float>=0.28...0.33, by: ClosedRange<Float>=0.18...0.23
+        var map=InteriorSweep(seed:[0.2,0,0.15])
+        for i in 0..<38 {   // neither patch, plus an underside level no other view shares
+            var o=observation(i,loops:[rectangle],open:true,overhead:0.30+Float(i)*0.02)
+            uncover(&o,ax,ay); uncover(&o,bx,by); _=map.add(o)
+        }
+        var onlyA=observation(38,loops:[rectangle],open:true); uncover(&onlyA,bx,by); _=map.add(onlyA)
+        var onlyB=observation(39,loops:[rectangle],open:true); uncover(&onlyB,ax,ay); _=map.add(onlyB)
+        var again=observation(40,loops:[rectangle],open:true,overhead:0.2); uncover(&again,bx,by)
+        let result=map.add(again)   // re-observes patch A and adds a new underside level
+        #expect(map.observations.contains { $0.timestamp==39*0.4 })
+        #expect(result.ready, "\(result.hint)")
+    }
     @Test func shortFloorPatchIsNotExtrapolatedAlongALongFront() {
         // Base seen past a 40 cm front only along its first 8 cm, rising 1 cm per 10 cm:
         // extrapolating that slope would push the far end past edgeReach.
