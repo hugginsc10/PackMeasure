@@ -228,7 +228,8 @@ struct InteriorScannerView: View {
 struct InteriorHeightEntry: View {
     @Environment(\.dismiss) private var dismiss
     @State private var value = ""
-    @State private var inches = true
+    @AppStorage(InteriorUnit.storageKey) private var unit: InteriorUnit = .inches
+    private var inches: Bool { unit == .inches }
     @State private var error: String?
     let onApply: (Double) -> Void
     var body: some View {
@@ -265,6 +266,6 @@ struct InteriorHeightEntry: View {
             guard let number else { error = "Check the height before changing units."; return }
             value = String(format: "%.3f", number * (next ? 1 / 25.4 : 25.4))
         }
-        inches = next; error = nil
+        unit = next ? .inches : .millimeters; error = nil
     }
 }

@@ -20,7 +20,12 @@ final class InteriorUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["saved-interior"].label.contains("4 corners"))
         app.terminate();app.launchArguments=["interior","reopen"];app.launch()
         XCTAssertTrue(app.staticTexts["Height entered by you"].waitForExistence(timeout:4))
-        XCTAssertTrue(app.textFields.matching(NSPredicate(format:"value == %@","88.9")).firstMatch.exists)
+        // The chosen unit is remembered across launches; set it explicitly, check both, restore.
+        app.buttons["Inches"].tap()
+        XCTAssertTrue(app.textFields.matching(NSPredicate(format:"value == %@","3.50")).firstMatch.waitForExistence(timeout:3))
+        app.buttons["Millimeters"].tap()
+        XCTAssertTrue(app.textFields.matching(NSPredicate(format:"value == %@","88.9")).firstMatch.waitForExistence(timeout:3))
+        app.buttons["Inches"].tap()
     }
     @MainActor func testPinnedOutlineCanAddObstacleWithoutLosingBase() {
         let app=XCUIApplication();app.launchArguments=["interior","pinned"];app.launch()
@@ -55,6 +60,7 @@ final class InteriorUITests: XCTestCase {
     }
     @MainActor private func enterHeight(_ app:XCUIApplication,_ value:String) {
         let b=app.buttons["enter-interior-height"];XCTAssertTrue(b.waitForExistence(timeout:3));b.tap()
+        let inches=app.buttons["Inches"];XCTAssertTrue(inches.waitForExistence(timeout:3));inches.tap()
         let field=app.textFields["interior-height-value"];XCTAssertTrue(field.waitForExistence(timeout:3));field.tap();field.typeText(value)
         app.buttons["apply-interior-height"].tap()
     }
