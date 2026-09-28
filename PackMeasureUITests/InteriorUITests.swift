@@ -1,0 +1,73 @@
+import XCTest
+
+final class InteriorUITests: XCTestCase {
+    @MainActor func testFrozenCornerPlacementCorrectionAndSaveReopen() {
+        let app=XCUIApplication();app.launchArguments=["interior"];app.launch()
+        let picker=app.descendants(matching:.any).matching(identifier:"interior-frozen-photo").firstMatch
+        XCTAssertTrue(picker.waitForExistence(timeout:5))
+        for (x,y) in [(0.2,0.2),(0.8,0.2),(0.8,0.8),(0.2,0.8)] {tapImage(app,picker,x,y)}
+        XCTAssertTrue(app.buttons["interior-next-height"].exists)
+        screenshot(app,"frozen-corners")
+        app.buttons["Move corner 2"].tap();tapImage(app,picker,0.79,0.2)
+        XCTAssertFalse(app.staticTexts["interior-error"].exists)
+        app.buttons["interior-next-height"].tap()
+        enterHeight(app,"3.5")
+        XCTAssertTrue(app.navigationBars["Review interior"].waitForExistence(timeout:4))
+        XCTAssertTrue(app.staticTexts["Height entered by you"].exists)
+        screenshot(app,"interior-review")
+        save(app)
+        XCTAssertTrue(app.staticTexts["saved-interior"].waitForExistence(timeout:4))
+        XCTAssertTrue(app.staticTexts["saved-interior"].label.contains("4 corners"))
+        app.terminate();app.launchArguments=["interior","reopen"];app.launch()
+        XCTAssertTrue(app.staticTexts["Height entered by you"].waitForExistence(timeout:4))
+        XCTAssertTrue(app.textFields.matching(NSPredicate(format:"value == %@","88.9")).firstMatch.exists)
+    }
+    @MainActor func testPinnedOutlineCanAddObstacleWithoutLosingBase() {
+        let app=XCUIApplication();app.launchArguments=["interior","pinned"];app.launch()
+        XCTAssertTrue(app.buttons["interior-add-obstacle"].waitForExistence(timeout:4));app.buttons["interior-add-obstacle"].tap()
+        let picker=app.descendants(matching:.any).matching(identifier:"interior-frozen-photo").firstMatch
+        for (x,y) in [(0.4,0.4),(0.6,0.4),(0.6,0.6),(0.4,0.6)] {tapImage(app,picker,x,y)}
+        screenshot(app,"obstacle-preserves-base")
+        app.buttons["interior-next-height"].tap();enterHeight(app,"4")
+        save(app)
+        XCTAssertTrue(app.staticTexts["saved-interior"].waitForExistence(timeout:3))
+        XCTAssertTrue(app.staticTexts["saved-interior"].label.contains("2 outlines · 4 corners"))
+    }
+    @MainActor func testAutomaticOutlineAdvancesDirectlyToHeightAndBack() {
+        let app=XCUIApplication();app.launchArguments=["interior","automatic-outline"];app.launch()
+        let use=app.buttons["use-interior-outline"];XCTAssertTrue(use.waitForExistence(timeout:4));use.tap()
+        XCTAssertTrue(app.buttons["enter-interior-height"].waitForExistence(timeout:3))
+        app.buttons["Edit outline"].tap()
+        XCTAssertTrue(app.buttons["Move corner 1"].waitForExistence(timeout:3))
+        XCTAssertTrue(app.buttons["interior-add-obstacle"].exists)
+    }
+    @MainActor func testUnreliablePhotoPixelDoesNotAddCornerAndZoomStillWorks() {
+        let app=XCUIApplication();app.launchArguments=["interior","bad-depth"];app.launch()
+        let picker=app.descendants(matching:.any).matching(identifier:"interior-frozen-photo").firstMatch
+        XCTAssertTrue(picker.waitForExistence(timeout:5));tapImage(app,picker,0.5,0.5)
+        XCTAssertTrue(app.staticTexts["interior-error"].exists)
+        XCTAssertTrue(app.staticTexts["0 corners"].exists)
+        picker.pinch(withScale:2,velocity:1)
+        picker.coordinate(withNormalizedOffset:CGVector(dx:0.7,dy:0.7)).tap()
+        XCTAssertTrue(app.staticTexts["1 corners"].exists)
+        screenshot(app,"zoomed-exact-corner")
+        app.buttons["Undo"].tap();XCTAssertTrue(app.staticTexts["0 corners"].exists)
+    }
+    @MainActor private func enterHeight(_ app:XCUIApplication,_ value:String) {
+        let b=app.buttons["enter-interior-height"];XCTAssertTrue(b.waitForExistence(timeout:3));b.tap()
+        let field=app.textFields["interior-height-value"];XCTAssertTrue(field.waitForExistence(timeout:3));field.tap();field.typeText(value)
+        app.buttons["apply-interior-height"].tap()
+    }
+    @MainActor private func save(_ app:XCUIApplication) {
+        let button=app.buttons["save-interior-review"]
+        XCTAssertTrue(button.waitForExistence(timeout:3));XCTAssertTrue(button.isHittable);button.tap()
+    }
+    @MainActor private func tapImage(_ app:XCUIApplication,_ picker:XCUIElement,_ x:Double,_ y:Double) {
+        let frame=picker.frame, side=min(frame.width,frame.height)
+        let p=CGVector(dx:frame.midX+(x-0.5)*side,dy:frame.midY+(y-0.5)*side)
+        app.coordinate(withNormalizedOffset:.zero).withOffset(p).tap()
+    }
+    @MainActor private func screenshot(_ app:XCUIApplication,_ name:String) {
+        let a=XCTAttachment(screenshot:app.screenshot());a.name=name;a.lifetime = .keepAlways;add(a)
+    }
+}
