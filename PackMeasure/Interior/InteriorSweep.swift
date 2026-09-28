@@ -100,13 +100,18 @@ struct InteriorSweep: Sendable {
         }
         // A full map keeps the sweep useful: the stored view most redundant with another
         // gives way, so a late view that covers a remaining gap still counts.
-        if observations.count >= Self.maxViews { observations.remove(at: mostRedundantView()) }
+        if observations.count >= Self.maxViews {
+            guard let replaced = viewToReplace(with: value) else { rejectedViews += 1; return reconstruct() }
+            observations.remove(at: replaced)
+        }
         observations.append(value); acceptedViews += 1
         return reconstruct()
     }
 
-    /// The stored view whose pose is nearest another stored view; ties give up the older.
-    private func mostRedundantView() -> Int {
+    /// The stored view whose pose is nearest another stored view (ties give up the older),
+    /// or nil when the candidate itself repeats a stored pose more closely than any stored
+    /// pair: then the candidate adds nothing and is the one dropped.
+    private func viewToReplace(with candidate: InteriorSweepObservation) -> Int? {
         func separation(_ a: InteriorSweepObservation, _ b: InteriorSweepObservation) -> Float {
             let turn = acos(min(1, max(-1, simd_dot(simd_normalize(a.forward), simd_normalize(b.forward)))))
             return simd_distance(a.camera, b.camera) + turn*Self.turnWeight
@@ -116,7 +121,8 @@ struct InteriorSweep: Sendable {
             let s = separation(observations[i], observations[j])
             if s < nearest { nearest = s; redundant = i }
         } }
-        return redundant
+        let repeats = observations.map { separation($0, candidate) }.min() ?? .infinity
+        return repeats + 0.001 < nearest ? nil : redundant
     }
 
     func cell(_ p: SIMD2<Float>) -> Cell {
@@ -330,14 +336,16 @@ struct InteriorSweep: Sendable {
         let stt = bins.reduce(Float(0)) { $0 + ($1.t-mt)*($1.t-mt) }
         guard stt > 0 else { return line }
         let slope = bins.reduce(Float(0)) { $0 + ($1.t-mt)*($1.d-md) } / stt
-        // Only move outward, within reach, and without swinging the edge.
-        guard md > 0, md <= Self.edgeReach, abs(slope) <= 0.12 else { return line }
-        let raw = normal - slope*tangent, length = simd_length(raw)
-        let newNormal = raw/length, newOffset = (offset + md - slope*mt)/length
-        let newTangent = SIMD2(newNormal.y, -newNormal.x)
-        let ends = [tangent*low + normal*(offset+md+slope*(low-mt)), tangent*high + normal*(offset+md+slope*(high-mt))]
-        let ts = ends.map { simd_dot(newTangent, $0) }
-        return Line(normal: newNormal, offset: newOffset, low: ts.min()!, high: ts.max()!)
+        // The observed base must span most of the edge; a short patch is not extrapolated.
+        guard md > 0, abs(slope) <= 0.12, Float(bins.count)*Self.frontBin >= 0.5*(high-low) else { return line }
+        // Each end moves outward by at most edgeReach, never inward.
+        func shift(_ t: Float) -> Float { min(Self.edgeReach, max(0, md + slope*(t-mt))) }
+        let a = tangent*low + normal*(offset+shift(low)), b = tangent*high + normal*(offset+shift(high))
+        let direction = simd_normalize(b-a)
+        var newNormal = SIMD2(-direction.y, direction.x)
+        if simd_dot(newNormal, normal) < 0 { newNormal = -newNormal }
+        let newTangent = SIMD2(newNormal.y, -newNormal.x), ts = [a, b].map { simd_dot(newTangent, $0) }
+        return Line(normal: newNormal, offset: simd_dot(newNormal, a), low: ts.min()!, high: ts.max()!)
     }
 
     private func overheadHeight(outer: [InteriorPoint], holes: [[InteriorPoint]]) -> Float? {

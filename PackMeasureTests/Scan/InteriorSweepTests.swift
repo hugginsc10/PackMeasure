@@ -175,6 +175,32 @@ struct InteriorSweepTests {
         let input: [InteriorSweep.Run]=[(0,[0.2,0]),(1,[0.4,0.15]),(2,[0.3,0.3]),(3,[0.199,0.3]),(4,[0,0.15])]
         #expect(InteriorSweep.collapsingDuplicateSides(input,lines:lines,base:[0.1,0.1]).map(\.line)==[0,1,2,3,4])
     }
+    @Test func fullSweepDropsAViewThatRepeatsAStoredPose() {
+        // Returning to an earlier pose adds nothing new; it must not push out a unique view.
+        var map=InteriorSweep(seed:[0.1,0,0.1])
+        for i in 0..<40 { _=map.add(observation(i,loops:[rectangle],open:true)) }
+        let stored=map.observations.map(\.timestamp)
+        var repeated=observation(5,loops:[rectangle],open:true); repeated.timestamp=40*0.4
+        _=map.add(repeated)
+        #expect(map.observations.map(\.timestamp)==stored)
+    }
+    @Test func shortFloorPatchIsNotExtrapolatedAlongALongFront() {
+        // Base seen past a 40 cm front only along its first 8 cm, rising 1 cm per 10 cm:
+        // extrapolating that slope would push the far end past edgeReach.
+        var map=InteriorSweep(seed:[0.2,0,0.15])
+        for view in 0..<2 {
+            var floor=[SIMD2<Float>]()
+            for x in stride(from:Float(0.001),through:0.079,by:0.006) {
+                let beyond=0.01+0.1*(x-0.04)
+                for y in stride(from:-beyond,through:0.03,by:0.006) { floor.append([x,y]) }
+            }
+            for x in stride(from:Float(0.085),through:0.4,by:0.006) { for y in stride(from:Float(0.05),through:0.3,by:0.006) { floor.append([x,y]) } }
+            _=map.add(.init(timestamp:Double(view)*0.4,camera:[Float(view)*0.05,0.8,0.6],forward:[0,-1,0],floor:floor,walls:[],front:[],overhead:[]))
+        }
+        let front=InteriorSweep.Line(normal:[0,1],offset:0,low:0,high:0.4)
+        let snapped=map.snappedToObservedBase(front)
+        #expect(abs(abs(snapped.normal.y)-1)<0.0001 && abs(snapped.offset)<0.0001, "\(snapped)")
+    }
     @Test func openFrontReachesObservedBaseDespiteBlurredDrop() throws {
         // Depth blur reports the drop inside the base; the base itself is seen to the edge.
         var map=InteriorSweep(seed:[0.1,0,0.1]), result=InteriorSweepResult()
