@@ -184,6 +184,18 @@ struct InteriorSweepTests {
         _=map.add(repeated)
         #expect(map.observations.map(\.timestamp)==stored)
     }
+    @Test func fullSweepKeepsTheOnlyViewOfARegion() {
+        // Views can stand close together yet see different parts of the base (occlusion);
+        // the only view of a region must not be replaced because its pose is redundant.
+        var map=InteriorSweep(seed:[0.1,0,0.1])
+        for i in 0..<38 { _=map.add(gapped(i)) }
+        _=map.add(observation(38,loops:[rectangle],open:true))            // the only view of the patch
+        var near=gapped(39); near.camera.x=38*0.025+0.019; _=map.add(near) // nearly repeats that pose
+        var novel=observation(40,loops:[rectangle],open:true,overhead:0.35); novel.floor=gapped(40).floor
+        let result=map.add(novel)                                          // new evidence: the underside
+        #expect(map.observations.contains { $0.timestamp==38*0.4 })
+        #expect(result.ready, "\(result.hint)")
+    }
     @Test func shortFloorPatchIsNotExtrapolatedAlongALongFront() {
         // Base seen past a 40 cm front only along its first 8 cm, rising 1 cm per 10 cm:
         // extrapolating that slope would push the far end past edgeReach.

@@ -35,7 +35,11 @@ struct InteriorSweep: Sendable {
     let seed: SIMD3<Float>
     private(set) var observations: [InteriorSweepObservation] = []
     private(set) var rejectedViews = 0
+    /// Views accepted over the sweep, including repeats confirmed at the budget.
     private(set) var acceptedViews = 0
+    /// Evidence cells each stored view contributes, kept in step with `observations`.
+    private(set) var viewEvidence: [Set<Evidence>] = []
+    struct Evidence: Hashable, Sendable { var kind: UInt8; var cell: Cell }
     static let cell: Float = 0.008
     static let radius: Float = 1.2
     /// Stored views; beyond this the most redundant view is replaced, not the new one refused.
@@ -100,29 +104,47 @@ struct InteriorSweep: Sendable {
         }
         // A full map keeps the sweep useful: the stored view most redundant with another
         // gives way, so a late view that covers a remaining gap still counts.
+        let incoming = evidenceCells(of: value)
         if observations.count >= Self.maxViews {
-            guard let replaced = viewToReplace(with: value) else { rejectedViews += 1; return reconstruct() }
-            observations.remove(at: replaced)
+            // A view adding nothing is not stored, but still reported as a fresh
+            // reconstruction so the scanner can confirm the outline is stable.
+            guard let replaced = viewToReplace(adding: incoming) else { acceptedViews += 1; return reconstruct() }
+            observations.remove(at: replaced); viewEvidence.remove(at: replaced)
         }
-        observations.append(value); acceptedViews += 1
+        observations.append(value); viewEvidence.append(incoming); acceptedViews += 1
         return reconstruct()
     }
 
-    /// The stored view whose pose is nearest another stored view (ties give up the older),
-    /// or nil when the candidate itself repeats a stored pose more closely than any stored
-    /// pair: then the candidate adds nothing and is the one dropped.
-    private func viewToReplace(with candidate: InteriorSweepObservation) -> Int? {
+    /// Cells of base, sides, front and (at the height estimate's 5 cm spacing) underside.
+    private func evidenceCells(of view: InteriorSweepObservation) -> Set<Evidence> {
+        var cells = Set<Evidence>()
+        for p in view.floor { cells.insert(.init(kind:0, cell:cell(p))) }
+        for p in view.walls { cells.insert(.init(kind:1, cell:cell(p))) }
+        for p in view.front { cells.insert(.init(kind:2, cell:cell(p))) }
+        for p in view.overhead { cells.insert(.init(kind:3, cell:.init(x:Int(floor(p.x/0.05)), y:Int(floor(p.z/0.05))))) }
+        return cells
+    }
+
+    /// When full, the stored view whose evidence the others best cover gives way: fewest
+    /// cells no other view saw, then the pose nearest another view, then the older. Close
+    /// poses can still see different patches, so pose alone never decides. Nil when the
+    /// incoming view adds no cell the stored views lack.
+    private func viewToReplace(adding incoming: Set<Evidence>) -> Int? {
+        var seen: [Evidence: Int] = [:]
+        for cells in viewEvidence { for e in cells { seen[e, default: 0] += 1 } }
+        guard incoming.contains(where: { seen[$0] == nil }) else { return nil }
+        let unique = viewEvidence.map { cells in cells.reduce(0) { $0 + (seen[$1] == 1 ? 1 : 0) } }
+        guard let least = unique.min() else { return nil }
         func separation(_ a: InteriorSweepObservation, _ b: InteriorSweepObservation) -> Float {
             let turn = acos(min(1, max(-1, simd_dot(simd_normalize(a.forward), simd_normalize(b.forward)))))
             return simd_distance(a.camera, b.camera) + turn*Self.turnWeight
         }
-        var redundant = 0, nearest = Float.infinity
-        for i in observations.indices { for j in observations.indices where j != i {
-            let s = separation(observations[i], observations[j])
-            if s < nearest { nearest = s; redundant = i }
-        } }
-        let repeats = observations.map { separation($0, candidate) }.min() ?? .infinity
-        return repeats + 0.001 < nearest ? nil : redundant
+        var replaced: Int?, nearest = Float.infinity
+        for i in observations.indices where unique[i] == least {
+            let pose = observations.indices.filter { $0 != i }.map { separation(observations[i], observations[$0]) }.min() ?? .infinity
+            if pose < nearest { nearest = pose; replaced = i }
+        }
+        return replaced
     }
 
     func cell(_ p: SIMD2<Float>) -> Cell {
