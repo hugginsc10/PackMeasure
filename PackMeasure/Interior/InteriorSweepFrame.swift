@@ -168,17 +168,20 @@ actor InteriorSweepWorker {
         result=sweep!.add(frame.observation(seed:seed))
         return result
     }
-    func diagnostics(generation: UUID) -> String {
-        struct Replay: Encodable {
+    /// The sweep's replayable evidence, or why there is none to report.
+    enum Replay: Sendable { case available(String), unavailable(String) }
+
+    func replay(generation: UUID) -> Replay {
+        struct Export: Encodable {
             var format="PackMeasure interior sweep v1"
             var seed: SIMD3<Float>
             var observations: [InteriorSweepObservation]
             var rejectedViews: Int
         }
-        guard self.generation==generation, let sweep else { return "No sweep observations in this camera session." }
-        let value=Replay(seed:sweep.seed,observations:sweep.observations,rejectedViews:sweep.rejectedViews)
+        guard self.generation==generation, let sweep else { return .unavailable("No sweep observations in this camera session.") }
+        let value=Export(seed:sweep.seed,observations:sweep.observations,rejectedViews:sweep.rejectedViews)
         let encoder=JSONEncoder(); encoder.outputFormatting=[.sortedKeys]
-        guard let data=try? encoder.encode(value), let text=String(data:data,encoding:.utf8) else { return "Could not export scan diagnostics." }
-        return text
+        guard let data=try? encoder.encode(value), let text=String(data:data,encoding:.utf8) else { return .unavailable("Could not export scan diagnostics.") }
+        return .available(text)
     }
 }
