@@ -385,41 +385,65 @@ struct InteriorSweep: Sendable {
             }
             return values
         }
-        return Self.fitLines(samples(\.walls)) + Self.fitLines(samples(\.front)).map(snappedToObservedBase)
+        return Self.fitLines(samples(\.walls)) + Self.fitLines(samples(\.front)).map { snappedToObservedBase($0, base: component) }
     }
 
     /// An open front cannot cut through base the sweep observed. Depth blur at the drop
     /// places front samples inside the true edge, while the base's own samples reach it,
     /// so refit the edge through the outermost base that two views agree on along its
     /// length. The edge only ever moves outward, never past `edgeReach`.
-    func snappedToObservedBase(_ line: Line) -> Line {
+    ///
+    /// Front evidence can also stop short of a corner (the drop was seen from only part of
+    /// the sweep). The edge then extends along the base for as long as the base keeps ending
+    /// on it: its position still comes from the evidence, only its length from the base.
+    func snappedToObservedBase(_ line: Line, base: Set<Cell>? = nil) -> Line {
         let seed2 = SIMD2(seed.x, seed.z)
         // Orient the normal outward (away from the base) so positive distances lie beyond.
         let flip: Float = simd_dot(line.normal, seed2) - line.offset > 0 ? -1 : 1
         let normal = line.normal*flip, offset = line.offset*flip, tangent = SIMD2(normal.y, -normal.x)
         let low = min(line.low*flip, line.high*flip), high = max(line.low*flip, line.high*flip)
+        // Outermost selected base along the whole edge, per bin, as two views agree on it.
         var reach: [Int: [Int: Float]] = [:]   // bin -> view -> outermost base sample
         for (view, frame) in observations.enumerated() { for p in frame.floor {
+            if let base, !base.contains(cell(p)) { continue }
             let d = simd_dot(normal, p) - offset, t = simd_dot(tangent, p)
-            guard d > -Self.edgeReach, d <= Self.edgeReach, t >= low, t <= high else { continue }
+            guard d > -Self.edgeReach, d <= Self.edgeReach else { continue }
             let bin = Int(floor(t / Self.frontBin))
             reach[bin, default: [:]][view] = max(reach[bin]?[view] ?? -.infinity, d)
         } }
-        let bins: [(t: Float, d: Float)] = reach.compactMap { bin, views in
+        let extent: [Int: Float] = reach.compactMapValues { views in
             let extents = views.values.sorted(by: >)
-            guard extents.count >= 2 else { return nil }
-            return ((Float(bin)+0.5)*Self.frontBin, extents[1])
+            return extents.count >= 2 ? extents[1] : nil
         }
-        guard bins.count >= 3 else { return line }
-        let mt = bins.map(\.t).reduce(0,+)/Float(bins.count), md = bins.map(\.d).reduce(0,+)/Float(bins.count)
-        let stt = bins.reduce(Float(0)) { $0 + ($1.t-mt)*($1.t-mt) }
-        guard stt > 0 else { return line }
-        let slope = bins.reduce(Float(0)) { $0 + ($1.t-mt)*($1.d-md) } / stt
-        // The observed base must span most of the edge; a short patch is not extrapolated.
-        guard md > 0, abs(slope) <= 0.12, Float(bins.count)*Self.frontBin >= 0.5*(high-low) else { return line }
-        // Each end moves outward by at most edgeReach, never inward.
-        func shift(_ t: Float) -> Float { min(Self.edgeReach, max(0, md + slope*(t-mt))) }
-        let a = tangent*low + normal*(offset+shift(low)), b = tangent*high + normal*(offset+shift(high))
+        // Refit over the span the front evidence covers. Each end moves outward by at most
+        // edgeReach, never inward, and the observed base must span most of that stretch.
+        var ends: (low: Float, high: Float) = (0, 0)
+        let bins: [(t: Float, d: Float)] = extent.compactMap { bin, d in
+            let t = (Float(bin)+0.5)*Self.frontBin
+            return (low...high).contains(t) ? (t, d) : nil
+        }
+        if bins.count >= 3 {
+            let mt = bins.map(\.t).reduce(0,+)/Float(bins.count), md = bins.map(\.d).reduce(0,+)/Float(bins.count)
+            let stt = bins.reduce(Float(0)) { $0 + ($1.t-mt)*($1.t-mt) }
+            let slope = stt > 0 ? bins.reduce(Float(0)) { $0 + ($1.t-mt)*($1.d-md) } / stt : 0
+            if stt > 0, md > 0, abs(slope) <= 0.12, Float(bins.count)*Self.frontBin >= 0.5*(high-low) {
+                func shift(_ t: Float) -> Float { min(Self.edgeReach, max(0, md + slope*(t-mt))) }
+                ends = (shift(low), shift(high))
+            }
+        }
+        func edge(_ t: Float) -> Float { ends.low + (ends.high-ends.low)*(t-low)/(high-low) }
+        // Extend while the base keeps ending on the edge, one bin at a time from each end.
+        func continues(_ bin: Int) -> Bool {
+            guard let d = extent[bin] else { return false }
+            return abs(d - edge((Float(bin)+0.5)*Self.frontBin)) <= Self.surfaceBand
+        }
+        var from = low, to = high
+        var bin = Int(floor(low / Self.frontBin)) - 1
+        while continues(bin) { from = Float(bin)*Self.frontBin; bin -= 1 }
+        bin = Int(floor(high / Self.frontBin)) + 1
+        while continues(bin) { to = Float(bin+1)*Self.frontBin; bin += 1 }
+        guard ends.low > 0 || ends.high > 0 || from < low || to > high else { return line }
+        let a = tangent*from + normal*(offset+edge(from)), b = tangent*to + normal*(offset+edge(to))
         let direction = simd_normalize(b-a)
         var newNormal = SIMD2(-direction.y, direction.x)
         if simd_dot(newNormal, normal) < 0 { newNormal = -newNormal }
@@ -466,10 +490,11 @@ struct InteriorSweep: Sendable {
                 if indices.count > best.count { best=indices }
             }
             guard best.count >= 12 else { break }
-            let points=best.map { remaining[$0] }
+            let inliers=best.map { remaining[$0] }
             let rejected=Set(best)
             remaining=remaining.enumerated().filter { !rejected.contains($0.offset) }.map(\.element)
-            guard Set(points.map(\.view)).count >= 2 else { continue }
+            guard Set(inliers.map(\.view)).count >= 2 else { continue }
+            let points=inliers
             let mean=points.reduce(SIMD2<Float>.zero) { $0+$1.p } / Float(points.count)
             var xx: Float=0, xy: Float=0, yy: Float=0
             for p in points { let d=p.p-mean; xx += d.x*d.x; xy += d.x*d.y; yy += d.y*d.y }

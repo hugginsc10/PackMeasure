@@ -127,6 +127,7 @@
 		B39AADAB17187469145C4D4A /* GeometryModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E7680F43D417158C818E786 /* GeometryModels.swift */; };
 		B45CF68EEEBE10AC2EB91717 /* RoomShelfMeasurement.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48B5352CB88C2AA3F2E85601 /* RoomShelfMeasurement.swift */; };
 		B4AD52C415CCBB88280E366C /* GravityAlignedBoundingBoxEstimator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 217FC74C59206B041DFB1042 /* GravityAlignedBoundingBoxEstimator.swift */; };
+		B5964FD11765D9C77CBF8B9D /* cabinet-sweep-b59-partial-front.json in Resources */ = {isa = PBXBuildFile; fileRef = 86942097EDEEACAB2F6F00A1 /* cabinet-sweep-b59-partial-front.json */; };
 		B83512F3FB23E4B32F5365ED /* ShelfScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 641DF3758E1802CE7E3AB6DA /* ShelfScanner.swift */; };
 		BA078E537ED80FC369C8E88F /* InteriorFixture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32A0353E4B458F55757AD5E3 /* InteriorFixture.swift */; };
 		BA16DFD0A9B9F5D872D1B757 /* InteriorPhoto.swift in Sources */ = {isa = PBXBuildFile; fileRef = EDC0B144EF139657B3B753A9 /* InteriorPhoto.swift */; };
@@ -257,6 +258,7 @@
 		81550DE219456FA9E1630914 /* WireUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WireUITests.swift; sourceTree = "<group>"; };
 		8268F33CC0B2C9E777F4A864 /* InteriorUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InteriorUITests.swift; sourceTree = "<group>"; };
 		84DFB60E2C6A4BA85E8C1AA0 /* ScannerSheetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScannerSheetView.swift; sourceTree = "<group>"; };
+		86942097EDEEACAB2F6F00A1 /* cabinet-sweep-b59-partial-front.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "cabinet-sweep-b59-partial-front.json"; sourceTree = "<group>"; };
 		87791FBEF3FF3863B53EF421 /* ScannerCapturePolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScannerCapturePolicyTests.swift; sourceTree = "<group>"; };
 		88FAFBDB471656752F759B24 /* SweepFixture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SweepFixture.swift; sourceTree = "<group>"; };
 		8D2301AD99095D04C796040D /* RoomCaptureCoaching.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoomCaptureCoaching.swift; sourceTree = "<group>"; };
@@ -559,6 +561,7 @@
 		DF38BED65C785B8406CF7C13 /* Fixtures */ = {
 			isa = PBXGroup;
 			children = (
+				86942097EDEEACAB2F6F00A1 /* cabinet-sweep-b59-partial-front.json */,
 				262E7501B0421742983927DE /* cabinet-sweep-b59.json */,
 			);
 			path = Fixtures;
@@ -720,6 +723,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B5964FD11765D9C77CBF8B9D /* cabinet-sweep-b59-partial-front.json in Resources */,
 				12FCCC4B2093A969592CD6E4 /* cabinet-sweep-b59.json in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

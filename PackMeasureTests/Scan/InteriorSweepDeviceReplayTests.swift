@@ -19,6 +19,32 @@ struct InteriorSweepDeviceReplayTests {
         return (recorded.observations, result)
     }
 
+    /// Dimensions of a resolved four-corner outline: widths run across the view (the back
+    /// wall faces the camera), depths along it.
+    func spans(_ result: InteriorSweepResult, _ observations: [InteriorSweepObservation]) -> (widths: [Float], depths: [Float])? {
+        let outline = result.outline.map { SIMD2($0.x, $0.z) }
+        guard outline.count == 4 else { return nil }
+        let look = simd_normalize(observations.reduce(SIMD2<Float>.zero) { $0 + SIMD2($1.forward.x, $1.forward.z) })
+        var widths: [Float] = [], depths: [Float] = []
+        for i in outline.indices {
+            let edge = outline[(i+1)%4] - outline[i], length = simd_length(edge)/Self.inch
+            if abs(simd_dot(simd_normalize(edge), look)) < 0.5 { widths.append(length) } else { depths.append(length) }
+        }
+        return (widths, depths)
+    }
+
+    /// Build 59.3, same compartment: front-edge samples came only from the first three views
+    /// and cover about two thirds of the front, so the front stopped ~4 cm short of a corner
+    /// and the sweep looped on "Show more of the corner". The observed shelf top ends along
+    /// the same line to that corner.
+    @Test func frontEvidenceCoveringPartOfTheEdgeStillReachesItsCorners() throws {
+        let (observations, result) = try replay("cabinet-sweep-b59-partial-front")
+        let dims = try #require(spans(result, observations), "\(result.hint)")
+        #expect(dims.widths.count == 2 && dims.depths.count == 2)
+        for width in dims.widths { #expect(abs(width - 10.5) < 0.3, "width \(width) in") }
+        for depth in dims.depths { #expect(depth > 10.6 && depth < 11.3, "depth \(depth) in") }
+    }
+
     /// Build 59 cabinet compartment: a loose shelf with a wall beside the cabinet and the
     /// door open. Tape: 10.5 in side to side, 11.2 in from the back wall to the shelf's
     /// front edge. Build 59 never produced an outline from this sweep.

@@ -281,6 +281,32 @@ struct InteriorSweepTests {
         let snapped=map.snappedToObservedBase(front)
         #expect(abs(abs(snapped.normal.y)-1)<0.0001 && abs(snapped.offset)<0.0001, "\(snapped)")
     }
+    @Test func frontEvidenceOnPartOfTheEdgeExtendsAlongTheBase() throws {
+        // Front samples reach only part of an open front; the base keeps ending on the same
+        // line to the corner, so the edge is long enough to meet the side there.
+        var map=InteriorSweep(seed:[0.1,0,0.1]), result=InteriorSweepResult()
+        for i in 0..<4 {
+            var o=observation(i,loops:[rectangle],open:true)
+            o.front=o.front.filter { $0.x<0.25 }
+            result=map.add(o)
+        }
+        #expect(result.ready, "\(result.hint)")
+        let loop=try #require(result.loops.first)
+        #expect(abs(loop.map(\.x).max()!-loop.map(\.x).min()!-0.4)<0.003)
+        #expect(abs(loop.map(\.z).max()!-loop.map(\.z).min()!-0.3)<0.006)
+    }
+    @Test func frontDoesNotExtendWhereTheBaseRunsPastIt() {
+        // Where the base runs 4 cm beyond the edge's line, the base does not end on it: the
+        // edge must stop there rather than straighten through base with no observed edge.
+        var map=InteriorSweep(seed:[0.1,0,0.1]), result=InteriorSweepResult()
+        for i in 0..<4 {
+            var o=observation(i,loops:[rectangle],open:true)
+            o.front=o.front.filter { $0.x<0.25 }
+            for x in stride(from:Float(0.285),through:0.397,by:0.006) { for y in stride(from:Float(-0.039),through:0,by:0.006) { o.floor.append([x,y]) } }
+            result=map.add(o)
+        }
+        #expect(!result.ready, "\(result.hint)")
+    }
     @Test func openFrontReachesObservedBaseDespiteBlurredDrop() throws {
         // Depth blur reports the drop inside the base; the base itself is seen to the edge.
         var map=InteriorSweep(seed:[0.1,0,0.1]), result=InteriorSweepResult()
