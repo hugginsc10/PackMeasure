@@ -29,9 +29,37 @@
             buildForAnalyzing = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
+               BlueprintIdentifier = "188F4E1BBBAB3C5986E798EF"
+               BuildableName = "PackMeasureQA.app"
+               BlueprintName = "PackMeasureQA"
+               ReferencedContainer = "container:PackMeasure.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "NO"
+            buildForProfiling = "NO"
+            buildForArchiving = "NO"
+            buildForAnalyzing = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
                BlueprintIdentifier = "E19486109CAC1284B0ED3103"
                BuildableName = "PackMeasureTests.xctest"
                BlueprintName = "PackMeasureTests"
+               ReferencedContainer = "container:PackMeasure.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "NO"
+            buildForProfiling = "NO"
+            buildForArchiving = "NO"
+            buildForAnalyzing = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "5CEB28A93A20A14D9D2D521C"
+               BuildableName = "PackMeasureUITests.xctest"
+               BlueprintName = "PackMeasureUITests"
                ReferencedContainer = "container:PackMeasure.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
@@ -62,6 +90,17 @@
                BlueprintIdentifier = "E19486109CAC1284B0ED3103"
                BuildableName = "PackMeasureTests.xctest"
                BlueprintName = "PackMeasureTests"
+               ReferencedContainer = "container:PackMeasure.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "5CEB28A93A20A14D9D2D521C"
+               BuildableName = "PackMeasureUITests.xctest"
+               BlueprintName = "PackMeasureUITests"
                ReferencedContainer = "container:PackMeasure.xcodeproj">
             </BuildableReference>
          </TestableReference>

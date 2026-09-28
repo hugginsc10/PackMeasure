@@ -23,7 +23,7 @@ targets:
       - path: PackMeasure
     info:
       path: PackMeasure/Info.plist
-      properties:
+      properties: &appInfo
         CFBundleDisplayName: PackMeasure
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
@@ -62,12 +62,54 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         TARGETED_DEVICE_FAMILY: "1"
 
+  # Simulator-only QA app: the real app sources with synthetic fixtures in
+  # place of PackMeasureApp.swift. Built for the test action only, never
+  # archived, so fixtures cannot reach the shipping app.
+  PackMeasureQA:
+    type: application
+    platform: iOS
+    sources:
+      - path: PackMeasure
+        excludes:
+          - PackMeasureApp.swift
+          - Info.plist
+      - path: PackMeasureQA
+    info:
+      path: PackMeasureQA/Info.plist
+      properties:
+        <<: *appInfo
+        CFBundleDisplayName: PackMeasure QA
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.chasstudio.PackMeasureQA
+        PRODUCT_NAME: PackMeasureQA
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        SUPPORTS_MACCATALYST: NO
+        TARGETED_DEVICE_FAMILY: "1"
+
+  PackMeasureUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: PackMeasureUITests
+    dependencies:
+      - target: PackMeasureQA
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.chasstudio.PackMeasureUITests
+        GENERATE_INFOPLIST_FILE: YES
+        TARGETED_DEVICE_FAMILY: "1"
+        TEST_TARGET_NAME: PackMeasureQA
+
 schemes:
   PackMeasure:
     build:
       targets:
         PackMeasure: all
         PackMeasureTests: [test]
+        PackMeasureQA: [test]
+        PackMeasureUITests: [test]
     run:
       config: Debug
     test:
@@ -75,6 +117,7 @@ schemes:
       gatherCoverageData: true
       targets:
         - PackMeasureTests
+        - PackMeasureUITests
     profile:
       config: Release
     analyze:

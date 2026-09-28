@@ -89,9 +89,19 @@ xcodebuild test \
   -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
 ```
 
-Simulator tests validate segmentation, geometry, persistence, and packing
-math, but the simulator cannot validate LiDAR accuracy. Use
-`Docs/DeviceCalibration.md` for the real-device check.
+The scheme runs the `PackMeasureTests` unit suite and the
+`PackMeasureUITests` UI suite. Add `-only-testing:PackMeasureTests` for the
+fast unit-only loop. The UI tests drive `PackMeasureQA`, a simulator-only app
+that compiles the real views and logic but starts from synthetic fixtures
+(`PackMeasureQA/`) instead of the camera. Launch arguments pick the fixture:
+`interior`, `sweep`, `picker`, `result`, `auto-failure` or `room-sheet`.
+`PackMeasureQA` is built only for testing and is never archived, so fixture
+code cannot reach the shipping app. Pass `-resultBundlePath` to keep the UI
+tests' screenshots.
+
+Simulator tests validate segmentation, geometry, persistence, packing math,
+and UI state on synthetic data, but the simulator cannot validate LiDAR
+accuracy. Use `Docs/DeviceCalibration.md` for the real-device check.
 
 ## Contributing
 
