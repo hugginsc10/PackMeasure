@@ -79,7 +79,7 @@ struct RoomMeasurementView: View {
     }
 }
 
-private struct RoomScanSheet: View {
+struct RoomScanSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     @State private var cameraReady = false
@@ -147,7 +147,9 @@ private struct RoomScanSheet: View {
                 }
             }
         }
-        .task {
+        // Keyed to the scan so Start new scan re-runs the gate; otherwise a
+        // denied first check leaves the sheet on "Checking camera access…".
+        .task(id: scanID) {
             guard RoomCaptureSession.isSupported else {
                 failure = "This device does not support LiDAR room capture."
                 return
