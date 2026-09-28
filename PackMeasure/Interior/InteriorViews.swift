@@ -80,6 +80,10 @@ struct InteriorReviewView: View {
     @State private var document = InteriorSVGDocument(text: "")
     @State private var message: String?
     @AppStorage(InteriorUnit.storageKey) private var unit: InteriorUnit = .inches
+    /// The numeric field being edited. Its uncommitted text would be read in the new unit,
+    /// so units cannot change until editing ends.
+    @FocusState private var editing: Field?
+    private enum Field: Hashable { case height, point(loop: Int, index: Int, axis: Int) }
     private var output: Result<[[InteriorPoint]], Error> { Result { try record.insertContours() } }
     /// Edits a stored millimeter value in the chosen unit.
     private func length(_ millimeters: Binding<Double>) -> Binding<Double> {
@@ -91,7 +95,8 @@ struct InteriorReviewView: View {
             Section("Inside footprint · \(unit.title.lowercased())") {
                 Picker("Units", selection: $unit) {
                     ForEach(InteriorUnit.allCases, id: \.self) { Text($0.title).tag($0) }
-                }.pickerStyle(.segmented).accessibilityIdentifier("interior-units")
+                }.pickerStyle(.segmented).accessibilityIdentifier("interior-units").disabled(editing != nil)
+                if editing != nil { Text("Finish editing to change units.").font(.caption).foregroundStyle(.secondary) }
                 InteriorOutlineView(contours: record.contours, inset: try? output.get())
                     .frame(height: 220)
                 Text("Gray: captured boundary · Teal: insert footprint · Blank cutouts: obstacles")
@@ -111,6 +116,7 @@ struct InteriorReviewView: View {
                     Text("Usable height (\(unit.symbol))")
                     TextField("Height", value: length(Binding(get: { record.heightMM }, set: { record.heightMM = $0; record.heightSource = .entered })),
                               format: .number.precision(.fractionLength(unit.fractionDigits)))
+                        .focused($editing, equals: .height)
                         .keyboardType(.decimalPad).multilineTextAlignment(.trailing)
                 }
                 Text(record.heightSource == .entered ? "Height entered by you" : record.heightSource == .lidar ? "Captured height · verify available space" : "Verify available height")
@@ -134,8 +140,10 @@ struct InteriorReviewView: View {
                             HStack {
                                 Text("\(pointIndex + 1)")
                                 TextField("X (\(unit.symbol))", value: length($record.contours[loopIndex][pointIndex].x), format: .number)
+                                    .focused($editing, equals: .point(loop: loopIndex, index: pointIndex, axis: 0))
                                     .accessibilityLabel("Point \(pointIndex + 1) X in \(unit.title.lowercased())")
                                 TextField("Y (\(unit.symbol))", value: length($record.contours[loopIndex][pointIndex].y), format: .number)
+                                    .focused($editing, equals: .point(loop: loopIndex, index: pointIndex, axis: 1))
                                     .accessibilityLabel("Point \(pointIndex + 1) Y in \(unit.title.lowercased())")
                             }
                             .keyboardType(.numbersAndPunctuation)
@@ -172,6 +180,11 @@ struct InteriorReviewView: View {
                 Button("Save") {
                     do { try onSave(record); message = "Interior saved." } catch { message = error.localizedDescription }
                 }.disabled((try? output.get()) == nil).accessibilityIdentifier("save-interior-review")
+            }
+            // Decimal pads have no return key; this commits the value being edited.
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("Done") { editing = nil }
             }
         }
         .fileExporter(isPresented: $exporting, document: document, contentType: .svg, defaultFilename: "interior-insert") { result in

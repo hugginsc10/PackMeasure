@@ -22,7 +22,15 @@ final class InteriorUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Height entered by you"].waitForExistence(timeout:4))
         // The chosen unit is remembered across launches; set it explicitly, check both, restore.
         app.buttons["Inches"].tap()
-        XCTAssertTrue(app.textFields.matching(NSPredicate(format:"value == %@","3.50")).firstMatch.waitForExistence(timeout:3))
+        let height=app.textFields.matching(NSPredicate(format:"value == %@","3.50")).firstMatch
+        XCTAssertTrue(height.waitForExistence(timeout:3))
+        // Uncommitted text would be read in the new unit, so units lock while a value is edited.
+        height.tap()
+        XCTAssertFalse(app.buttons["Millimeters"].isEnabled)
+        app.buttons["Done"].tap()
+        app.swipeDown()   // editing scrolled the form; lazy rows above leave the hierarchy
+        let millimeters=app.buttons["Millimeters"]
+        XCTAssertTrue(millimeters.waitForExistence(timeout:3) && millimeters.isEnabled)
         app.buttons["Millimeters"].tap()
         XCTAssertTrue(app.textFields.matching(NSPredicate(format:"value == %@","88.9")).firstMatch.waitForExistence(timeout:3))
         app.buttons["Inches"].tap()
