@@ -18,7 +18,13 @@ struct InteriorSweepResult: Sendable {
     var coverage: [SIMD3<Float>] = []
     var hint = "Sweep slowly across the base, sides and front edge."
     var views = 0
+    /// Views accepted over the whole sweep. Unlike `views` it keeps rising once the
+    /// budget is full, so consumers can tell a new reconstruction from a repeated one.
+    var revision = 0
     var boundaryCount = 0
+    /// The outer outline once its edges resolve, even while an inner gap still needs
+    /// coverage. Diagnostic only: `loops` stays empty until every ring resolves.
+    var outline: [SIMD3<Float>] = []
     var ready: Bool { !loops.isEmpty && views >= 3 }
 }
 
@@ -29,8 +35,26 @@ struct InteriorSweep: Sendable {
     let seed: SIMD3<Float>
     private(set) var observations: [InteriorSweepObservation] = []
     private(set) var rejectedViews = 0
+    /// Views accepted over the sweep, including repeats confirmed at the budget.
+    private(set) var acceptedViews = 0
+    /// Evidence cells each stored view contributes, kept in step with `observations`.
+    private(set) var viewEvidence: [Set<Evidence>] = []
+    /// One observed cell of one kind; underside cells also carry their height level.
+    struct Evidence: Hashable, Sendable { var kind: UInt8; var cell: Cell; var level = 0 }
     static let cell: Float = 0.008
     static let radius: Float = 1.2
+    /// Stored views; beyond this the most redundant view is replaced, not the new one refused.
+    static let maxViews = 40
+    /// Metres of camera travel equivalent to one radian of turn (3° ≈ 1.8 cm, as for new views).
+    static let turnWeight: Float = 0.35
+    /// How far outside the observed base a wall or front sample may lie and still
+    /// bound it: the floor stops short of a wall by the depth sampling footprint.
+    static let edgeReach: Float = 0.04
+    /// Scatter of one flat surface across LiDAR views; parallel surfaces closer than
+    /// this are below the sweep's resolution and fit as a single edge.
+    static let surfaceBand: Float = 0.015
+    /// Spacing along an open front at which the observed base's reach is sampled.
+    static let frontBin: Float = 0.02
 
     struct Cell: Hashable, Sendable {
         var x: Int; var y: Int
@@ -62,11 +86,6 @@ struct InteriorSweep: Sendable {
             let turned = simd_dot(simd_normalize(observation.forward), simd_normalize(last.forward)) < 0.9986
             guard moved || turned else { rejectedViews += 1; return reconstruct() }
         }
-        guard observations.count < 40 else {
-            var result = reconstruct()
-            if !result.ready { result.hint = "Some edges are still hidden. Choose the base again from a clearer angle." }
-            return result
-        }
         func local(_ p: SIMD2<Float>) -> Bool { simd_distance(p, SIMD2(seed.x, seed.z)) <= Self.radius }
         func compact(_ points: [SIMD2<Float>], limit: Int) -> [SIMD2<Float>] {
             var seen=Set<Cell>(), result=[SIMD2<Float>]()
@@ -84,8 +103,76 @@ struct InteriorSweep: Sendable {
         guard !value.floor.isEmpty || !value.walls.isEmpty || !value.front.isEmpty || !value.overhead.isEmpty else {
             rejectedViews += 1; return reconstruct()
         }
-        observations.append(value)
+        // A full map keeps the sweep useful: the stored view most redundant with another
+        // gives way, so a late view that covers a remaining gap still counts.
+        let incoming = evidenceCells(of: value)
+        if observations.count >= Self.maxViews {
+            // A view adding nothing is not stored, but still reported as a fresh
+            // reconstruction so the scanner can confirm the outline is stable.
+            guard let replaced = viewToReplace(adding: incoming) else { acceptedViews += 1; return reconstruct() }
+            observations.remove(at: replaced); viewEvidence.remove(at: replaced)
+        }
+        observations.append(value); viewEvidence.append(incoming); acceptedViews += 1
         return reconstruct()
+    }
+
+    /// Cells of base, sides, front and (at the height estimate's 5 cm spacing) underside.
+    /// Underside cells are split into 1 cm levels, finer than the 12 mm agreement the height
+    /// needs, so a lower obstruction seen late is new evidence, not a repeat of a higher one.
+    private func evidenceCells(of view: InteriorSweepObservation) -> Set<Evidence> {
+        var cells = Set<Evidence>()
+        for p in view.floor { cells.insert(.init(kind:0, cell:cell(p))) }
+        for p in view.walls { cells.insert(.init(kind:1, cell:cell(p))) }
+        for p in view.front { cells.insert(.init(kind:2, cell:cell(p))) }
+        for p in view.overhead {
+            cells.insert(.init(kind:3, cell:.init(x:Int(floor(p.x/0.05)), y:Int(floor(p.z/0.05))), level:Int(floor((p.y-seed.y)/0.01))))
+        }
+        return cells
+    }
+
+    /// Views a cell needs before reconstruction uses it: the base is kept from any one
+    /// view, while edges and the underside need two that agree (`fitLines`, `overheadHeight`).
+    static func support(_ kind: UInt8) -> Int { kind == 0 ? 1 : 2 }
+
+    /// When full, the stored view whose loss costs least once the incoming view is kept gives
+    /// way: fewest cells that would fall below the support they need, then the pose nearest
+    /// another view, then the older.
+    /// Close poses can still see different patches, so pose alone never decides. Nil when
+    /// the incoming view brings no cell closer to its needed support.
+    private func viewToReplace(adding incoming: Set<Evidence>) -> Int? {
+        // Only evidence reconstruction can use counts, judged exactly as reconstruction
+        // judges it: the connected base, edges near it, the underside above it. Seeing more
+        // of a background surface never displaces a stored view.
+        let base = Set(connectedBase(observedBase())), near = base.isEmpty ? [] : neighborhood(of: base)
+        let above = Set(base.map { c in let p = position(c); return Cell(x:Int(floor(p.x/0.05)), y:Int(floor(p.y/0.05))) })
+        func usable(_ e: Evidence) -> Bool {
+            guard !base.isEmpty else { return true }
+            switch e.kind {
+            case 0: return base.contains(e.cell)
+            case 3: return above.contains(e.cell)
+            default: return near.contains(e.cell)
+            }
+        }
+        var seen: [Evidence: Int] = [:]
+        for cells in viewEvidence { for e in cells where usable(e) { seen[e, default: 0] += 1 } }
+        guard incoming.contains(where: { usable($0) && seen[$0, default: 0] < Self.support($0.kind) }) else { return nil }
+        // Price each stored view as if the incoming view were already kept: evidence it
+        // re-observes costs nothing to lose.
+        for e in incoming where usable(e) { seen[e, default: 0] += 1 }
+        let cost = viewEvidence.map { cells in
+            cells.reduce(0) { $0 + (usable($1) && seen[$1, default: 0] <= Self.support($1.kind) ? 1 : 0) }
+        }
+        guard let least = cost.min() else { return nil }
+        func separation(_ a: InteriorSweepObservation, _ b: InteriorSweepObservation) -> Float {
+            let turn = acos(min(1, max(-1, simd_dot(simd_normalize(a.forward), simd_normalize(b.forward)))))
+            return simd_distance(a.camera, b.camera) + turn*Self.turnWeight
+        }
+        var replaced: Int?, nearest = Float.infinity
+        for i in observations.indices where cost[i] == least {
+            let pose = observations.indices.filter { $0 != i }.map { separation(observations[i], observations[$0]) }.min() ?? .infinity
+            if pose < nearest { nearest = pose; replaced = i }
+        }
+        return replaced
     }
 
     func cell(_ p: SIMD2<Float>) -> Cell {
@@ -96,18 +183,22 @@ struct InteriorSweep: Sendable {
          seed.z + (Float(c.y) + (center ? 0.5 : 0))*Self.cell]
     }
 
-    func reconstruct() -> InteriorSweepResult {
-        var result = InteriorSweepResult(views: observations.count)
-        // A one-cell footprint accounts for the depth pixel's finite sampling area.
-        // Its displacement is removed when the boundary is intersected below.
+    /// Observed base cells, each widened by a one-cell footprint for the depth pixel's finite
+    /// sampling area. Its displacement is removed when the boundary is intersected.
+    private func observedBase() -> Set<Cell> {
         var floorCells = Set<Cell>()
         for frame in observations { for p in frame.floor {
             let c = cell(p)
             for dx in -1...1 { for dy in -1...1 { floorCells.insert(.init(x:c.x+dx,y:c.y+dy)) } }
         } }
-        guard floorCells.count > 40 else { result.hint = "Show more of this compartment’s base."; return result }
+        return floorCells
+    }
+
+    /// The observed base connected to the seed, in breadth-first order; empty when the
+    /// seed itself is not covered.
+    private func connectedBase(_ floorCells: Set<Cell>) -> [Cell] {
         let origin = cell([seed.x,seed.z])
-        guard floorCells.contains(origin) else { result.hint = "Keep the selected base in view."; return result }
+        guard floorCells.contains(origin) else { return [] }
         var component: Set<Cell> = [origin], queue = [origin], cursor = 0
         while cursor < queue.count {
             let c = queue[cursor]; cursor += 1
@@ -115,19 +206,21 @@ struct InteriorSweep: Sendable {
                 if component.insert(n).inserted { queue.append(n) }
             }
         }
+        return queue
+    }
+
+    func reconstruct() -> InteriorSweepResult {
+        var result = InteriorSweepResult(views: observations.count, revision: acceptedViews)
+        let floorCells = observedBase()
+        guard floorCells.count > 40 else { result.hint = "Show more of this compartment’s base."; return result }
+        let queue = connectedBase(floorCells)
+        guard !queue.isEmpty else { result.hint = "Keep the selected base in view."; return result }
+        let component = Set(queue)
         result.coverage = queue.enumerated().compactMap { i,c in
             guard i % max(1, queue.count / 220) == 0 else { return nil }
             let p = position(c); return SIMD3(p.x,seed.y,p.y)
         }
-        func samples(_ key: KeyPath<InteriorSweepObservation, [SIMD2<Float>]>) -> [Sample] {
-            var values: [Sample] = []
-            for (view, frame) in observations.enumerated() {
-                var cells = Set<Cell>()
-                for p in frame[keyPath: key] where cells.insert(cell(p)).inserted { values.append(.init(p:p,view:view)) }
-            }
-            return values
-        }
-        let lines = Self.fitLines(samples(\.walls)) + Self.fitLines(samples(\.front))
+        let lines = boundaryLines(near: component)
         result.boundaryCount = lines.count
         guard lines.count >= 3 else {
             result.hint = lines.isEmpty ? "Sweep the base and the sides where they meet." : "Move a little sideways to see the remaining edges."
@@ -165,7 +258,7 @@ struct InteriorSweep: Sendable {
         for (ringIndex, ring) in rings.enumerated() {
             // Tiny unobserved pinholes are not obstacles; any observed boundary is retained.
             if ringIndex > 0 && abs(area(ring)) < 0.0004 && !ring.contains(where: { p in lines.contains { $0.supports(p) } }) { continue }
-            var runs: [(line:Int, at:SIMD2<Float>)] = []
+            var runs: [Run] = []
             for i in ring.indices {
                 let p = (ring[i]+ring[(i+1)%ring.count])/2
                 let direction=simd_normalize(ring[(i+3)%ring.count]-ring[(i+ring.count-2)%ring.count])
@@ -176,9 +269,13 @@ struct InteriorSweep: Sendable {
                     result.hint = ringIndex == 0 ? "Show the front edge and any unhighlighted sides." : "Show the gap or obstruction inside the base."
                     return result
                 }
-                if runs.last?.line != match { runs.append((match,p)) }
+                // Rings are traced with the observed base on the left of travel, for the outer
+                // outline and obstacle cutouts alike.
+                let edge = ring[(i+1)%ring.count]-ring[i]
+                if runs.last?.line != match { runs.append((match, p, simd_normalize(SIMD2(-edge.y, edge.x)))) }
             }
             if runs.first?.line == runs.last?.line { runs.removeFirst() }
+            runs = Self.collapsingDuplicateSides(runs, lines: lines)
             guard (3...200).contains(runs.count) else { result.hint = "Keep sweeping until the edges separate clearly."; return result }
             var polygon: [SIMD3<Float>] = []
             for i in runs.indices {
@@ -197,6 +294,7 @@ struct InteriorSweep: Sendable {
             }
             if polygon.count>2, simd_distance(polygon[0],polygon.last!)<0.001 { polygon.removeLast() }
             outlines.append(polygon)
+            if ringIndex == 0 { result.outline = polygon }
         }
         guard !outlines.isEmpty, (try? InteriorGeometry.project(outlines, enteredHeightMM:100)) != nil else {
             result.hint = "Move slowly to separate the inside edges."; return result
@@ -218,6 +316,115 @@ struct InteriorSweep: Sendable {
         result.height = overheadHeight(outer:outer, holes:inner)
         result.hint = result.ready ? (result.height == nil ? "Outline captured. Tilt up to see the underside above this compartment, or continue to height." : "Dimensions captured. Review the outline and clear height.") : "Move a little sideways to confirm these edges."
         return result
+    }
+
+    /// A stretch of ring matched to one line: where it starts, and the unit direction from
+    /// there into the observed base.
+    typealias Run = (line: Int, at: SIMD2<Float>, inward: SIMD2<Float>)
+
+    /// Nearly parallel neighbours that do not meet where the outline turns are one side seen
+    /// as two surfaces (a trim, the wall beyond a cabinet). The one lying further into the
+    /// observed base bounds the usable space, so it replaces both: that shrinks an outline and
+    /// grows an obstacle cutout. Neighbours that do meet there are a real shallow corner and
+    /// are left for the corner checks, never straightened away.
+    static func collapsingDuplicateSides(_ input: [Run], lines: [Line]) -> [Run] {
+        var runs = input
+        func duplicate(_ a: Int, _ b: Int, turn: SIMD2<Float>) -> Bool {
+            let x=lines[a], y=lines[b], determinant=x.normal.x*y.normal.y-x.normal.y*y.normal.x
+            guard abs(determinant) <= 0.12 else { return false }
+            guard abs(determinant) > 0.000001 else { return true }
+            let meet=SIMD2((x.offset*y.normal.y-x.normal.y*y.offset)/determinant,
+                           (x.normal.x*y.offset-x.offset*y.normal.x)/determinant)
+            return simd_distance(meet, turn) >= 0.06
+        }
+        var collapsed = true
+        while collapsed && runs.count > 1 {
+            collapsed = false
+            for i in runs.indices {
+                let j = (i+1) % runs.count, same = runs[i].line == runs[j].line
+                guard same || duplicate(runs[i].line, runs[j].line, turn: runs[j].at) else { continue }
+                // How far each line lies into the base, measured at the turn between them.
+                func depth(_ line: Int) -> Float {
+                    let l = lines[line], at = runs[j].at
+                    return simd_dot(runs[j].inward, at - (simd_dot(l.normal, at) - l.offset)*l.normal)
+                }
+                if !same, depth(runs[j].line) > depth(runs[i].line) { runs[i].line = runs[j].line }
+                // Collapsing can leave one line on both sides of a removed run, so the
+                // same pass also joins identical neighbours (including across the seam).
+                runs.remove(at: j)
+                collapsed = true
+                break
+            }
+        }
+        return runs
+    }
+
+    /// The base plus everything within `edgeReach` of its border: where edge evidence counts.
+    func neighborhood(of component: Set<Cell>) -> Set<Cell> {
+        let reach = Int((Self.edgeReach / Self.cell).rounded(.up))
+        var near = component
+        for c in component where c.neighbors.contains(where: { !component.contains($0) }) {
+            for dx in -reach...reach { for dy in -reach...reach { near.insert(.init(x:c.x+dx,y:c.y+dy)) } }
+        }
+        return near
+    }
+
+    /// Edge evidence must touch the selected base. Surfaces beyond it, such as a wall
+    /// beside the cabinet or an open door, can be nearly collinear with a side; fitted
+    /// together with it they widen that edge or split it into parallel duplicates.
+    func boundaryLines(near component: Set<Cell>) -> [Line] {
+        let near = neighborhood(of: component)
+        func samples(_ key: KeyPath<InteriorSweepObservation, [SIMD2<Float>]>) -> [Sample] {
+            var values: [Sample] = []
+            for (view, frame) in observations.enumerated() {
+                var cells = Set<Cell>()
+                for p in frame[keyPath: key] {
+                    let c = cell(p)
+                    if near.contains(c) && cells.insert(c).inserted { values.append(.init(p:p,view:view)) }
+                }
+            }
+            return values
+        }
+        return Self.fitLines(samples(\.walls)) + Self.fitLines(samples(\.front)).map(snappedToObservedBase)
+    }
+
+    /// An open front cannot cut through base the sweep observed. Depth blur at the drop
+    /// places front samples inside the true edge, while the base's own samples reach it,
+    /// so refit the edge through the outermost base that two views agree on along its
+    /// length. The edge only ever moves outward, never past `edgeReach`.
+    func snappedToObservedBase(_ line: Line) -> Line {
+        let seed2 = SIMD2(seed.x, seed.z)
+        // Orient the normal outward (away from the base) so positive distances lie beyond.
+        let flip: Float = simd_dot(line.normal, seed2) - line.offset > 0 ? -1 : 1
+        let normal = line.normal*flip, offset = line.offset*flip, tangent = SIMD2(normal.y, -normal.x)
+        let low = min(line.low*flip, line.high*flip), high = max(line.low*flip, line.high*flip)
+        var reach: [Int: [Int: Float]] = [:]   // bin -> view -> outermost base sample
+        for (view, frame) in observations.enumerated() { for p in frame.floor {
+            let d = simd_dot(normal, p) - offset, t = simd_dot(tangent, p)
+            guard d > -Self.edgeReach, d <= Self.edgeReach, t >= low, t <= high else { continue }
+            let bin = Int(floor(t / Self.frontBin))
+            reach[bin, default: [:]][view] = max(reach[bin]?[view] ?? -.infinity, d)
+        } }
+        let bins: [(t: Float, d: Float)] = reach.compactMap { bin, views in
+            let extents = views.values.sorted(by: >)
+            guard extents.count >= 2 else { return nil }
+            return ((Float(bin)+0.5)*Self.frontBin, extents[1])
+        }
+        guard bins.count >= 3 else { return line }
+        let mt = bins.map(\.t).reduce(0,+)/Float(bins.count), md = bins.map(\.d).reduce(0,+)/Float(bins.count)
+        let stt = bins.reduce(Float(0)) { $0 + ($1.t-mt)*($1.t-mt) }
+        guard stt > 0 else { return line }
+        let slope = bins.reduce(Float(0)) { $0 + ($1.t-mt)*($1.d-md) } / stt
+        // The observed base must span most of the edge; a short patch is not extrapolated.
+        guard md > 0, abs(slope) <= 0.12, Float(bins.count)*Self.frontBin >= 0.5*(high-low) else { return line }
+        // Each end moves outward by at most edgeReach, never inward.
+        func shift(_ t: Float) -> Float { min(Self.edgeReach, max(0, md + slope*(t-mt))) }
+        let a = tangent*low + normal*(offset+shift(low)), b = tangent*high + normal*(offset+shift(high))
+        let direction = simd_normalize(b-a)
+        var newNormal = SIMD2(-direction.y, direction.x)
+        if simd_dot(newNormal, normal) < 0 { newNormal = -newNormal }
+        let newTangent = SIMD2(newNormal.y, -newNormal.x), ts = [a, b].map { simd_dot(newTangent, $0) }
+        return Line(normal: newNormal, offset: simd_dot(newNormal, a), low: ts.min()!, high: ts.max()!)
     }
 
     private func overheadHeight(outer: [InteriorPoint], holes: [[InteriorPoint]]) -> Float? {
@@ -267,11 +474,15 @@ struct InteriorSweep: Sendable {
             var xx: Float=0, xy: Float=0, yy: Float=0
             for p in points { let d=p.p-mean; xx += d.x*d.x; xy += d.x*d.y; yy += d.y*d.y }
             let angle=0.5*atan2(2*xy,xx-yy), tangent=SIMD2(cos(angle),sin(angle)), normal=SIMD2(-sin(angle),cos(angle))
+            // One surface scatters wider than the narrow band that found it. Clear the rest
+            // of its band so those tails cannot fit parallel duplicates or corner slivers.
+            let offset=simd_dot(normal,mean)
+            remaining=remaining.filter { abs(simd_dot(normal,$0.p)-offset) > surfaceBand }
             let sorted=points.map { (t:simd_dot(tangent,$0.p),view:$0.view) }.sorted { $0.t < $1.t }
             var group: [(t:Float,view:Int)] = []
             func flush() {
                 guard let a=group.first, let b=group.last, b.t-a.t >= 0.035, Set(group.map(\.view)).count >= 2 else { group=[]; return }
-                lines.append(.init(normal:normal,offset:simd_dot(normal,mean),low:a.t,high:b.t)); group=[]
+                lines.append(.init(normal:normal,offset:offset,low:a.t,high:b.t)); group=[]
             }
             for p in sorted {
                 if let last=group.last, p.t-last.t > 0.045 { flush() }

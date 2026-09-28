@@ -163,10 +163,6 @@ actor InteriorSweepWorker {
     private var result=InteriorSweepResult()
     func process(_ frame: InteriorSweepFrame, seed: SIMD3<Float>, generation: UUID) -> InteriorSweepResult {
         if self.generation != generation { self.generation=generation; sweep=InteriorSweep(seed:seed); result=InteriorSweepResult() }
-        if sweep!.observations.count>=40 {
-            if !result.ready { result.hint="Some edges are still hidden. Choose the base again from a clearer angle." }
-            return result
-        }
         if let last=sweep?.observations.last,
            simd_distance(last.camera,frame.camera)<0.018 && simd_dot(last.forward,frame.forward)>0.9986 { return result }
         result=sweep!.add(frame.observation(seed:seed))

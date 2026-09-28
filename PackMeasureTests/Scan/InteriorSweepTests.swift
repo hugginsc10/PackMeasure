@@ -126,6 +126,189 @@ struct InteriorSweepTests {
         let decoded=try JSONDecoder().decode([InteriorSweepObservation].self,from:encoded)
         #expect(decoded.count==40 && decoded[0].floor==map.observations[0].floor)
     }
+    /// An open rectangle whose base has one unobserved 5 cm patch.
+    func gapped(_ index: Int) -> InteriorSweepObservation {
+        var o=observation(index,loops:[rectangle],open:true)
+        o.floor=o.floor.filter { !((0.24...0.29).contains($0.x) && (0.12...0.17).contains($0.y)) }
+        return o
+    }
+    @Test func fullSweepStillAcceptsViewsThatCoverALateGap() {
+        // A gap left after the view budget fills must remain coverable, not a dead end.
+        var map=InteriorSweep(seed:[0.1,0,0.1]), result=InteriorSweepResult()
+        for i in 0..<40 { result=map.add(gapped(i)) }
+        #expect(!result.ready)
+        for i in 40..<44 { result=map.add(observation(i,loops:[rectangle],open:true)) }
+        #expect(map.observations.count==40)
+        #expect(result.ready, "\(result.hint)")
+    }
+    @Test @MainActor func reviewUnlocksWhenAGapIsCoveredAfterTheViewBudgetIsFull() {
+        // Stored views stay at the budget once full; the scanner must still take each new
+        // reconstruction, or a late covering view can never enable review.
+        let state=InteriorScanState(); state.ready=true; state.sweepSeed=[0.1,0,0.1]
+        var map=InteriorSweep(seed:[0.1,0,0.1])
+        for i in 0..<40 { state.receiveSweep(map.add(gapped(i)),generation:state.generation) }
+        #expect(!state.canReviewSweep)
+        for i in 40..<44 {
+            state.receiveSweep(map.add(observation(i,loops:[rectangle],open:true)),generation:state.generation)
+        }
+        #expect(state.canReviewSweep, "\(state.sweepResult.hint)")
+    }
+    @Test func offsetDuplicateSideCollapsesToTheSideNearerTheBase() {
+        typealias L=InteriorSweep.Line
+        let lines=[L(normal:[0,1],offset:0,low:0,high:0.4),        // front
+                   L(normal:[1,0],offset:0,low:-0.3,high:0),       // side
+                   L(normal:[1,0],offset:-0.021,low:-0.06,high:0)] // sliver 2.1 cm beyond it
+        let runs=InteriorSweep.collapsingDuplicateSides([(0,[0.2,0],[0,1]),(2,[-0.021,0.02],[1,0]),(1,[0,0.1],[1,0])],lines:lines)
+        #expect(runs.map(\.line)==[0,1])
+    }
+    @Test func duplicateObstacleEdgeCollapsesOutwardToKeepTheObstacle() {
+        // Around an obstacle the conservative edge grows the cutout: duplicates of its right
+        // side at x=0.28 and x=0.30 must keep 0.30, even though 0.28 is nearer the seed.
+        typealias L=InteriorSweep.Line
+        let lines=[L(normal:[0,1],offset:0.10,low:0.2,high:0.29),     // obstacle bottom
+                   L(normal:[1,0],offset:0.28,low:-0.2,high:-0.1),    // right side, fit A
+                   L(normal:[1,0],offset:0.30,low:-0.2,high:-0.1),    // right side, fit B
+                   L(normal:[0,1],offset:0.20,low:0.2,high:0.29),     // obstacle top
+                   L(normal:[1,0],offset:0.20,low:-0.2,high:-0.1)]    // obstacle left
+        let runs=InteriorSweep.collapsingDuplicateSides([(0,[0.245,0.10],[0,-1]),(1,[0.29,0.13],[1,0]),(2,[0.29,0.17],[1,0]),
+                                                         (3,[0.245,0.20],[0,1]),(4,[0.20,0.15],[-1,0])],lines:lines)
+        #expect(runs.map(\.line)==[0,2,3,4])
+    }
+    @Test func genuineShallowBendIsNotStraightenedAway() {
+        // Two edges 6° apart that meet where the outline turns are a real corner, even
+        // though they are too close to parallel to intersect reliably. Leave them for the
+        // corner checks rather than silently keeping one.
+        typealias L=InteriorSweep.Line
+        let bend=SIMD2<Float>(sin(6 * .pi/180),cos(6 * .pi/180))
+        let lines=[L(normal:[0,1],offset:0,low:0,high:0.4),                                   // front
+                   L(normal:[1,0],offset:0.4,low:-0.3,high:0),                                // right
+                   L(normal:[0,1],offset:0.3,low:0.2,high:0.4),                               // back, first part
+                   L(normal:bend,offset:simd_dot(bend,[0.2,0.3]),low:-0.2,high:0.0),           // back, bent 6°
+                   L(normal:[1,0],offset:0,low:-0.32,high:0)]                                 // left
+        let input: [InteriorSweep.Run]=[(0,[0.2,0],[0,1]),(1,[0.4,0.15],[-1,0]),(2,[0.3,0.3],[0,-1]),(3,[0.199,0.3],[0,-1]),(4,[0,0.15],[1,0])]
+        #expect(InteriorSweep.collapsingDuplicateSides(input,lines:lines).map(\.line)==[0,1,2,3,4])
+    }
+    @Test func fullSweepDropsAViewThatRepeatsAStoredPose() {
+        // Returning to an earlier pose adds nothing new; it must not push out a unique view.
+        var map=InteriorSweep(seed:[0.1,0,0.1])
+        for i in 0..<40 { _=map.add(observation(i,loops:[rectangle],open:true)) }
+        let stored=map.observations.map(\.timestamp)
+        var repeated=observation(5,loops:[rectangle],open:true); repeated.timestamp=40*0.4
+        _=map.add(repeated)
+        #expect(map.observations.map(\.timestamp)==stored)
+    }
+    @Test func fullSweepKeepsTheOnlyViewOfARegion() {
+        // Views can stand close together yet see different parts of the base (occlusion);
+        // the only view of a region must not be replaced because its pose is redundant.
+        var map=InteriorSweep(seed:[0.1,0,0.1])
+        for i in 0..<38 { _=map.add(gapped(i)) }
+        _=map.add(observation(38,loops:[rectangle],open:true))            // the only view of the patch
+        var near=gapped(39); near.camera.x=38*0.025+0.019; _=map.add(near) // nearly repeats that pose
+        var novel=observation(40,loops:[rectangle],open:true,overhead:0.35); novel.floor=gapped(40).floor
+        let result=map.add(novel)                                          // new evidence: the underside
+        #expect(map.observations.contains { $0.timestamp==38*0.4 })
+        #expect(result.ready, "\(result.hint)")
+    }
+    @Test func fullSweepKeepsCorroboratingViewsOfALateEdge() {
+        // Edges need two views. At the budget, a second view of an edge only one stored
+        // view has seen is new evidence, not a repeat.
+        func withoutRightSide(_ i: Int) -> InteriorSweepObservation {
+            var o=observation(i,loops:[rectangle],open:true); o.walls=o.walls.filter { $0.x<0.39 }; return o
+        }
+        var map=InteriorSweep(seed:[0.1,0,0.1]), result=InteriorSweepResult()
+        for i in 0..<39 { result=map.add(withoutRightSide(i)) }
+        result=map.add(observation(39,loops:[rectangle],open:true))   // first sight of the right side
+        #expect(!result.ready)
+        result=map.add(observation(40,loops:[rectangle],open:true))   // a second view corroborates it
+        #expect(result.ready, "\(result.hint)")
+    }
+    @Test func lowerUndersideSeenLateIsNotTreatedAsARepeat() {
+        // Two views agreeing on a higher underside must not make a later, lower one look
+        // redundant: its height differs, so it is new evidence, and clearance must not be
+        // reported from the higher level alone.
+        var map=InteriorSweep(seed:[0.1,0,0.1]), result=InteriorSweepResult()
+        for i in 0..<38 { result=map.add(observation(i,loops:[rectangle],open:true)) }
+        for i in 38..<40 { result=map.add(observation(i,loops:[rectangle],open:true,overhead:0.40)) }
+        for i in 40..<42 { result=map.add(observation(i,loops:[rectangle],open:true,overhead:0.35)) }
+        #expect(map.observations.contains { $0.timestamp==41*0.4 })
+        #expect(result.height == nil || result.height! < 0.36, "\(String(describing: result.height))")
+    }
+    @Test func fullSweepCountsTheIncomingViewWhenChoosingAReplacement() {
+        // A candidate that re-observes one stored view's only patch makes that view free to
+        // replace; replacing another view instead would reopen that other view's patch.
+        func uncover(_ o: inout InteriorSweepObservation, _ x: ClosedRange<Float>, _ y: ClosedRange<Float>) {
+            o.floor=o.floor.filter { !(x.contains($0.x) && y.contains($0.y)) }
+        }
+        let ax: ClosedRange<Float>=0.04...0.10, ay: ClosedRange<Float>=0.04...0.10
+        let bx: ClosedRange<Float>=0.28...0.33, by: ClosedRange<Float>=0.18...0.23
+        var map=InteriorSweep(seed:[0.2,0,0.15])
+        for i in 0..<38 {   // neither patch, plus an underside level no other view shares
+            var o=observation(i,loops:[rectangle],open:true,overhead:0.30+Float(i)*0.02)
+            uncover(&o,ax,ay); uncover(&o,bx,by); _=map.add(o)
+        }
+        var onlyA=observation(38,loops:[rectangle],open:true); uncover(&onlyA,bx,by); _=map.add(onlyA)
+        var onlyB=observation(39,loops:[rectangle],open:true); uncover(&onlyB,ax,ay); _=map.add(onlyB)
+        var again=observation(40,loops:[rectangle],open:true,overhead:0.2); uncover(&again,bx,by)
+        let result=map.add(again)   // re-observes patch A and adds a new underside level
+        #expect(map.observations.contains { $0.timestamp==39*0.4 })
+        #expect(result.ready, "\(result.hint)")
+    }
+    @Test func backgroundSurfacesDoNotDisplaceBaseEvidenceAtTheBudget() {
+        // Walls far from the selected base never bound it, so seeing more of them at the
+        // budget is not new evidence and must not push out a view of the base.
+        var map=InteriorSweep(seed:[0.1,0,0.1])
+        for i in 0..<40 { _=map.add(observation(i,loops:[rectangle],open:true)) }
+        let stored=map.observations.map(\.timestamp)
+        var background=observation(40,loops:[rectangle],open:true)
+        for y in stride(from:Float(0),through:0.3,by:0.005) { background.walls.append([0.9,y]) }
+        _=map.add(background)
+        #expect(map.observations.map(\.timestamp)==stored)
+    }
+    @Test func shortFloorPatchIsNotExtrapolatedAlongALongFront() {
+        // Base seen past a 40 cm front only along its first 8 cm, rising 1 cm per 10 cm:
+        // extrapolating that slope would push the far end past edgeReach.
+        var map=InteriorSweep(seed:[0.2,0,0.15])
+        for view in 0..<2 {
+            var floor=[SIMD2<Float>]()
+            for x in stride(from:Float(0.001),through:0.079,by:0.006) {
+                let beyond=0.01+0.1*(x-0.04)
+                for y in stride(from:-beyond,through:0.03,by:0.006) { floor.append([x,y]) }
+            }
+            for x in stride(from:Float(0.085),through:0.4,by:0.006) { for y in stride(from:Float(0.05),through:0.3,by:0.006) { floor.append([x,y]) } }
+            _=map.add(.init(timestamp:Double(view)*0.4,camera:[Float(view)*0.05,0.8,0.6],forward:[0,-1,0],floor:floor,walls:[],front:[],overhead:[]))
+        }
+        let front=InteriorSweep.Line(normal:[0,1],offset:0,low:0,high:0.4)
+        let snapped=map.snappedToObservedBase(front)
+        #expect(abs(abs(snapped.normal.y)-1)<0.0001 && abs(snapped.offset)<0.0001, "\(snapped)")
+    }
+    @Test func openFrontReachesObservedBaseDespiteBlurredDrop() throws {
+        // Depth blur reports the drop inside the base; the base itself is seen to the edge.
+        var map=InteriorSweep(seed:[0.1,0,0.1]), result=InteriorSweepResult()
+        for i in 0..<4 {
+            var o=observation(i,loops:[rectangle],open:true)
+            o.front=o.front.map { [$0.x,$0.y+0.015] }
+            result=map.add(o)
+        }
+        #expect(result.ready, "\(result.hint)")
+        let loop=try #require(result.loops.first)
+        #expect(abs(loop.map(\.z).max()!-loop.map(\.z).min()!-0.3)<0.006)
+    }
+    @Test func nearlyParallelSliverCollapsesToTheInnerSide() throws {
+        // A short surface just beyond a side (trim, the wall past a cabinet) that the
+        // outline also touches cannot stall review; the side nearer the base bounds it.
+        var map=InteriorSweep(seed:[0.1,0,0.1]), result=InteriorSweepResult()
+        for i in 0..<4 {
+            var o=observation(i,loops:[rectangle],open:true)
+            for y in stride(from:Float(0.003),through:0.045,by:0.006) {
+                for x in stride(from:Float(-0.015),through:-0.003,by:0.006) { o.floor.append([x,y]) }
+            }
+            for y in stride(from:Float(0),through:0.06,by:0.005) { o.walls.append([-0.021,y]) }
+            result=map.add(o)
+        }
+        #expect(result.ready, "\(result.hint)")
+        let loop=try #require(result.loops.first)
+        #expect(abs(loop.map(\.x).max()!-loop.map(\.x).min()!-0.4)<0.003)
+    }
 
     func frame(drop: Bool, contrast: Bool=true, missing: Bool=false) -> InteriorSweepFrame {
         let width=80, height=80
@@ -181,10 +364,10 @@ struct InteriorSweepTests {
     }
     @Test @MainActor func sweepReviewNeedsStableGeometryAndPreservesLiDARHeight() throws {
         let state=InteriorScanState(); state.ready=true; state.sweepSeed=[0.1,0,0.1]
-        var r=run([rectangle],overhead:0.35); r.views=3
+        var r=run([rectangle],overhead:0.35); r.views=3; r.revision=3
         state.receiveSweep(r,generation:state.generation)
         #expect(!state.canReviewSweep)
-        r.views=4; state.receiveSweep(r,generation:state.generation)
+        r.views=4; r.revision=4; state.receiveSweep(r,generation:state.generation)
         #expect(state.canReviewSweep)
         state.useSweepOutline()
         let value=try #require(state.result)
@@ -193,8 +376,8 @@ struct InteriorSweepTests {
     @Test @MainActor func incompleteHeightGoesToHeightWithoutRetracingAndManualKeepsOutline() {
         for manual in [false,true] {
             let state=InteriorScanState(); state.ready=true; state.sweepSeed=[0.1,0,0.1]
-            var r=run([rectangle]); r.views=3; state.receiveSweep(r,generation:state.generation)
-            r.views=4; state.receiveSweep(r,generation:state.generation)
+            var r=run([rectangle]); r.views=3; r.revision=3; state.receiveSweep(r,generation:state.generation)
+            r.views=4; r.revision=4; state.receiveSweep(r,generation:state.generation)
             if manual { state.useManual(); #expect(state.pinned && state.manualPlacement) }
             else { state.useSweepOutline(); #expect(state.takingHeight && state.result==nil) }
             #expect(state.loops==r.loops)
@@ -212,8 +395,8 @@ struct InteriorSweepTests {
     }
     @Test @MainActor func temporaryLackOfTrackingCannotApproveOldEvidence() {
         let state=InteriorScanState(); state.ready=true; state.sweepSeed=[0.1,0,0.1]
-        var r=run([rectangle]); r.views=3; state.receiveSweep(r,generation:state.generation)
-        r.views=4; state.receiveSweep(r,generation:state.generation); state.ready=false
+        var r=run([rectangle]); r.views=3; r.revision=3; state.receiveSweep(r,generation:state.generation)
+        r.views=4; r.revision=4; state.receiveSweep(r,generation:state.generation); state.ready=false
         state.useSweepOutline()
         #expect(!state.pinned && state.result==nil && state.sweepResult.ready)
     }
