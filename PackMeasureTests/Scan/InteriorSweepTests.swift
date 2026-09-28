@@ -240,6 +240,17 @@ struct InteriorSweepTests {
         #expect(map.observations.contains { $0.timestamp==39*0.4 })
         #expect(result.ready, "\(result.hint)")
     }
+    @Test func backgroundSurfacesDoNotDisplaceBaseEvidenceAtTheBudget() {
+        // Walls far from the selected base never bound it, so seeing more of them at the
+        // budget is not new evidence and must not push out a view of the base.
+        var map=InteriorSweep(seed:[0.1,0,0.1])
+        for i in 0..<40 { _=map.add(observation(i,loops:[rectangle],open:true)) }
+        let stored=map.observations.map(\.timestamp)
+        var background=observation(40,loops:[rectangle],open:true)
+        for y in stride(from:Float(0),through:0.3,by:0.005) { background.walls.append([0.9,y]) }
+        _=map.add(background)
+        #expect(map.observations.map(\.timestamp)==stored)
+    }
     @Test func shortFloorPatchIsNotExtrapolatedAlongALongFront() {
         // Base seen past a 40 cm front only along its first 8 cm, rising 1 cm per 10 cm:
         // extrapolating that slope would push the far end past edgeReach.

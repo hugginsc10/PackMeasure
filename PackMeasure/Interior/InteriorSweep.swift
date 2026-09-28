@@ -140,13 +140,28 @@ struct InteriorSweep: Sendable {
     /// Close poses can still see different patches, so pose alone never decides. Nil when
     /// the incoming view brings no cell closer to its needed support.
     private func viewToReplace(adding incoming: Set<Evidence>) -> Int? {
+        // Only evidence reconstruction can use counts, judged exactly as reconstruction
+        // judges it: the connected base, edges near it, the underside above it. Seeing more
+        // of a background surface never displaces a stored view.
+        let base = Set(connectedBase(observedBase())), near = base.isEmpty ? [] : neighborhood(of: base)
+        let above = Set(base.map { c in let p = position(c); return Cell(x:Int(floor(p.x/0.05)), y:Int(floor(p.y/0.05))) })
+        func usable(_ e: Evidence) -> Bool {
+            guard !base.isEmpty else { return true }
+            switch e.kind {
+            case 0: return base.contains(e.cell)
+            case 3: return above.contains(e.cell)
+            default: return near.contains(e.cell)
+            }
+        }
         var seen: [Evidence: Int] = [:]
-        for cells in viewEvidence { for e in cells { seen[e, default: 0] += 1 } }
-        guard incoming.contains(where: { seen[$0, default: 0] < Self.support($0.kind) }) else { return nil }
+        for cells in viewEvidence { for e in cells where usable(e) { seen[e, default: 0] += 1 } }
+        guard incoming.contains(where: { usable($0) && seen[$0, default: 0] < Self.support($0.kind) }) else { return nil }
         // Price each stored view as if the incoming view were already kept: evidence it
         // re-observes costs nothing to lose.
-        for e in incoming { seen[e, default: 0] += 1 }
-        let cost = viewEvidence.map { cells in cells.reduce(0) { $0 + (seen[$1, default: 0] <= Self.support($1.kind) ? 1 : 0) } }
+        for e in incoming where usable(e) { seen[e, default: 0] += 1 }
+        let cost = viewEvidence.map { cells in
+            cells.reduce(0) { $0 + (usable($1) && seen[$1, default: 0] <= Self.support($1.kind) ? 1 : 0) }
+        }
         guard let least = cost.min() else { return nil }
         func separation(_ a: InteriorSweepObservation, _ b: InteriorSweepObservation) -> Float {
             let turn = acos(min(1, max(-1, simd_dot(simd_normalize(a.forward), simd_normalize(b.forward)))))
@@ -168,18 +183,22 @@ struct InteriorSweep: Sendable {
          seed.z + (Float(c.y) + (center ? 0.5 : 0))*Self.cell]
     }
 
-    func reconstruct() -> InteriorSweepResult {
-        var result = InteriorSweepResult(views: observations.count, revision: acceptedViews)
-        // A one-cell footprint accounts for the depth pixel's finite sampling area.
-        // Its displacement is removed when the boundary is intersected below.
+    /// Observed base cells, each widened by a one-cell footprint for the depth pixel's finite
+    /// sampling area. Its displacement is removed when the boundary is intersected.
+    private func observedBase() -> Set<Cell> {
         var floorCells = Set<Cell>()
         for frame in observations { for p in frame.floor {
             let c = cell(p)
             for dx in -1...1 { for dy in -1...1 { floorCells.insert(.init(x:c.x+dx,y:c.y+dy)) } }
         } }
-        guard floorCells.count > 40 else { result.hint = "Show more of this compartment’s base."; return result }
+        return floorCells
+    }
+
+    /// The observed base connected to the seed, in breadth-first order; empty when the
+    /// seed itself is not covered.
+    private func connectedBase(_ floorCells: Set<Cell>) -> [Cell] {
         let origin = cell([seed.x,seed.z])
-        guard floorCells.contains(origin) else { result.hint = "Keep the selected base in view."; return result }
+        guard floorCells.contains(origin) else { return [] }
         var component: Set<Cell> = [origin], queue = [origin], cursor = 0
         while cursor < queue.count {
             let c = queue[cursor]; cursor += 1
@@ -187,6 +206,16 @@ struct InteriorSweep: Sendable {
                 if component.insert(n).inserted { queue.append(n) }
             }
         }
+        return queue
+    }
+
+    func reconstruct() -> InteriorSweepResult {
+        var result = InteriorSweepResult(views: observations.count, revision: acceptedViews)
+        let floorCells = observedBase()
+        guard floorCells.count > 40 else { result.hint = "Show more of this compartment’s base."; return result }
+        let queue = connectedBase(floorCells)
+        guard !queue.isEmpty else { result.hint = "Keep the selected base in view."; return result }
+        let component = Set(queue)
         result.coverage = queue.enumerated().compactMap { i,c in
             guard i % max(1, queue.count / 220) == 0 else { return nil }
             let p = position(c); return SIMD3(p.x,seed.y,p.y)
@@ -321,15 +350,21 @@ struct InteriorSweep: Sendable {
         return runs
     }
 
-    /// Edge evidence must touch the selected base. Surfaces beyond it, such as a wall
-    /// beside the cabinet or an open door, can be nearly collinear with a side; fitted
-    /// together with it they widen that edge or split it into parallel duplicates.
-    func boundaryLines(near component: Set<Cell>) -> [Line] {
+    /// The base plus everything within `edgeReach` of its border: where edge evidence counts.
+    func neighborhood(of component: Set<Cell>) -> Set<Cell> {
         let reach = Int((Self.edgeReach / Self.cell).rounded(.up))
         var near = component
         for c in component where c.neighbors.contains(where: { !component.contains($0) }) {
             for dx in -reach...reach { for dy in -reach...reach { near.insert(.init(x:c.x+dx,y:c.y+dy)) } }
         }
+        return near
+    }
+
+    /// Edge evidence must touch the selected base. Surfaces beyond it, such as a wall
+    /// beside the cabinet or an open door, can be nearly collinear with a side; fitted
+    /// together with it they widen that edge or split it into parallel duplicates.
+    func boundaryLines(near component: Set<Cell>) -> [Line] {
+        let near = neighborhood(of: component)
         func samples(_ key: KeyPath<InteriorSweepObservation, [SIMD2<Float>]>) -> [Sample] {
             var values: [Sample] = []
             for (view, frame) in observations.enumerated() {
