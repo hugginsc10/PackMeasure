@@ -126,6 +126,47 @@ struct InteriorSweepTests {
         let decoded=try JSONDecoder().decode([InteriorSweepObservation].self,from:encoded)
         #expect(decoded.count==40 && decoded[0].floor==map.observations[0].floor)
     }
+    @Test func fullSweepStillAcceptsViewsThatCoverALateGap() {
+        // A gap left after the view budget fills must remain coverable, not a dead end.
+        var map=InteriorSweep(seed:[0.1,0,0.1]), result=InteriorSweepResult()
+        for i in 0..<40 {
+            var o=observation(i,loops:[rectangle],open:true)
+            o.floor=o.floor.filter { !((0.24...0.29).contains($0.x) && (0.12...0.17).contains($0.y)) }
+            result=map.add(o)
+        }
+        #expect(!result.ready)
+        for i in 40..<44 { result=map.add(observation(i,loops:[rectangle],open:true)) }
+        #expect(map.observations.count==40)
+        #expect(result.ready, "\(result.hint)")
+    }
+    @Test func openFrontReachesObservedBaseDespiteBlurredDrop() throws {
+        // Depth blur reports the drop inside the base; the base itself is seen to the edge.
+        var map=InteriorSweep(seed:[0.1,0,0.1]), result=InteriorSweepResult()
+        for i in 0..<4 {
+            var o=observation(i,loops:[rectangle],open:true)
+            o.front=o.front.map { [$0.x,$0.y+0.015] }
+            result=map.add(o)
+        }
+        #expect(result.ready, "\(result.hint)")
+        let loop=try #require(result.loops.first)
+        #expect(abs(loop.map(\.z).max()!-loop.map(\.z).min()!-0.3)<0.006)
+    }
+    @Test func nearlyParallelSliverCollapsesToTheInnerSide() throws {
+        // A short surface just beyond a side (trim, the wall past a cabinet) that the
+        // outline also touches cannot stall review; the side nearer the base bounds it.
+        var map=InteriorSweep(seed:[0.1,0,0.1]), result=InteriorSweepResult()
+        for i in 0..<4 {
+            var o=observation(i,loops:[rectangle],open:true)
+            for y in stride(from:Float(0.003),through:0.045,by:0.006) {
+                for x in stride(from:Float(-0.015),through:-0.003,by:0.006) { o.floor.append([x,y]) }
+            }
+            for y in stride(from:Float(0),through:0.06,by:0.005) { o.walls.append([-0.021,y]) }
+            result=map.add(o)
+        }
+        #expect(result.ready, "\(result.hint)")
+        let loop=try #require(result.loops.first)
+        #expect(abs(loop.map(\.x).max()!-loop.map(\.x).min()!-0.4)<0.003)
+    }
 
     func frame(drop: Bool, contrast: Bool=true, missing: Bool=false) -> InteriorSweepFrame {
         let width=80, height=80

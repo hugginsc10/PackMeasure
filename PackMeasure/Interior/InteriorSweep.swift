@@ -19,6 +19,9 @@ struct InteriorSweepResult: Sendable {
     var hint = "Sweep slowly across the base, sides and front edge."
     var views = 0
     var boundaryCount = 0
+    /// The outer outline once its edges resolve, even while an inner gap still needs
+    /// coverage. Diagnostic only: `loops` stays empty until every ring resolves.
+    var outline: [SIMD3<Float>] = []
     var ready: Bool { !loops.isEmpty && views >= 3 }
 }
 
@@ -31,6 +34,18 @@ struct InteriorSweep: Sendable {
     private(set) var rejectedViews = 0
     static let cell: Float = 0.008
     static let radius: Float = 1.2
+    /// Stored views; beyond this the most redundant view is replaced, not the new one refused.
+    static let maxViews = 40
+    /// Metres of camera travel equivalent to one radian of turn (3° ≈ 1.8 cm, as for new views).
+    static let turnWeight: Float = 0.35
+    /// How far outside the observed base a wall or front sample may lie and still
+    /// bound it: the floor stops short of a wall by the depth sampling footprint.
+    static let edgeReach: Float = 0.04
+    /// Scatter of one flat surface across LiDAR views; parallel surfaces closer than
+    /// this are below the sweep's resolution and fit as a single edge.
+    static let surfaceBand: Float = 0.015
+    /// Spacing along an open front at which the observed base's reach is sampled.
+    static let frontBin: Float = 0.02
 
     struct Cell: Hashable, Sendable {
         var x: Int; var y: Int
@@ -62,11 +77,6 @@ struct InteriorSweep: Sendable {
             let turned = simd_dot(simd_normalize(observation.forward), simd_normalize(last.forward)) < 0.9986
             guard moved || turned else { rejectedViews += 1; return reconstruct() }
         }
-        guard observations.count < 40 else {
-            var result = reconstruct()
-            if !result.ready { result.hint = "Some edges are still hidden. Choose the base again from a clearer angle." }
-            return result
-        }
         func local(_ p: SIMD2<Float>) -> Bool { simd_distance(p, SIMD2(seed.x, seed.z)) <= Self.radius }
         func compact(_ points: [SIMD2<Float>], limit: Int) -> [SIMD2<Float>] {
             var seen=Set<Cell>(), result=[SIMD2<Float>]()
@@ -84,8 +94,25 @@ struct InteriorSweep: Sendable {
         guard !value.floor.isEmpty || !value.walls.isEmpty || !value.front.isEmpty || !value.overhead.isEmpty else {
             rejectedViews += 1; return reconstruct()
         }
+        // A full map keeps the sweep useful: the stored view most redundant with another
+        // gives way, so a late view that covers a remaining gap still counts.
+        if observations.count >= Self.maxViews { observations.remove(at: mostRedundantView()) }
         observations.append(value)
         return reconstruct()
+    }
+
+    /// The stored view whose pose is nearest another stored view; ties give up the older.
+    private func mostRedundantView() -> Int {
+        func separation(_ a: InteriorSweepObservation, _ b: InteriorSweepObservation) -> Float {
+            let turn = acos(min(1, max(-1, simd_dot(simd_normalize(a.forward), simd_normalize(b.forward)))))
+            return simd_distance(a.camera, b.camera) + turn*Self.turnWeight
+        }
+        var redundant = 0, nearest = Float.infinity
+        for i in observations.indices { for j in observations.indices where j != i {
+            let s = separation(observations[i], observations[j])
+            if s < nearest { nearest = s; redundant = i }
+        } }
+        return redundant
     }
 
     func cell(_ p: SIMD2<Float>) -> Cell {
@@ -119,15 +146,7 @@ struct InteriorSweep: Sendable {
             guard i % max(1, queue.count / 220) == 0 else { return nil }
             let p = position(c); return SIMD3(p.x,seed.y,p.y)
         }
-        func samples(_ key: KeyPath<InteriorSweepObservation, [SIMD2<Float>]>) -> [Sample] {
-            var values: [Sample] = []
-            for (view, frame) in observations.enumerated() {
-                var cells = Set<Cell>()
-                for p in frame[keyPath: key] where cells.insert(cell(p)).inserted { values.append(.init(p:p,view:view)) }
-            }
-            return values
-        }
-        let lines = Self.fitLines(samples(\.walls)) + Self.fitLines(samples(\.front))
+        let lines = boundaryLines(near: component)
         result.boundaryCount = lines.count
         guard lines.count >= 3 else {
             result.hint = lines.isEmpty ? "Sweep the base and the sides where they meet." : "Move a little sideways to see the remaining edges."
@@ -179,6 +198,29 @@ struct InteriorSweep: Sendable {
                 if runs.last?.line != match { runs.append((match,p)) }
             }
             if runs.first?.line == runs.last?.line { runs.removeFirst() }
+            // Nearly parallel neighbours cannot meet at a corner: they are one side seen as
+            // two surfaces (a trim, the wall beyond a cabinet). The one nearer the selected
+            // base bounds the usable space, so it replaces both.
+            func parallel(_ a: Int, _ b: Int) -> Bool {
+                abs(lines[a].normal.x*lines[b].normal.y-lines[a].normal.y*lines[b].normal.x) <= 0.12
+            }
+            let base = SIMD2(seed.x, seed.z)
+            var collapsed = true
+            while collapsed && runs.count > 1 {
+                collapsed = false
+                for i in runs.indices {
+                    let j = (i+1) % runs.count, same = runs[i].line == runs[j].line
+                    guard same || parallel(runs[i].line, runs[j].line) else { continue }
+                    if !same, lines[runs[j].line].distance(base) < lines[runs[i].line].distance(base) {
+                        runs[i].line = runs[j].line
+                    }
+                    // Collapsing can leave one line on both sides of a removed run, so the
+                    // same pass also joins identical neighbours (including across the seam).
+                    runs.remove(at: j)
+                    collapsed = true
+                    break
+                }
+            }
             guard (3...200).contains(runs.count) else { result.hint = "Keep sweeping until the edges separate clearly."; return result }
             var polygon: [SIMD3<Float>] = []
             for i in runs.indices {
@@ -197,6 +239,7 @@ struct InteriorSweep: Sendable {
             }
             if polygon.count>2, simd_distance(polygon[0],polygon.last!)<0.001 { polygon.removeLast() }
             outlines.append(polygon)
+            if ringIndex == 0 { result.outline = polygon }
         }
         guard !outlines.isEmpty, (try? InteriorGeometry.project(outlines, enteredHeightMM:100)) != nil else {
             result.hint = "Move slowly to separate the inside edges."; return result
@@ -218,6 +261,66 @@ struct InteriorSweep: Sendable {
         result.height = overheadHeight(outer:outer, holes:inner)
         result.hint = result.ready ? (result.height == nil ? "Outline captured. Tilt up to see the underside above this compartment, or continue to height." : "Dimensions captured. Review the outline and clear height.") : "Move a little sideways to confirm these edges."
         return result
+    }
+
+    /// Edge evidence must touch the selected base. Surfaces beyond it, such as a wall
+    /// beside the cabinet or an open door, can be nearly collinear with a side; fitted
+    /// together with it they widen that edge or split it into parallel duplicates.
+    func boundaryLines(near component: Set<Cell>) -> [Line] {
+        let reach = Int((Self.edgeReach / Self.cell).rounded(.up))
+        var near = component
+        for c in component where c.neighbors.contains(where: { !component.contains($0) }) {
+            for dx in -reach...reach { for dy in -reach...reach { near.insert(.init(x:c.x+dx,y:c.y+dy)) } }
+        }
+        func samples(_ key: KeyPath<InteriorSweepObservation, [SIMD2<Float>]>) -> [Sample] {
+            var values: [Sample] = []
+            for (view, frame) in observations.enumerated() {
+                var cells = Set<Cell>()
+                for p in frame[keyPath: key] {
+                    let c = cell(p)
+                    if near.contains(c) && cells.insert(c).inserted { values.append(.init(p:p,view:view)) }
+                }
+            }
+            return values
+        }
+        return Self.fitLines(samples(\.walls)) + Self.fitLines(samples(\.front)).map(snappedToObservedBase)
+    }
+
+    /// An open front cannot cut through base the sweep observed. Depth blur at the drop
+    /// places front samples inside the true edge, while the base's own samples reach it,
+    /// so refit the edge through the outermost base that two views agree on along its
+    /// length. The edge only ever moves outward, never past `edgeReach`.
+    func snappedToObservedBase(_ line: Line) -> Line {
+        let seed2 = SIMD2(seed.x, seed.z)
+        // Orient the normal outward (away from the base) so positive distances lie beyond.
+        let flip: Float = simd_dot(line.normal, seed2) - line.offset > 0 ? -1 : 1
+        let normal = line.normal*flip, offset = line.offset*flip, tangent = SIMD2(normal.y, -normal.x)
+        let low = min(line.low*flip, line.high*flip), high = max(line.low*flip, line.high*flip)
+        var reach: [Int: [Int: Float]] = [:]   // bin -> view -> outermost base sample
+        for (view, frame) in observations.enumerated() { for p in frame.floor {
+            let d = simd_dot(normal, p) - offset, t = simd_dot(tangent, p)
+            guard d > -Self.edgeReach, d <= Self.edgeReach, t >= low, t <= high else { continue }
+            let bin = Int(floor(t / Self.frontBin))
+            reach[bin, default: [:]][view] = max(reach[bin]?[view] ?? -.infinity, d)
+        } }
+        let bins: [(t: Float, d: Float)] = reach.compactMap { bin, views in
+            let extents = views.values.sorted(by: >)
+            guard extents.count >= 2 else { return nil }
+            return ((Float(bin)+0.5)*Self.frontBin, extents[1])
+        }
+        guard bins.count >= 3 else { return line }
+        let mt = bins.map(\.t).reduce(0,+)/Float(bins.count), md = bins.map(\.d).reduce(0,+)/Float(bins.count)
+        let stt = bins.reduce(Float(0)) { $0 + ($1.t-mt)*($1.t-mt) }
+        guard stt > 0 else { return line }
+        let slope = bins.reduce(Float(0)) { $0 + ($1.t-mt)*($1.d-md) } / stt
+        // Only move outward, within reach, and without swinging the edge.
+        guard md > 0, md <= Self.edgeReach, abs(slope) <= 0.12 else { return line }
+        let raw = normal - slope*tangent, length = simd_length(raw)
+        let newNormal = raw/length, newOffset = (offset + md - slope*mt)/length
+        let newTangent = SIMD2(newNormal.y, -newNormal.x)
+        let ends = [tangent*low + normal*(offset+md+slope*(low-mt)), tangent*high + normal*(offset+md+slope*(high-mt))]
+        let ts = ends.map { simd_dot(newTangent, $0) }
+        return Line(normal: newNormal, offset: newOffset, low: ts.min()!, high: ts.max()!)
     }
 
     private func overheadHeight(outer: [InteriorPoint], holes: [[InteriorPoint]]) -> Float? {
@@ -267,11 +370,15 @@ struct InteriorSweep: Sendable {
             var xx: Float=0, xy: Float=0, yy: Float=0
             for p in points { let d=p.p-mean; xx += d.x*d.x; xy += d.x*d.y; yy += d.y*d.y }
             let angle=0.5*atan2(2*xy,xx-yy), tangent=SIMD2(cos(angle),sin(angle)), normal=SIMD2(-sin(angle),cos(angle))
+            // One surface scatters wider than the narrow band that found it. Clear the rest
+            // of its band so those tails cannot fit parallel duplicates or corner slivers.
+            let offset=simd_dot(normal,mean)
+            remaining=remaining.filter { abs(simd_dot(normal,$0.p)-offset) > surfaceBand }
             let sorted=points.map { (t:simd_dot(tangent,$0.p),view:$0.view) }.sorted { $0.t < $1.t }
             var group: [(t:Float,view:Int)] = []
             func flush() {
                 guard let a=group.first, let b=group.last, b.t-a.t >= 0.035, Set(group.map(\.view)).count >= 2 else { group=[]; return }
-                lines.append(.init(normal:normal,offset:simd_dot(normal,mean),low:a.t,high:b.t)); group=[]
+                lines.append(.init(normal:normal,offset:offset,low:a.t,high:b.t)); group=[]
             }
             for p in sorted {
                 if let last=group.last, p.t-last.t > 0.045 { flush() }
