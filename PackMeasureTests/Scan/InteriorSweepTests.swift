@@ -196,6 +196,19 @@ struct InteriorSweepTests {
         #expect(map.observations.contains { $0.timestamp==38*0.4 })
         #expect(result.ready, "\(result.hint)")
     }
+    @Test func fullSweepKeepsCorroboratingViewsOfALateEdge() {
+        // Edges need two views. At the budget, a second view of an edge only one stored
+        // view has seen is new evidence, not a repeat.
+        func withoutRightSide(_ i: Int) -> InteriorSweepObservation {
+            var o=observation(i,loops:[rectangle],open:true); o.walls=o.walls.filter { $0.x<0.39 }; return o
+        }
+        var map=InteriorSweep(seed:[0.1,0,0.1]), result=InteriorSweepResult()
+        for i in 0..<39 { result=map.add(withoutRightSide(i)) }
+        result=map.add(observation(39,loops:[rectangle],open:true))   // first sight of the right side
+        #expect(!result.ready)
+        result=map.add(observation(40,loops:[rectangle],open:true))   // a second view corroborates it
+        #expect(result.ready, "\(result.hint)")
+    }
     @Test func shortFloorPatchIsNotExtrapolatedAlongALongFront() {
         // Base seen past a 40 cm front only along its first 8 cm, rising 1 cm per 10 cm:
         // extrapolating that slope would push the far end past edgeReach.

@@ -125,22 +125,26 @@ struct InteriorSweep: Sendable {
         return cells
     }
 
-    /// When full, the stored view whose evidence the others best cover gives way: fewest
-    /// cells no other view saw, then the pose nearest another view, then the older. Close
-    /// poses can still see different patches, so pose alone never decides. Nil when the
-    /// incoming view adds no cell the stored views lack.
+    /// Views a cell needs before reconstruction uses it: the base is kept from any one
+    /// view, while edges and the underside need two that agree (`fitLines`, `overheadHeight`).
+    static func support(_ kind: UInt8) -> Int { kind == 0 ? 1 : 2 }
+
+    /// When full, the stored view whose loss costs least gives way: fewest cells that would
+    /// fall below the support they need, then the pose nearest another view, then the older.
+    /// Close poses can still see different patches, so pose alone never decides. Nil when
+    /// the incoming view brings no cell closer to its needed support.
     private func viewToReplace(adding incoming: Set<Evidence>) -> Int? {
         var seen: [Evidence: Int] = [:]
         for cells in viewEvidence { for e in cells { seen[e, default: 0] += 1 } }
-        guard incoming.contains(where: { seen[$0] == nil }) else { return nil }
-        let unique = viewEvidence.map { cells in cells.reduce(0) { $0 + (seen[$1] == 1 ? 1 : 0) } }
-        guard let least = unique.min() else { return nil }
+        guard incoming.contains(where: { seen[$0, default: 0] < Self.support($0.kind) }) else { return nil }
+        let cost = viewEvidence.map { cells in cells.reduce(0) { $0 + (seen[$1, default: 0] <= Self.support($1.kind) ? 1 : 0) } }
+        guard let least = cost.min() else { return nil }
         func separation(_ a: InteriorSweepObservation, _ b: InteriorSweepObservation) -> Float {
             let turn = acos(min(1, max(-1, simd_dot(simd_normalize(a.forward), simd_normalize(b.forward)))))
             return simd_distance(a.camera, b.camera) + turn*Self.turnWeight
         }
         var replaced: Int?, nearest = Float.infinity
-        for i in observations.indices where unique[i] == least {
+        for i in observations.indices where cost[i] == least {
             let pose = observations.indices.filter { $0 != i }.map { separation(observations[i], observations[$0]) }.min() ?? .infinity
             if pose < nearest { nearest = pose; replaced = i }
         }
