@@ -65,21 +65,34 @@ final class InteriorScanState {
         } else { takingHeight=true }
     }
     /// Builds the replayable sweep report from the worker (no camera view needed) and keeps
-    /// the latest copy on the device.
+    /// the latest real sweep on the device. A placeholder never replaces a kept sweep.
     func prepareDiagnostics(saveTo directory: URL? = InteriorScanState.diagnosticsDirectory) async {
         let generation = self.generation
-        let report = await sweepWorker.diagnostics(generation: generation)
+        let replay = await sweepWorker.replay(generation: generation)
         guard generation == self.generation else { return }
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"
-        let text = "Build \(build) interior sweep\nLast interruption: \(interruptionReason ?? "none")\n" + report
-        sweepDiagnostics = text
-        guard let directory else { return }
+        let header = "Build \(build) interior sweep\nLast interruption: \(interruptionReason ?? "none")\n"
+        switch replay {
+        case .unavailable(let reason):
+            sweepDiagnostics = header + reason
+            diagnosticsStorage = nil
+        case .available(let json):
+            let text = header + json
+            sweepDiagnostics = text
+            guard let directory else { return }
+            let note = await Self.keep(text, in: directory)
+            if generation == self.generation { diagnosticsStorage = note }
+        }
+    }
+
+    /// Writes a report off the main actor: a full sweep is large enough to stall review.
+    nonisolated private static func keep(_ text: String, in directory: URL) async -> String {
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             try Data(text.utf8).write(to: directory.appending(path: "last-interior-sweep.txt"), options: .atomic)
-            diagnosticsStorage = "A copy is kept on this iPhone for retrieval over USB."
+            return "A copy is kept on this iPhone for retrieval over USB."
         } catch {
-            diagnosticsStorage = "Could not keep a copy on this iPhone: \(error.localizedDescription)"
+            return "Could not keep a copy on this iPhone: \(error.localizedDescription)"
         }
     }
     func chooseAnotherBase() {

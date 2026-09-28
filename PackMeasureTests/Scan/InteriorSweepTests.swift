@@ -443,6 +443,20 @@ struct InteriorSweepTests {
         #expect(try String(contentsOf:directory.appending(path:"last-interior-sweep.txt"),encoding:.utf8)==report)
         #expect(state.diagnosticsStorage?.contains("retrieval over USB")==true)
     }
+    @Test @MainActor func aPlaceholderReportNeverReplacesTheKeptSweep() async throws {
+        // Choosing another base leaves no sweep to report; the kept copy of the finished
+        // sweep must survive, and the sheet must not claim a new copy was kept.
+        let state=InteriorScanState()
+        for i in 0..<3 { _=await state.sweepWorker.process(cabinetFrame(i,fascia:false),seed:[0.2,0,0.15],generation:state.generation) }
+        let directory=FileManager.default.temporaryDirectory.appending(path:UUID().uuidString)
+        await state.prepareDiagnostics(saveTo:directory)
+        let kept=try String(contentsOf:directory.appending(path:"last-interior-sweep.txt"),encoding:.utf8)
+        state.chooseAnotherBase()
+        await state.prepareDiagnostics(saveTo:directory)
+        #expect(state.sweepDiagnostics?.contains("PackMeasure interior sweep v1")==false)
+        #expect(try String(contentsOf:directory.appending(path:"last-interior-sweep.txt"),encoding:.utf8)==kept)
+        #expect(state.diagnosticsStorage?.contains("retrieval over USB") != true)
+    }
     @Test func depthFramesReconstructCabinetIncludingFrontFascia() throws {
         for fascia in [false,true] {
             var map=InteriorSweep(seed:[0.2,0,0.15]), result=InteriorSweepResult()
