@@ -22,6 +22,15 @@ import simd
 /// must still resolve on the final view for a case to pass. A recording holds the views the
 /// sweep kept (at most `InteriorSweep.maxViews`, in capture order), so a replay is the sweep
 /// those views alone would have produced.
+///
+/// Review-time tape. Review can be tapped at any view where it is unlocked, and the scanner
+/// then commits the result it holds (`InteriorScanState.sweepResult`, which a same-revision
+/// result does not replace), so a correct final view does not excuse an earlier wide one.
+/// At every view where review is unlocked, the held outline must have four corners, two
+/// widths each within `widthTolerance` of `tapeWidth` and two depths each inside `depth`,
+/// the same test the final view gets. Widths and depths are told apart by the whole
+/// replay's mean view direction, as for the final view. A view failing any of this is one
+/// `over` view; any `over` view fails the case.
 enum SweepRobustness {
     static let inch: Float = 0.0254
     static let fixtures = ["cabinet-sweep-b59", "cabinet-sweep-b59-partial-front"]
@@ -141,13 +150,17 @@ enum SweepRobustness {
         return Recording(seed: seed, observations: observations)
     }
 
-    struct View: Equatable, Sendable { var corners: Int; var ready: Bool; var stable: Int; var reviewable: Bool; var hint: String }
+    struct Dims: Equatable, Sendable { var widths: [Float]; var depths: [Float] }
+    /// `held` measures the outline the scanner holds after this view (what review commits).
+    struct View: Equatable, Sendable { var corners: Int; var ready: Bool; var stable: Int; var reviewable: Bool; var hint: String; var held: Dims? = nil }
     struct Outcome: Sendable {
         var views: [View]; var result: InteriorSweepResult; var observations: [InteriorSweepObservation]
         var outlineFlips: Int { SweepRobustness.flips(views.map { $0.corners == 4 }) }
         var readyFlips: Int { SweepRobustness.flips(views.map(\.ready)) }
         var reviewFlips: Int { SweepRobustness.flips(views.map(\.reviewable)) }
         var flips: Int { outlineFlips + readyFlips + reviewFlips }
+        /// Indices of the views on which review is unlocked.
+        var reviewViews: [Int] { views.indices.filter { views[$0].reviewable } }
     }
     /// Views after the condition first holds on which it no longer holds.
     static func flips(_ holds: [Bool]) -> Int {
@@ -163,13 +176,14 @@ enum SweepRobustness {
     }
 
     /// Hands every per-view result, in order, to the scanner's review gate, which answers its
-    /// stable-preview count and whether review is unlocked.
+    /// stable-preview count, whether review is unlocked and the result it now holds.
     @MainActor static func outcome(_ recording: Recording, _ results: [InteriorSweepResult],
-                                   gate: @MainActor (InteriorSweepResult) -> (stable: Int, reviewable: Bool)) -> Outcome {
+                                   gate: @MainActor (InteriorSweepResult) -> (stable: Int, reviewable: Bool, held: InteriorSweepResult)) -> Outcome {
+        let look = look(recording.observations)
         let views = results.map { result in
             let state = gate(result)
             return View(corners: result.outline.count, ready: result.ready, stable: state.stable,
-                        reviewable: state.reviewable, hint: result.hint)
+                        reviewable: state.reviewable, hint: result.hint, held: spans(state.held.outline, look: look))
         }
         return Outcome(views: views, result: results.last ?? InteriorSweepResult(), observations: recording.observations)
     }
@@ -177,29 +191,50 @@ enum SweepRobustness {
     /// Dimensions of a resolved four-corner outline: widths run across the view (the back
     /// wall faces the camera), depths along it.
     static func spans(_ outcome: Outcome) -> (widths: [Float], depths: [Float])? {
-        let outline = outcome.result.outline.map { SIMD2($0.x, $0.z) }
+        spans(outcome.result.outline, look: look(outcome.observations)).map { ($0.widths, $0.depths) }
+    }
+    /// The sweep's mean horizontal view direction.
+    static func look(_ observations: [InteriorSweepObservation]) -> SIMD2<Float> {
+        simd_normalize(observations.reduce(SIMD2<Float>.zero) { $0 + SIMD2($1.forward.x, $1.forward.z) })
+    }
+    static func spans(_ outline3: [SIMD3<Float>], look: SIMD2<Float>) -> Dims? {
+        let outline = outline3.map { SIMD2($0.x, $0.z) }
         guard outline.count == 4 else { return nil }
-        let look = simd_normalize(outcome.observations.reduce(SIMD2<Float>.zero) { $0 + SIMD2($1.forward.x, $1.forward.z) })
         var widths: [Float] = [], depths: [Float] = []
         for i in outline.indices {
             let edge = outline[(i+1)%4] - outline[i], length = simd_length(edge)/inch
             if abs(simd_dot(simd_normalize(edge), look)) < 0.5 { widths.append(length) } else { depths.append(length) }
         }
-        return (widths, depths)
+        return Dims(widths: widths, depths: depths)
     }
 
-    /// Everything that fails the tape and flip criteria; empty when the case passes.
+    /// Tape failures of one measured outline.
+    static func tapeProblems(_ dims: Dims) -> [String] {
+        var problems: [String] = []
+        if dims.widths.count != 2 || dims.depths.count != 2 { problems.append("\(dims.widths.count) widths, \(dims.depths.count) depths") }
+        for w in dims.widths where !(abs(w - tapeWidth) < widthTolerance) { problems.append(String(format: "width %.2f in", w)) }
+        for d in dims.depths where !(d > depth.lowerBound && d < depth.upperBound) { problems.append(String(format: "depth %.2f in", d)) }
+        return problems
+    }
+
+    /// Tape failures at the views where review is unlocked, one entry per `over` view.
+    static func reviewProblems(_ outcome: Outcome) -> [String] {
+        outcome.reviewViews.compactMap { i in
+            let found = outcome.views[i].held.map(tapeProblems) ?? ["outline is not four corners"]
+            return found.isEmpty ? nil : "review view \(i): \(found.joined(separator: ", "))"
+        }
+    }
+
+    /// Everything that fails the tape, review-time tape and flip criteria; empty when the case passes.
     static func problems(_ outcome: Outcome) -> [String] {
         var problems: [String] = []
         if let dims = spans(outcome) {
-            if dims.widths.count != 2 || dims.depths.count != 2 { problems.append("\(dims.widths.count) widths, \(dims.depths.count) depths") }
-            for w in dims.widths where !(abs(w - tapeWidth) < widthTolerance) { problems.append(String(format: "width %.2f in", w)) }
-            for d in dims.depths where !(d > depth.lowerBound && d < depth.upperBound) { problems.append(String(format: "depth %.2f in", d)) }
+            problems += tapeProblems(Dims(widths: dims.widths, depths: dims.depths))
         } else {
             problems.append("outline has \(outcome.result.outline.count) corners: \(outcome.result.hint)")
         }
         if outcome.flips > 0 { problems.append("flips outline \(outcome.outlineFlips), ready \(outcome.readyFlips), review \(outcome.reviewFlips)") }
-        return problems
+        return problems + reviewProblems(outcome)
     }
 
     static func metric(fixture: String, case id: String, _ outcome: Outcome) -> String {
@@ -212,6 +247,26 @@ enum SweepRobustness {
 
     static func flipCounts(fixture: String, case id: String, _ outcome: Outcome) -> String {
         "FLIPS fixture=\(fixture) case=\(id) outline=\(outcome.outlineFlips) ready=\(outcome.readyFlips) review=\(outcome.reviewFlips)"
+    }
+
+    /// Review-time tape summary over the views where review is unlocked: how many, how many
+    /// fail the tape (`over`), the first one, and the extreme widths and depths held there.
+    static func review(fixture: String, case id: String, _ outcome: Outcome) -> String {
+        let held = outcome.reviewViews.compactMap { outcome.views[$0].held }
+        let widths = held.flatMap(\.widths), depths = held.flatMap(\.depths)
+        func value(_ v: Float?) -> String { v.map { String(format: "%.2f", $0) } ?? "-" }
+        return "REVIEW fixture=\(fixture) case=\(id) views=\(outcome.reviewViews.count) over=\(reviewProblems(outcome).count) first=\(outcome.reviewViews.first.map(String.init) ?? "-") peakWidth=\(value(widths.max())) minWidth=\(value(widths.min())) peakDepth=\(value(depths.max())) minDepth=\(value(depths.min()))"
+    }
+
+    /// The held widths and depths at each view where review is unlocked.
+    static func reviewTrace(fixture: String, case id: String, _ outcome: Outcome) -> [String] {
+        func list(_ values: [Float]?) -> String {
+            values.map { $0.sorted().map { String(format: "%.2f", $0) }.joined(separator: ",") } ?? "-"
+        }
+        return outcome.reviewViews.map { i in
+            let held = outcome.views[i].held
+            return "RVIEW fixture=\(fixture) case=\(id) view=\(i) widths=\(list(held?.widths)) depths=\(list(held?.depths))"
+        }
     }
 
     static func trace(fixture: String, case id: String, _ outcome: Outcome) -> [String] {
@@ -252,20 +307,25 @@ struct InteriorSweepRobustnessTests {
             state.ready = true
             return SweepRobustness.outcome(recording, results) { value in
                 state.receiveSweep(value, generation: state.generation)
-                return (state.stableSweepPreviews, state.canReviewSweep)
+                return (state.stableSweepPreviews, state.canReviewSweep, state.sweepResult)
             }
         }
     }
 
     /// Replaying the recording view by view, the outline, readiness and the review unlock
-    /// each hold from the first view they appear on. b59 stays not ready by design (one
-    /// patch of its shelf was never observed), so only its outline can flip.
+    /// each hold from the first view they appear on, and wherever review is unlocked the held
+    /// outline is within tape. b59 stays not ready by design (one patch of its shelf was never
+    /// observed), so only its outline can flip and review never unlocks.
     @Test(arguments: SweepRobustness.fixtures)
     func readinessDoesNotFlapOnceTheOutlineResolves(fixture: String) async throws {
         let outcome = await replay(try recording(fixture))
         SweepRobustness.trace(fixture: fixture, case: "recorded", outcome).forEach { print($0) }
         print(SweepRobustness.metric(fixture: fixture, case: "recorded", outcome))
         print(SweepRobustness.flipCounts(fixture: fixture, case: "recorded", outcome))
+        SweepRobustness.reviewTrace(fixture: fixture, case: "recorded", outcome).forEach { print($0) }
+        print(SweepRobustness.review(fixture: fixture, case: "recorded", outcome))
+        let review = SweepRobustness.reviewProblems(outcome)
+        #expect(review.isEmpty, "\(review.joined(separator: "; "))")
         #expect(outcome.views.last?.corners == 4, "\(outcome.result.hint)")
         #expect(outcome.outlineFlips == 0, "outline flips")
         #expect(outcome.readyFlips == 0, "ready flips")
@@ -304,12 +364,14 @@ struct InteriorSweepRobustnessTests {
     }
 
     /// Both device sweeps under the whole perturbation matrix keep a four-corner outline
-    /// within tape tolerance and never flip.
+    /// within tape tolerance, hold only in-tape outlines wherever review is unlocked, and
+    /// never flip.
     @Test(arguments: SweepRobustness.fixtures, SweepRobustness.cases())
     func perturbedSweepStaysWithinTape(fixture: String, perturbation: SweepRobustness.Case) async throws {
         let outcome = await replay(SweepRobustness.perturbed(try recording(fixture), by: perturbation))
         print(SweepRobustness.metric(fixture: fixture, case: perturbation.id, outcome))
         print(SweepRobustness.flipCounts(fixture: fixture, case: perturbation.id, outcome))
+        print(SweepRobustness.review(fixture: fixture, case: perturbation.id, outcome))
         let problems = SweepRobustness.problems(outcome)
         #expect(problems.isEmpty, "\(problems.joined(separator: "; "))")
     }
