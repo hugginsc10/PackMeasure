@@ -1,0 +1,11 @@
+# Tap-focused box isolation (Build 49)
+
+A box scan rejected by the source-mask F05 gate can retry Vision on three bounded views of the same frozen RGB image, centered on the exact tap (80%, 65%, 50% of full width/height). This is a context-refinement attempt; it does not cut the original segmentation mask and accept the remainder. It is limited to explicit Box-mode prompts. Normal successful captures and General Item captures follow their existing paths.
+
+Each focused image is separately segmented. Its selected mask must remain clear of every crop boundary by 2% of the smaller crop dimension (at least 2 pixels). Pixel offsets register it back into the original image. Two different view sizes must agree with intersection-over-union of at least 90%. Their union must fit entirely inside the original selected foreground component; it cannot acquire another original instance. The union preserves both masks' extents rather than shrinking to their intersection.
+
+Only then is the full measurement processor run with the original depth frame, camera calibration and prompt. Existing source/preview edge, target ownership, depth coverage, multiplicity and downstream multi-angle validation remain in force. Failure to obtain acceptable consensus/geometry leaves the original rejection intact. Diagnostics record each crop, selection, rejection and final focused result in the existing user-shared report.
+
+This is an experimental automatic-isolation improvement. Synthetic tests establish coordinate registration, clipped-crop rejection, consensus disagreement rejection, preservation of union extents and original-instance ownership. They do not establish real Vision separation of touching/open boxes or physical measurement accuracy. Context changes may still yield merged masks, in which case the scan remains rejected. Up to three additional Vision requests may increase processing time; no second photo or manual corner marking is required.
+
+Physical test: repeat the lower-box tap/photo once with Build 49; share the diagnostic report and matching screenshot. The report should contain focus_window and focus_result. A successful result still needs comparison against known box dimensions before accuracy can be accepted.

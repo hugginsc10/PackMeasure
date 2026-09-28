@@ -139,13 +139,23 @@ struct GuidedBoxWorkflow: Sendable {
         case .referenceCorner:
             break
         case .lengthEndpoint:
+            referenceCorner = nil
+            lengthEndpoint = nil
+            widthEndpoint = nil
+            heightEndpoint = nil
             step = .referenceCorner
         case .widthEndpoint:
+            lengthEndpoint = nil
+            widthEndpoint = nil
+            heightEndpoint = nil
             step = .lengthEndpoint
         case .heightEndpoint:
+            widthEndpoint = nil
+            heightEndpoint = nil
             step = .widthEndpoint
         case .review:
             measurement = nil
+            heightEndpoint = nil
             step = .heightEndpoint
         case .complete:
             step = .review
