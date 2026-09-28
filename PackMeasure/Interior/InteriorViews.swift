@@ -126,7 +126,7 @@ struct InteriorReviewView: View {
                 }
             }
             Section("Verify or correct the outline") {
-                Text("Coordinates are in \(unit.symbol), relative to point 1. The first edge defines the horizontal axis. Use physical measurements to correct points before exporting.")
+                Text("Coordinates are in \(unit.title.lowercased()), relative to point 1. The first edge defines the horizontal axis. Use physical measurements to correct points before exporting.")
                     .font(.caption).foregroundStyle(.secondary)
                 ForEach(record.contours.indices, id: \.self) { loopIndex in
                     DisclosureGroup(loopIndex == 0 ? "Inside perimeter" : "Obstacle \(loopIndex)") {
