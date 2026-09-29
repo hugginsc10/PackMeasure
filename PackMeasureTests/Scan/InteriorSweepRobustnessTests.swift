@@ -31,9 +31,40 @@ import simd
 /// the same test the final view gets. Widths and depths are told apart by the whole
 /// replay's mean view direction, as for the final view. A view failing any of this is one
 /// `over` view; any `over` view fails the case.
+///
+/// Coverage classes. Each fixture is either a successful capture or outline-only evidence
+/// (`coverage`), and its perturbation cases inherit that class. Both classes need a final
+/// four-corner outline within tape, zero flips of each kind and in-tape held outlines at every
+/// review-unlocked view. A capture must also unlock review at least once, so a replay that
+/// never reaches review can not pass as a capture. An outline-only replay that does unlock
+/// review fails with a request to reclassify it, so it can not be counted silently either.
+/// Every output line carries `class=capture` or `class=outline` after `case=`.
 enum SweepRobustness {
     static let inch: Float = 0.0254
-    static let fixtures = ["cabinet-sweep-b59", "cabinet-sweep-b59-partial-front"]
+
+    /// What a fixture's replay is evidence of. The class is fixed per recording, never derived
+    /// from a result, so a capture that stops reaching review fails instead of being demoted.
+    enum Coverage: String, Sendable {
+        /// Successful capture: review unlocks, every review-unlocked view is within tape, and
+        /// the outline, readiness and the unlock each hold to the last view once they appear.
+        case capture
+        /// Outline-only: the scan is incomplete, so review never unlocks by design. Its final
+        /// dimensions are outline evidence, not a successful capture.
+        case outline
+    }
+    /// Every fixture and its class, in replay order. Reclassifying one is a one-line change.
+    static let coverage: [(fixture: String, coverage: Coverage)] = [
+        // One patch of its shelf was never observed, so it waits on the gap hint and never
+        // unlocks review. Outline-only until that incomplete scan is addressed.
+        ("cabinet-sweep-b59", .outline),
+        // Same compartment with front evidence along part of the edge; review unlocks.
+        ("cabinet-sweep-b59-partial-front", .capture),
+    ]
+    static let fixtures = coverage.map(\.fixture)
+    static func fixtures(_ kind: Coverage) -> [String] { coverage.filter { $0.coverage == kind }.map(\.fixture) }
+    static func coverage(of fixture: String) -> Coverage? { coverage.first { $0.fixture == fixture }?.coverage }
+    /// The `class=` value of every output line.
+    static func label(_ fixture: String) -> String { coverage(of: fixture)?.rawValue ?? "unclassified" }
     /// Tape: 10.5 in side to side (each width within 0.3 in of it), 11.2 in from the back wall
     /// to the shelf front edge (each depth strictly inside this range; it may stay short).
     static let tapeWidth: Float = 10.5, widthTolerance: Float = 0.3, depth: ClosedRange<Float> = 10.6...11.3
@@ -225,16 +256,60 @@ enum SweepRobustness {
         }
     }
 
-    /// Everything that fails the tape, review-time tape and flip criteria; empty when the case passes.
-    static func problems(_ outcome: Outcome) -> [String] {
-        var problems: [String] = []
+    /// One failed requirement: a stable code for the ACCEPT line, and what failed.
+    struct Failure: Sendable { var code: String; var detail: String }
+
+    /// The requirements both classes share: a final four-corner outline within tape, no flips
+    /// of the outline, readiness or the review unlock, and in-tape held outlines wherever
+    /// review is unlocked (vacuous for a replay that never unlocks it, hence the classes).
+    static func sharedFailures(_ outcome: Outcome) -> [Failure] {
+        var failures: [Failure] = []
         if let dims = spans(outcome) {
-            problems += tapeProblems(Dims(widths: dims.widths, depths: dims.depths))
+            failures += tapeProblems(Dims(widths: dims.widths, depths: dims.depths)).map { Failure(code: "final-tape", detail: $0) }
         } else {
-            problems.append("outline has \(outcome.result.outline.count) corners: \(outcome.result.hint)")
+            failures.append(Failure(code: "final-outline", detail: "outline has \(outcome.result.outline.count) corners: \(outcome.result.hint)"))
         }
-        if outcome.flips > 0 { problems.append("flips outline \(outcome.outlineFlips), ready \(outcome.readyFlips), review \(outcome.reviewFlips)") }
-        return problems + reviewProblems(outcome)
+        if outcome.flips > 0 {
+            failures.append(Failure(code: "flips", detail: "flips outline \(outcome.outlineFlips), ready \(outcome.readyFlips), review \(outcome.reviewFlips)"))
+        }
+        return failures + reviewProblems(outcome).map { Failure(code: "review-tape", detail: $0) }
+    }
+    /// The shared requirements' failures alone, class-blind; empty when they all hold.
+    static func problems(_ outcome: Outcome) -> [String] { sharedFailures(outcome).map(\.detail) }
+
+    static func neverReachesReview(_ fixture: String) -> String {
+        "never reaches Review: capture fixture \(fixture) must unlock review at least once"
+    }
+    static func reclassify(_ fixture: String, _ outcome: Outcome) -> String {
+        "outline-only fixture \(fixture) unlocks Review at views \(outcome.reviewViews.map(String.init).joined(separator: ",")):"
+            + " reclassify it as capture in SweepRobustness.coverage, it is no longer outline-only"
+    }
+
+    /// Acceptance for the fixture's class; empty when the case passes. A capture fails when
+    /// review never unlocks; an outline-only replay fails when it does.
+    static func acceptance(fixture: String, _ outcome: Outcome) -> [Failure] {
+        var failures = sharedFailures(outcome)
+        switch coverage(of: fixture) {
+        case .capture?: if outcome.reviewViews.isEmpty { failures.append(Failure(code: "no-review", detail: neverReachesReview(fixture))) }
+        case .outline?: if !outcome.reviewViews.isEmpty { failures.append(Failure(code: "reclassify", detail: reclassify(fixture, outcome))) }
+        case nil: failures.append(Failure(code: "unclassified", detail: "\(fixture) has no entry in SweepRobustness.coverage"))
+        }
+        return failures
+    }
+
+    /// The verdict line: class, pass or fail, review-unlocked view count and failed codes.
+    static func accept(fixture: String, case id: String, _ outcome: Outcome) -> String {
+        var codes: [String] = []
+        for failure in acceptance(fixture: fixture, outcome) where !codes.contains(failure.code) { codes.append(failure.code) }
+        return "ACCEPT fixture=\(fixture) case=\(id) class=\(label(fixture)) result=\(codes.isEmpty ? "PASS" : "FAIL") reviewViews=\(outcome.reviewViews.count) fails=\(codes.isEmpty ? "-" : codes.joined(separator: ","))"
+    }
+
+    /// Every line one case prints, in order; `traced` adds the per-view TRACE and RVIEW lines.
+    static func report(fixture: String, case id: String, _ outcome: Outcome, traced: Bool) -> [String] {
+        (traced ? trace(fixture: fixture, case: id, outcome) : [])
+            + [metric(fixture: fixture, case: id, outcome), flipCounts(fixture: fixture, case: id, outcome)]
+            + (traced ? reviewTrace(fixture: fixture, case: id, outcome) : [])
+            + [review(fixture: fixture, case: id, outcome), accept(fixture: fixture, case: id, outcome)]
     }
 
     static func metric(fixture: String, case id: String, _ outcome: Outcome) -> String {
@@ -242,11 +317,11 @@ enum SweepRobustness {
             values.map { $0.sorted().map { String(format: "%.2f", $0) }.joined(separator: ",") } ?? "-"
         }
         let dims = spans(outcome)
-        return "METRIC fixture=\(fixture) case=\(id) corners=\(outcome.result.outline.count) widths=\(list(dims?.widths)) depths=\(list(dims?.depths)) flips=\(outcome.flips) ready=\(outcome.result.ready)"
+        return "METRIC fixture=\(fixture) case=\(id) class=\(label(fixture)) corners=\(outcome.result.outline.count) widths=\(list(dims?.widths)) depths=\(list(dims?.depths)) flips=\(outcome.flips) ready=\(outcome.result.ready)"
     }
 
     static func flipCounts(fixture: String, case id: String, _ outcome: Outcome) -> String {
-        "FLIPS fixture=\(fixture) case=\(id) outline=\(outcome.outlineFlips) ready=\(outcome.readyFlips) review=\(outcome.reviewFlips)"
+        "FLIPS fixture=\(fixture) case=\(id) class=\(label(fixture)) outline=\(outcome.outlineFlips) ready=\(outcome.readyFlips) review=\(outcome.reviewFlips)"
     }
 
     /// Review-time tape summary over the views where review is unlocked: how many, how many
@@ -255,7 +330,7 @@ enum SweepRobustness {
         let held = outcome.reviewViews.compactMap { outcome.views[$0].held }
         let widths = held.flatMap(\.widths), depths = held.flatMap(\.depths)
         func value(_ v: Float?) -> String { v.map { String(format: "%.2f", $0) } ?? "-" }
-        return "REVIEW fixture=\(fixture) case=\(id) views=\(outcome.reviewViews.count) over=\(reviewProblems(outcome).count) first=\(outcome.reviewViews.first.map(String.init) ?? "-") peakWidth=\(value(widths.max())) minWidth=\(value(widths.min())) peakDepth=\(value(depths.max())) minDepth=\(value(depths.min()))"
+        return "REVIEW fixture=\(fixture) case=\(id) class=\(label(fixture)) views=\(outcome.reviewViews.count) over=\(reviewProblems(outcome).count) first=\(outcome.reviewViews.first.map(String.init) ?? "-") peakWidth=\(value(widths.max())) minWidth=\(value(widths.min())) peakDepth=\(value(depths.max())) minDepth=\(value(depths.min()))"
     }
 
     /// The held widths and depths at each view where review is unlocked.
@@ -265,13 +340,13 @@ enum SweepRobustness {
         }
         return outcome.reviewViews.map { i in
             let held = outcome.views[i].held
-            return "RVIEW fixture=\(fixture) case=\(id) view=\(i) widths=\(list(held?.widths)) depths=\(list(held?.depths))"
+            return "RVIEW fixture=\(fixture) case=\(id) class=\(label(fixture)) view=\(i) widths=\(list(held?.widths)) depths=\(list(held?.depths))"
         }
     }
 
     static func trace(fixture: String, case id: String, _ outcome: Outcome) -> [String] {
         outcome.views.enumerated().map { i, v in
-            "TRACE fixture=\(fixture) case=\(id) view=\(i) corners=\(v.corners) ready=\(v.ready) stable=\(v.stable) review=\(v.reviewable) hint=\(v.hint)"
+            "TRACE fixture=\(fixture) case=\(id) class=\(label(fixture)) view=\(i) corners=\(v.corners) ready=\(v.ready) stable=\(v.stable) review=\(v.reviewable) hint=\(v.hint)"
         }
     }
 }
@@ -312,24 +387,47 @@ struct InteriorSweepRobustnessTests {
         }
     }
 
-    /// Replaying the recording view by view, the outline, readiness and the review unlock
-    /// each hold from the first view they appear on, and wherever review is unlocked the held
-    /// outline is within tape. b59 stays not ready by design (one patch of its shelf was never
-    /// observed), so only its outline can flip and review never unlocks.
-    @Test(arguments: SweepRobustness.fixtures)
-    func readinessDoesNotFlapOnceTheOutlineResolves(fixture: String) async throws {
-        let outcome = await replay(try recording(fixture))
-        SweepRobustness.trace(fixture: fixture, case: "recorded", outcome).forEach { print($0) }
-        print(SweepRobustness.metric(fixture: fixture, case: "recorded", outcome))
-        print(SweepRobustness.flipCounts(fixture: fixture, case: "recorded", outcome))
-        SweepRobustness.reviewTrace(fixture: fixture, case: "recorded", outcome).forEach { print($0) }
-        print(SweepRobustness.review(fixture: fixture, case: "recorded", outcome))
+    /// Replays and prints every line of one case (TRACE and RVIEW for recorded replays).
+    func scored(_ fixture: String, case id: String, _ recording: SweepRobustness.Recording, traced: Bool) async -> SweepRobustness.Outcome {
+        let outcome = await replay(recording)
+        SweepRobustness.report(fixture: fixture, case: id, outcome, traced: traced).forEach { print($0) }
+        return outcome
+    }
+
+    /// Successful capture, replayed view by view: review unlocks, the held outline is within
+    /// tape at every view where it is unlocked, the final outline has four corners within tape,
+    /// and the outline, readiness and the unlock each hold from the first view they appear on,
+    /// so once review unlocks it stays unlocked through the last view.
+    @Test(arguments: SweepRobustness.fixtures(.capture))
+    func captureReachesReviewWithinTapeAndHoldsIt(fixture: String) async throws {
+        let outcome = await scored(fixture, case: "recorded", try recording(fixture), traced: true)
         let review = SweepRobustness.reviewProblems(outcome)
-        #expect(review.isEmpty, "\(review.joined(separator: "; "))")
-        #expect(outcome.views.last?.corners == 4, "\(outcome.result.hint)")
-        #expect(outcome.outlineFlips == 0, "outline flips")
-        #expect(outcome.readyFlips == 0, "ready flips")
-        #expect(outcome.reviewFlips == 0, "review flips")
+        let final = SweepRobustness.spans(outcome).map { SweepRobustness.tapeProblems(.init(widths: $0.widths, depths: $0.depths)) } ?? []
+        #expect(!outcome.reviewViews.isEmpty, "capture: \(SweepRobustness.neverReachesReview(fixture))")
+        #expect(review.isEmpty, "capture: \(review.joined(separator: "; "))")
+        #expect(outcome.views.last?.corners == 4, "capture: \(outcome.result.hint)")
+        #expect(final.isEmpty, "capture: final \(final.joined(separator: ", "))")
+        #expect(outcome.outlineFlips == 0, "capture: outline flips")
+        #expect(outcome.readyFlips == 0, "capture: ready flips")
+        #expect(outcome.reviewFlips == 0, "capture: review flips")
+    }
+
+    /// Outline-only, replayed view by view: the final outline has four corners within tape and
+    /// nothing flips. b59 stays not ready by design (one patch of its shelf was never observed),
+    /// so review never unlocks. If it ever does, the held outline must still be within tape at
+    /// each such view, and the replay fails asking for the fixture to be reclassified as capture.
+    @Test(arguments: SweepRobustness.fixtures(.outline))
+    func outlineOnlyReplayResolvesWithinTapeWithoutFlapping(fixture: String) async throws {
+        let outcome = await scored(fixture, case: "recorded", try recording(fixture), traced: true)
+        let review = SweepRobustness.reviewProblems(outcome)
+        let final = SweepRobustness.spans(outcome).map { SweepRobustness.tapeProblems(.init(widths: $0.widths, depths: $0.depths)) } ?? []
+        #expect(outcome.reviewViews.isEmpty, "outline-only: \(SweepRobustness.reclassify(fixture, outcome))")
+        #expect(review.isEmpty, "outline-only: \(review.joined(separator: "; "))")
+        #expect(outcome.views.last?.corners == 4, "outline-only: \(outcome.result.hint)")
+        #expect(final.isEmpty, "outline-only: final \(final.joined(separator: ", "))")
+        #expect(outcome.outlineFlips == 0, "outline-only: outline flips")
+        #expect(outcome.readyFlips == 0, "outline-only: ready flips")
+        #expect(outcome.reviewFlips == 0, "outline-only: review flips")
     }
 
     /// Harness self-check: the identity perturbation runs the transform code and must
@@ -363,16 +461,22 @@ struct InteriorSweepRobustnessTests {
         }
     }
 
-    /// Both device sweeps under the whole perturbation matrix keep a four-corner outline
-    /// within tape tolerance, hold only in-tape outlines wherever review is unlocked, and
-    /// never flip.
-    @Test(arguments: SweepRobustness.fixtures, SweepRobustness.cases())
-    func perturbedSweepStaysWithinTape(fixture: String, perturbation: SweepRobustness.Case) async throws {
-        let outcome = await replay(SweepRobustness.perturbed(try recording(fixture), by: perturbation))
-        print(SweepRobustness.metric(fixture: fixture, case: perturbation.id, outcome))
-        print(SweepRobustness.flipCounts(fixture: fixture, case: perturbation.id, outcome))
-        print(SweepRobustness.review(fixture: fixture, case: perturbation.id, outcome))
-        let problems = SweepRobustness.problems(outcome)
-        #expect(problems.isEmpty, "\(problems.joined(separator: "; "))")
+    /// Every capture perturbation case must pass capture acceptance: reach review, hold only
+    /// in-tape outlines wherever review is unlocked, end on a four-corner outline within tape,
+    /// and never flip.
+    @Test(arguments: SweepRobustness.fixtures(.capture), SweepRobustness.cases())
+    func perturbedCaptureReachesReviewWithinTape(fixture: String, perturbation: SweepRobustness.Case) async throws {
+        let outcome = await scored(fixture, case: perturbation.id, SweepRobustness.perturbed(try recording(fixture), by: perturbation), traced: false)
+        let failures = SweepRobustness.acceptance(fixture: fixture, outcome)
+        #expect(failures.isEmpty, "capture: \(failures.map(\.detail).joined(separator: "; "))")
+    }
+
+    /// Every outline-only perturbation case must end on a four-corner outline within tape and
+    /// never flip; one that unlocks review must be within tape there and asks for reclassifying.
+    @Test(arguments: SweepRobustness.fixtures(.outline), SweepRobustness.cases())
+    func perturbedOutlineOnlyStaysWithinTape(fixture: String, perturbation: SweepRobustness.Case) async throws {
+        let outcome = await scored(fixture, case: perturbation.id, SweepRobustness.perturbed(try recording(fixture), by: perturbation), traced: false)
+        let failures = SweepRobustness.acceptance(fixture: fixture, outcome)
+        #expect(failures.isEmpty, "outline-only: \(failures.map(\.detail).joined(separator: "; "))")
     }
 }
