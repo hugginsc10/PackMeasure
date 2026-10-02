@@ -309,8 +309,7 @@ struct InteriorSweepTests {
         let loop=try #require(result.loops.first)
         #expect(abs(loop.map(\.z).max()!-loop.map(\.z).min()!-0.3)<0.006)
     }
-    /// Exercises issue #33: a hinge plate standing 1 cm inside a side. Also needs the `fitLines`
-    /// density step, so it fails until that lands.
+    /// Exercises issue #33: a hinge plate standing 1 cm inside a side.
     @Test func hingePlateInsideASideNarrowsTheOutlineConservatively() throws {
         var map=InteriorSweep(seed:[0.1,0,0.1]), result=InteriorSweepResult()
         for i in 0..<4 {
@@ -333,8 +332,7 @@ struct InteriorSweepTests {
         #expect(abs(loop.map(\.x).max()!-0.4)<0.002 && abs(loop.map(\.z).max()!-0.3)<0.002 && abs(loop.map(\.z).min()!)<0.002, "\(loop)")
     }
     /// Exercises issue #33: a side scattered uniformly by ±8 mm must fit as one edge at its
-    /// mean, not as parallel fits that collapse inward. Also needs the `fitLines` density step,
-    /// so it fails until that lands.
+    /// mean, not as parallel fits that collapse inward.
     @Test func noisySideStillFitsAsOneEdgeWithoutInwardShrink() throws {
         var map=InteriorSweep(seed:[0.1,0,0.1]), result=InteriorSweepResult()
         for i in 0..<4 {
@@ -346,6 +344,24 @@ struct InteriorSweepTests {
         let loop=try #require(result.loops.first)
         #expect(loop.count==4 && result.boundaryCount==4, "\(loop.count) vertices · \(result.boundaryCount) boundaries")
         #expect(abs(loop.map(\.x).max()!-loop.map(\.x).min()!-0.4)<0.004, "\(loop)")
+    }
+    /// Exercises issue #33 at the line level: a 30 cm panel scattered ±2 mm across three views
+    /// with a dense band 12 mm inside it over 8 cm. Only the density step gives the band its
+    /// own line; without it the band is cleared as the panel's scatter.
+    @Test func aDenseBandInsideASideGetsItsOwnLine() throws {
+        var samples=[InteriorSweep.Sample]()
+        for view in 0..<3 {
+            for k in 0...60 { samples.append(.init(p:[Float((k*7+view)%5-2)*0.001,0.005*Float(k)],view:view)) }
+            for k in 0...16 { samples.append(.init(p:[0.012+Float((k*7+view+1)%5-2)*0.001,0.02+0.005*Float(k)],view:view)) }
+        }
+        let lines=InteriorSweep.fitLines(samples,nearerSurfaces:true)
+        #expect(lines.count==2, "\(lines)")
+        let panel=try #require(lines.first { abs($0.offset)<0.003 }, "\(lines)")
+        let plate=try #require(lines.first { abs(abs($0.offset)-0.012)<0.003 }, "\(lines)")
+        #expect(abs(panel.high-panel.low-0.3)<0.01, "\(panel)")
+        let ends=[abs(plate.low),abs(plate.high)].sorted()
+        #expect(abs(ends[0]-0.02)<0.008 && abs(ends[1]-0.10)<0.008, "\(plate)")
+        #expect(InteriorSweep.fitLines(samples,nearerSurfaces:false).count==1)
     }
     @Test func nearlyParallelSliverCollapsesToTheInnerSide() throws {
         // A short surface just beyond a side (trim, the wall past a cabinet) that the

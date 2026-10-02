@@ -53,6 +53,25 @@ struct InteriorSweep: Sendable {
     /// Scatter of one flat surface across LiDAR views; parallel surfaces closer than
     /// this are below the sweep's resolution and fit as a single edge.
     static let surfaceBand: Float = 0.015
+    /// Half-width of a slab of samples the density step treats as one surface, and the width
+    /// of each shoulder beside it: the 6 mm band RANSAC itself calls one surface.
+    static let slabHalf: Float = 0.003
+    /// Slab centres tried on either side of a fitted line, in millimetres: nearer than 5 mm is
+    /// below the sweep's resolution, and a surface centred at 15 mm or more keeps half its
+    /// samples past `surfaceBand`, where RANSAC fits it on its own.
+    static let slabCentres = 5...14
+    /// How far from a fitted line the samples a slab may draw on are taken: the furthest
+    /// centre plus `slabHalf`, so a slab centred at 14 mm is whole.
+    static let slabReach: Float = 0.017
+    /// A slab must hold this many times the samples of each 3 mm shoulder beside it over the
+    /// same stretch; one surface's tail thins away and gives at most twice.
+    static let peakFactor: Float = 3
+    /// A slab's samples per metre must reach this fraction of the fitted line's own: Gaussian
+    /// tails inside the best slab stay below 0.27, real plates above 0.45.
+    static let densityFraction: Float = 0.3
+    /// No two adjacent `cell`-wide steps along a slab may hold more than this share of its
+    /// samples: a wall crossing the band at a corner clusters, a surface fills its span.
+    static let clusterShareMax: Float = 0.5
     /// Spacing along an open front at which the observed base's reach is sampled.
     static let frontBin: Float = 0.02
 
@@ -412,7 +431,9 @@ struct InteriorSweep: Sendable {
             }
             return values
         }
-        return Self.fitLines(samples(\.walls)) + Self.fitLines(samples(\.front)).map(snappedToObservedBase)
+        // Only the walls are searched for a nearer surface inside them: an open front is a
+        // drop, not a surface, and `snappedToObservedBase` only ever moves it outward.
+        return Self.fitLines(samples(\.walls), nearerSurfaces: true) + Self.fitLines(samples(\.front)).map(snappedToObservedBase)
     }
 
     /// An open front cannot cut through base the sweep observed. Depth blur at the drop
@@ -478,7 +499,91 @@ struct InteriorSweep: Sendable {
         return lowest
     }
 
-    static func fitLines(_ input: [Sample]) -> [Line] {
+    /// The line through `points` by principal component: its unit normal, offset and tangent.
+    static func fit(_ points: [Sample]) -> (normal: SIMD2<Float>, offset: Float, tangent: SIMD2<Float>) {
+        let mean=points.reduce(SIMD2<Float>.zero) { $0+$1.p } / Float(points.count)
+        var xx: Float=0, xy: Float=0, yy: Float=0
+        for p in points { let d=p.p-mean; xx += d.x*d.x; xy += d.x*d.y; yy += d.y*d.y }
+        let angle=0.5*atan2(2*xy,xx-yy), tangent=SIMD2(cos(angle),sin(angle)), normal=SIMD2(-sin(angle),cos(angle))
+        return (normal:normal,offset:simd_dot(normal,mean),tangent:tangent)
+    }
+    /// `samples` sorted along `tangent` and split at gaps over 4.5 cm; a run counts when it
+    /// spans at least 3.5 cm and two views saw it, the support `fitLines` asks of a line.
+    static func runs(of samples: [Sample], tangent: SIMD2<Float>) -> [(low: Float, high: Float, samples: [Sample])] {
+        let sorted=samples.map { (t:simd_dot(tangent,$0.p),s:$0) }.sorted { $0.t < $1.t }
+        var out: [(low: Float, high: Float, samples: [Sample])] = [], group: [(t:Float,s:Sample)] = []
+        func flush() {
+            if let a=group.first, let b=group.last, b.t-a.t >= 0.035, Set(group.map { $0.s.view }).count >= 2 {
+                out.append((low:a.t,high:b.t,samples:group.map { $0.s }))
+            }
+            group=[]
+        }
+        for e in sorted { if let last=group.last, e.t-last.t > 0.045 { flush() }; group.append(e) }
+        flush()
+        return out
+    }
+    /// Up to one nearer parallel surface on each side of the line (`normal`, `offset`): a slab
+    /// of `residue` 5–14 mm from it that is denser than the scatter on either side of it and has
+    /// a line's own support is a surface in its own right (a hinge plate, a stop), not the
+    /// line's tail. Each element is one surface's runs as lines sharing its fit. `pool` is
+    /// everything the line was fitted from, for the shoulder counts, and `refDensity` the
+    /// line's own inlier samples per metre.
+    static func nearerParallelSurfaces(in residue: [Sample], pool: [Sample], normal: SIMD2<Float>, offset: Float,
+                                       tangent: SIMD2<Float>, refDensity: Float) -> [[Line]] {
+        var out: [[Line]] = []
+        for sign in [Float(1), -1] {
+            var best: (count: Int, runs: [[Sample]])? = nil
+            for centre in Self.slabCentres {   // ascending, so a tie keeps the nearer centre
+                let c=Float(centre)*0.001
+                let slab=residue.filter { abs(sign*(simd_dot(normal,$0.p)-offset)-c) <= Self.slabHalf }
+                guard slab.count >= 12 else { continue }
+                var passing: [[Sample]] = []
+                for run in Self.runs(of: slab, tangent: tangent) where run.samples.count >= 12 {
+                    // A wall crossing the band at a corner puts its samples into one or two
+                    // steps along the tangent, and a few tail samples stretch that into a run;
+                    // a surface fills its span.
+                    let first=Int(floor(run.low/Self.cell)), last=Int(floor(run.high/Self.cell))
+                    var counts=[Int](repeating:0,count:last-first+2)
+                    for s in run.samples { counts[min(max(Int(floor(simd_dot(tangent,s.p)/Self.cell))-first,0),last-first)] += 1 }
+                    var pair=0
+                    for k in 0..<(counts.count-1) { pair=max(pair,counts[k]+counts[k+1]) }
+                    guard Float(pair) <= Self.clusterShareMax*Float(run.samples.count) else { continue }
+                    // As dense as the line itself over the run's own span.
+                    guard Float(run.samples.count)/(run.high-run.low) >= Self.densityFraction*refDensity else { continue }
+                    // The slab must stand out from both 3 mm shoulders over that span, counted
+                    // on everything the line was fitted from: a tail thins away, a surface peaks.
+                    var slabN=0, nearN=0, farN=0
+                    for s in pool {
+                        let t=simd_dot(tangent,s.p)
+                        guard t >= run.low, t <= run.high else { continue }
+                        let d=sign*(simd_dot(normal,s.p)-offset)-c
+                        if abs(d) <= Self.slabHalf { slabN += 1 }
+                        else if d < -Self.slabHalf && d >= -2*Self.slabHalf { nearN += 1 }
+                        else if d > Self.slabHalf && d <= 2*Self.slabHalf { farN += 1 }
+                    }
+                    guard Float(slabN) >= Self.peakFactor*Float(nearN), Float(slabN) >= Self.peakFactor*Float(farN) else { continue }
+                    passing.append(run.samples)
+                }
+                let total=passing.reduce(0) { $0+$1.count }
+                if !passing.isEmpty, total > (best?.count ?? 0) { best=(count:total,runs:passing) }
+            }
+            guard let best else { continue }
+            let surface=Self.fit(best.runs.flatMap { $0 })
+            // Parallel to the line by the collapse's own tolerance (`duplicate`): an oblique
+            // sliver crossing the band is not a nearer surface.
+            guard abs(normal.x*surface.normal.y-normal.y*surface.normal.x) <= 0.12 else { continue }
+            out.append(best.runs.map { run -> Line in
+                let ts=run.map { simd_dot(surface.tangent,$0.p) }
+                return Line(normal:surface.normal,offset:surface.offset,low:ts.min()!,high:ts.max()!)
+            })
+        }
+        return out
+    }
+
+    /// With `nearerSurfaces`, a denser band of samples a few millimetres inside a fitted line
+    /// also gets a line of its own (`nearerParallelSurfaces`); its band is cleared like any
+    /// line's, and it is never itself searched again.
+    static func fitLines(_ input: [Sample], nearerSurfaces: Bool = false) -> [Line] {
         var remaining = input, lines: [Line] = []
         while remaining.count >= 12 && lines.count < 32 {
             var best: [Int] = []
@@ -493,6 +598,7 @@ struct InteriorSweep: Sendable {
                 if indices.count > best.count { best=indices }
             }
             guard best.count >= 12 else { break }
+            let pool=nearerSurfaces ? remaining : []   // everything this round saw, inliers included
             let points=best.map { remaining[$0] }
             let rejected=Set(best)
             remaining=remaining.enumerated().filter { !rejected.contains($0.offset) }.map(\.element)
@@ -504,6 +610,8 @@ struct InteriorSweep: Sendable {
             // One surface scatters wider than the narrow band that found it. Clear the rest
             // of its band so those tails cannot fit parallel duplicates or corner slivers.
             let offset=simd_dot(normal,mean)
+            // What the band holds besides the inliers, out to one slab past it, before it is cleared.
+            let residue=nearerSurfaces ? remaining.filter { abs(simd_dot(normal,$0.p)-offset) <= Self.slabReach } : []
             remaining=remaining.filter { abs(simd_dot(normal,$0.p)-offset) > surfaceBand }
             let sorted=points.map { (t:simd_dot(tangent,$0.p),view:$0.view) }.sorted { $0.t < $1.t }
             var group: [(t:Float,view:Int)] = []
@@ -516,6 +624,16 @@ struct InteriorSweep: Sendable {
                 group.append(p)
             }
             flush()
+            guard !residue.isEmpty else { continue }
+            let ts=points.map { simd_dot(tangent,$0.p) }, refDensity=Float(points.count)/max(ts.max()!-ts.min()!,1e-6)
+            for sub in Self.nearerParallelSurfaces(in:residue,pool:pool,normal:normal,offset:offset,tangent:tangent,refDensity:refDensity) {
+                guard lines.count+sub.count <= 32 else { break }
+                lines += sub
+                // An accepted surface: clear its own scatter band so the tail past this line's
+                // band cannot refit as a duplicate of it.
+                let s=sub[0]
+                remaining=remaining.filter { abs(simd_dot(s.normal,$0.p)-s.offset) > surfaceBand }
+            }
         }
         return lines
     }
