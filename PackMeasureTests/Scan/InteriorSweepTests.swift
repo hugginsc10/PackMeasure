@@ -158,7 +158,7 @@ struct InteriorSweepTests {
         let lines=[L(normal:[0,1],offset:0,low:0,high:0.4),        // front
                    L(normal:[1,0],offset:0,low:-0.3,high:0),       // side
                    L(normal:[1,0],offset:-0.021,low:-0.06,high:0)] // sliver 2.1 cm beyond it
-        let runs=InteriorSweep.collapsingDuplicateSides([(0,[0.2,0],[0,1]),(2,[-0.021,0.02],[1,0]),(1,[0,0.1],[1,0])],lines:lines)
+        let runs=InteriorSweep.collapsingDuplicateSides([(0,[0.2,0],[0,1]),(2,[-0.021,0.02],[1,0]),(1,[0,0.1],[1,0])],lines:lines).runs
         #expect(runs.map(\.line)==[0,1])
     }
     @Test func duplicateObstacleEdgeCollapsesOutwardToKeepTheObstacle() {
@@ -171,7 +171,7 @@ struct InteriorSweepTests {
                    L(normal:[0,1],offset:0.20,low:0.2,high:0.29),     // obstacle top
                    L(normal:[1,0],offset:0.20,low:-0.2,high:-0.1)]    // obstacle left
         let runs=InteriorSweep.collapsingDuplicateSides([(0,[0.245,0.10],[0,-1]),(1,[0.29,0.13],[1,0]),(2,[0.29,0.17],[1,0]),
-                                                         (3,[0.245,0.20],[0,1]),(4,[0.20,0.15],[-1,0])],lines:lines)
+                                                         (3,[0.245,0.20],[0,1]),(4,[0.20,0.15],[-1,0])],lines:lines).runs
         #expect(runs.map(\.line)==[0,2,3,4])
     }
     @Test func genuineShallowBendIsNotStraightenedAway() {
@@ -186,7 +186,23 @@ struct InteriorSweepTests {
                    L(normal:bend,offset:simd_dot(bend,[0.2,0.3]),low:-0.2,high:0.0),           // back, bent 6°
                    L(normal:[1,0],offset:0,low:-0.32,high:0)]                                 // left
         let input: [InteriorSweep.Run]=[(0,[0.2,0],[0,1]),(1,[0.4,0.15],[-1,0]),(2,[0.3,0.3],[0,-1]),(3,[0.199,0.3],[0,-1]),(4,[0,0.15],[1,0])]
-        #expect(InteriorSweep.collapsingDuplicateSides(input,lines:lines).map(\.line)==[0,1,2,3,4])
+        #expect(InteriorSweep.collapsingDuplicateSides(input,lines:lines).runs.map(\.line)==[0,1,2,3,4])
+    }
+    @Test func hingePlateCollapsesWholeSideAndWidensTheKeptExtent() {
+        // A hinge plate 1 cm inside the left side is matched along 8 cm of the ring. It bounds
+        // the usable width, so it replaces the whole side; the kept line must then span the
+        // side's full extent, or the corners at either end lose their support.
+        typealias L=InteriorSweep.Line
+        let lines=[L(normal:[0,1],offset:0,low:0,high:0.4),          // front
+                   L(normal:[1,0],offset:0.4,low:-0.3,high:0),       // right
+                   L(normal:[0,1],offset:0.3,low:0,high:0.4),        // back
+                   L(normal:[1,0],offset:0,low:-0.3,high:0),         // left panel
+                   L(normal:[1,0],offset:0.01,low:-0.10,high:-0.02)] // hinge plate 1 cm inside it
+        let input: [InteriorSweep.Run]=[(0,[0.2,0],[0,1]),(1,[0.4,0.15],[-1,0]),(2,[0.2,0.3],[0,-1]),
+                                        (3,[0,0.2],[1,0]),(4,[0,0.10],[1,0]),(3,[0,0.02],[1,0])]
+        let result=InteriorSweep.collapsingDuplicateSides(input,lines:lines)
+        #expect(result.runs.map(\.line)==[0,1,2,4])
+        #expect(abs(result.lines[4].low+0.3)<0.0001 && abs(result.lines[4].high)<0.0001, "\(result.lines[4])")
     }
     @Test func fullSweepDropsAViewThatRepeatsAStoredPose() {
         // Returning to an earlier pose adds nothing new; it must not push out a unique view.
@@ -292,6 +308,44 @@ struct InteriorSweepTests {
         #expect(result.ready, "\(result.hint)")
         let loop=try #require(result.loops.first)
         #expect(abs(loop.map(\.z).max()!-loop.map(\.z).min()!-0.3)<0.006)
+    }
+    /// Exercises issue #33: a hinge plate standing 1 cm inside a side. Also needs the `fitLines`
+    /// density step, so it fails until that lands.
+    @Test func hingePlateInsideASideNarrowsTheOutlineConservatively() throws {
+        var map=InteriorSweep(seed:[0.1,0,0.1]), result=InteriorSweepResult()
+        for i in 0..<4 {
+            var f=observation(i,loops:[rectangle],open:true)
+            // Real panels scatter a few mm across views; the sides move along their normals.
+            f.walls=f.walls.enumerated().map { j,p -> SIMD2<Float> in
+                let jitter=Float((j*7+i)%11-5)*0.001
+                return p.x<0.001 || p.x>0.399 ? [p.x+jitter,p.y] : [p.x,p.y+jitter]
+            }
+            let n=f.walls.count   // the plate: 8 cm along the left side, 1 cm inside it
+            for k in 0...16 { f.walls.append([0.010+Float(((n+k)*7+i)%11-5)*0.001,0.02+0.005*Float(k)]) }
+            f.floor.removeAll { $0.x<0.010 && (0.02...0.10).contains($0.y) }   // it stands on the base
+            result=map.add(f)
+        }
+        #expect(result.ready, "\(result.hint) · \(result.boundaryCount) boundaries")
+        let loop=try #require(result.loops.first)
+        #expect(loop.count==4 && result.boundaryCount==5, "\(loop.count) vertices · \(result.boundaryCount) boundaries")
+        // The whole left side collapses to the plate: never wider than the plate allows.
+        #expect(loop.map(\.x).min()!>=0.008, "\(loop)")
+        #expect(abs(loop.map(\.x).max()!-0.4)<0.002 && abs(loop.map(\.z).max()!-0.3)<0.002 && abs(loop.map(\.z).min()!)<0.002, "\(loop)")
+    }
+    /// Exercises issue #33: a side scattered uniformly by ±8 mm must fit as one edge at its
+    /// mean, not as parallel fits that collapse inward. Also needs the `fitLines` density step,
+    /// so it fails until that lands.
+    @Test func noisySideStillFitsAsOneEdgeWithoutInwardShrink() throws {
+        var map=InteriorSweep(seed:[0.1,0,0.1]), result=InteriorSweepResult()
+        for i in 0..<4 {
+            var f=observation(i,loops:[rectangle],open:true)
+            f.walls=f.walls.enumerated().map { j,p -> SIMD2<Float> in p.x<0.001 ? [Float((j*7+i)%17-8)*0.001,p.y] : p }
+            result=map.add(f)
+        }
+        #expect(result.ready, "\(result.hint) · \(result.boundaryCount) boundaries")
+        let loop=try #require(result.loops.first)
+        #expect(loop.count==4 && result.boundaryCount==4, "\(loop.count) vertices · \(result.boundaryCount) boundaries")
+        #expect(abs(loop.map(\.x).max()!-loop.map(\.x).min()!-0.4)<0.004, "\(loop)")
     }
     @Test func nearlyParallelSliverCollapsesToTheInnerSide() throws {
         // A short surface just beyond a side (trim, the wall past a cabinet) that the

@@ -61,6 +61,14 @@ Completed review results remain intact. **Scan diagnostics** exports a bounded,
 replayable set of geometry keyframes and the latest interruption reason only when
 the user chooses to share; camera photographs are not included or saved.
 
+#### 2026-10-02 — Surfaces just inside a side (issue #33)
+
+A hinge plate a few millimetres inside a side fits as a short line parallel to it.
+Where the traced border offers both, matching now prefers the parallel line lying
+deeper into the base, and when two such sides collapse, the kept line's extent is
+widened to cover the dropped one so the corners at either end stay supported. The
+outline narrows to the plate rather than stalling on an unsupported corner.
+
 ### Physical acceptance
 
 Synthetic tests cover partial views, open fronts, rotated/noisy geometry, notches,

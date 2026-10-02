@@ -70,6 +70,11 @@ struct InteriorSweep: Sendable {
             let t = simd_dot(tangent, p)
             return distance(p) <= margin && t >= low - margin && t <= high + margin
         }
+        /// This line with its extent widened to cover `o`'s end points, projected onto its tangent.
+        func covering(_ o: Line) -> Line {
+            let ts = [o.low, o.high].map { simd_dot(tangent, o.tangent*$0 + o.normal*o.offset) }
+            return Line(normal: normal, offset: offset, low: min(low, ts.min()!), high: max(high, ts.max()!))
+        }
     }
 
     mutating func add(_ observation: InteriorSweepObservation) -> InteriorSweepResult {
@@ -262,24 +267,31 @@ struct InteriorSweep: Sendable {
             for i in ring.indices {
                 let p = (ring[i]+ring[(i+1)%ring.count])/2
                 let direction=simd_normalize(ring[(i+3)%ring.count]-ring[(i+ring.count-2)%ring.count])
+                // Rings are traced with the observed base on the left of travel, for the outer
+                // outline and obstacle cutouts alike.
+                let edge = ring[(i+1)%ring.count]-ring[i], inward = simd_normalize(SIMD2(-edge.y, edge.x))
                 func score(_ index: Int) -> Float {
                     lines[index].distance(p) + (1-abs(simd_dot(direction,lines[index].tangent)))*0.025
                 }
-                guard let match = lines.indices.filter({ lines[$0].supports(p) }).min(by: { score($0)<score($1) }) else {
+                let candidates = lines.indices.filter { lines[$0].supports(p) }
+                guard var match = candidates.min(by: { score($0)<score($1) }) else {
                     result.hint = ringIndex == 0 ? "Show the front edge and any unhighlighted sides." : "Show the gap or obstruction inside the base."
                     return result
                 }
-                // Rings are traced with the observed base on the left of travel, for the outer
-                // outline and obstacle cutouts alike.
-                let edge = ring[(i+1)%ring.count]-ring[i]
-                if runs.last?.line != match { runs.append((match, p, simd_normalize(SIMD2(-edge.y, edge.x)))) }
+                // The ring is traced on 8 mm cells dilated by one cell, so along a surface a few
+                // mm inside a side (a hinge plate) its edge still lies on the outer side. Matched by
+                // distance the outer line would win and the plate could never reach the collapse,
+                // so a parallel duplicate lying deeper into the base takes the match instead.
+                for k in candidates where k != match && Self.duplicate(lines[match], lines[k], turn: p)
+                    && Self.depth(lines[k], at: p, inward: inward) > Self.depth(lines[match], at: p, inward: inward) { match = k }
+                if runs.last?.line != match { runs.append((match, p, inward)) }
             }
             if runs.first?.line == runs.last?.line { runs.removeFirst() }
-            runs = Self.collapsingDuplicateSides(runs, lines: lines)
+            let (collapsed, sides) = Self.collapsingDuplicateSides(runs, lines: lines); runs = collapsed
             guard (3...200).contains(runs.count) else { result.hint = "Keep sweeping until the edges separate clearly."; return result }
             var polygon: [SIMD3<Float>] = []
             for i in runs.indices {
-                let a=lines[runs[(i+runs.count-1)%runs.count].line], b=lines[runs[i].line]
+                let a=sides[runs[(i+runs.count-1)%runs.count].line], b=sides[runs[i].line]
                 let determinant = a.normal.x*b.normal.y-a.normal.y*b.normal.x
                 guard abs(determinant) > 0.12 else { result.hint = "Show where the neighboring edges meet."; return result }
                 let point = SIMD2((a.offset*b.normal.y-a.normal.y*b.offset)/determinant,
@@ -322,41 +334,56 @@ struct InteriorSweep: Sendable {
     /// there into the observed base.
     typealias Run = (line: Int, at: SIMD2<Float>, inward: SIMD2<Float>)
 
+    /// Nearly parallel lines that do not meet within 6 cm of `turn`, where the outline turns
+    /// between them: one side seen as two surfaces rather than a real shallow corner.
+    static func duplicate(_ x: Line, _ y: Line, turn: SIMD2<Float>) -> Bool {
+        let determinant=x.normal.x*y.normal.y-x.normal.y*y.normal.x
+        guard abs(determinant) <= 0.12 else { return false }
+        guard abs(determinant) > 0.000001 else { return true }
+        let meet=SIMD2((x.offset*y.normal.y-x.normal.y*y.offset)/determinant,
+                       (x.normal.x*y.offset-x.offset*y.normal.x)/determinant)
+        return simd_distance(meet, turn) >= 0.06
+    }
+    /// How far `l` lies into the base along `inward`, measured at `at`.
+    static func depth(_ l: Line, at: SIMD2<Float>, inward: SIMD2<Float>) -> Float {
+        simd_dot(inward, at - (simd_dot(l.normal, at) - l.offset)*l.normal)
+    }
+
     /// Nearly parallel neighbours that do not meet where the outline turns are one side seen
-    /// as two surfaces (a trim, the wall beyond a cabinet). The one lying further into the
-    /// observed base bounds the usable space, so it replaces both: that shrinks an outline and
-    /// grows an obstacle cutout. Neighbours that do meet there are a real shallow corner and
-    /// are left for the corner checks, never straightened away.
-    static func collapsingDuplicateSides(_ input: [Run], lines: [Line]) -> [Run] {
-        var runs = input
-        func duplicate(_ a: Int, _ b: Int, turn: SIMD2<Float>) -> Bool {
-            let x=lines[a], y=lines[b], determinant=x.normal.x*y.normal.y-x.normal.y*y.normal.x
-            guard abs(determinant) <= 0.12 else { return false }
-            guard abs(determinant) > 0.000001 else { return true }
-            let meet=SIMD2((x.offset*y.normal.y-x.normal.y*y.offset)/determinant,
-                           (x.normal.x*y.offset-x.offset*y.normal.x)/determinant)
-            return simd_distance(meet, turn) >= 0.06
-        }
+    /// as two surfaces (a trim, the wall beyond a cabinet, a hinge plate). The one lying further
+    /// into the observed base bounds the usable space, so it replaces both: that shrinks an
+    /// outline and grows an obstacle cutout. Neighbours that do meet there are a real shallow
+    /// corner and are left for the corner checks, never straightened away.
+    /// Returns the collapsed runs and this ring's copy of `lines`, in which each kept line's
+    /// extent also covers the sides it replaced.
+    static func collapsingDuplicateSides(_ input: [Run], lines: [Line]) -> (runs: [Run], lines: [Line]) {
+        var runs = input, sides = lines
         var collapsed = true
         while collapsed && runs.count > 1 {
             collapsed = false
             for i in runs.indices {
                 let j = (i+1) % runs.count, same = runs[i].line == runs[j].line
-                guard same || duplicate(runs[i].line, runs[j].line, turn: runs[j].at) else { continue }
-                // How far each line lies into the base, measured at the turn between them.
-                func depth(_ line: Int) -> Float {
-                    let l = lines[line], at = runs[j].at
-                    return simd_dot(runs[j].inward, at - (simd_dot(l.normal, at) - l.offset)*l.normal)
+                guard same || Self.duplicate(lines[runs[i].line], lines[runs[j].line], turn: runs[j].at) else { continue }
+                if !same {
+                    // Depth is measured at the turn along whichever run's inward better aligns
+                    // with the lines' normal: a single raster step across the notch carries an
+                    // inward along the side, along which both lines are equally deep.
+                    let at = runs[j].at, n = lines[runs[i].line].normal
+                    let inward = abs(simd_dot(runs[i].inward, n)) > abs(simd_dot(runs[j].inward, n)) ? runs[i].inward : runs[j].inward
+                    let deeper = Self.depth(lines[runs[j].line], at: at, inward: inward) > Self.depth(lines[runs[i].line], at: at, inward: inward)
+                    let (kept, dropped) = deeper ? (runs[j].line, runs[i].line) : (runs[i].line, runs[j].line)
+                    runs[i].line = kept
+                    // A short deeper line (a hinge plate) replaces the whole side, so its extent
+                    // must cover the dropped side's: otherwise the far corner is no longer
+                    // supported and the corner check asks to show more of the corner.
+                    sides[kept] = sides[kept].covering(sides[dropped])
                 }
-                if !same, depth(runs[j].line) > depth(runs[i].line) { runs[i].line = runs[j].line }
                 // Collapsing can leave one line on both sides of a removed run, so the
                 // same pass also joins identical neighbours (including across the seam).
-                runs.remove(at: j)
-                collapsed = true
-                break
+                runs.remove(at: j); collapsed = true; break
             }
         }
-        return runs
+        return (runs: runs, lines: sides)
     }
 
     /// The base plus everything within `edgeReach` of its border: where edge evidence counts.
