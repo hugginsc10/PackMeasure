@@ -363,6 +363,44 @@ struct InteriorSweepTests {
         #expect(abs(ends[0]-0.02)<0.008 && abs(ends[1]-0.10)<0.008, "\(plate)")
         #expect(InteriorSweep.fitLines(samples,nearerSurfaces:false).count==1)
     }
+    /// Exercises issue #33's follow-up: a trim strip 1 cm inside a side replaces the panel over
+    /// the front 10 cm, so RANSAC's 6 mm band fits panel and strip as one tilted blend; the
+    /// outline must follow the strip.
+    @Test func occludedTrimNarrowsTheOutlineWhereItReplacesTheSide() throws {
+        var map=InteriorSweep(seed:[0.1,0,0.1]), result=InteriorSweepResult()
+        for i in 0..<4 {
+            var f=observation(i,loops:[rectangle],open:true)
+            f.walls.removeAll { $0.x<0.001 && $0.y<0.1025 }   // the strip replaces the left panel over y in 0...0.10
+            f.walls=f.walls.enumerated().map { j,p -> SIMD2<Float> in
+                let jitter=Float((j*7+i)%11-5)*0.001
+                return p.x<0.001 || p.x>0.399 ? [p.x+jitter,p.y] : [p.x,p.y+jitter]
+            }
+            let n=f.walls.count   // the strip: 10 cm along the left side from the front, 1 cm inside it
+            for k in 0...20 { f.walls.append([0.010+Float(((n+k)*7+i)%11-5)*0.001,0.005*Float(k)]) }
+            f.floor.removeAll { $0.x<0.010 && $0.y<=0.10 }   // it stands on the base
+            result=map.add(f)
+        }
+        #expect(result.ready, "\(result.hint) · \(result.boundaryCount) boundaries")
+        let loop=try #require(result.loops.first)
+        #expect(loop.count==4, "\(loop.count) vertices · \(result.boundaryCount) boundaries")
+        // The whole left side collapses to the strip: the front corners sit at the strip, and the
+        // back ones are never wider than the strip's extrapolated tilt allows.
+        #expect(loop.allSatisfy { $0.x >= ($0.z<0.15 ? 0.008 : 0.004) }, "\(loop)")
+        #expect(abs(loop.map(\.x).max()!-0.4)<0.002 && abs(loop.map(\.z).max()!-0.3)<0.002 && abs(loop.map(\.z).min()!)<0.002, "\(loop)")
+    }
+    /// Guards issue #33's follow-up at the line level: one wall tilted 2° and scattered ±2 mm
+    /// across three views is one line, never split into two levels.
+    @Test func aTiltedWallStaysOneLine() {
+        var samples=[InteriorSweep.Sample]()
+        let angle: Float=2 * .pi/180
+        for view in 0..<3 {
+            for k in 0...60 {
+                let t=0.005*Float(k), d=Float((k*7+view)%5-2)*0.001
+                samples.append(.init(p:[d*cos(angle)+t*sin(angle),t*cos(angle)-d*sin(angle)],view:view))
+            }
+        }
+        #expect(InteriorSweep.fitLines(samples,nearerSurfaces:true).count==1)
+    }
     @Test func nearlyParallelSliverCollapsesToTheInnerSide() throws {
         // A short surface just beyond a side (trim, the wall past a cabinet) that the
         // outline also touches cannot stall review; the side nearer the base bounds it.

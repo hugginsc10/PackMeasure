@@ -72,6 +72,25 @@ struct InteriorSweep: Sendable {
     /// No two adjacent `cell`-wide steps along a slab may hold more than this share of its
     /// samples: a wall crossing the band at a corner clusters, a surface fills its span.
     static let clusterShareMax: Float = 0.5
+    /// Splits of one inlier set into two levels are tried at multiples of this along its tangent:
+    /// finer finds nothing more (each level is re-gathered), coarser loses short strips.
+    static let stepBin: Float = 0.02
+    /// Two levels of one inlier set must be at least this far apart, both at the split and once
+    /// re-gathered: nearer is below the sweep's resolution (`slabCentres.lowerBound`).
+    static let stepMin: Float = 0.005
+    /// ... and at most this (`slabCentres.upperBound`): further apart RANSAC fits them itself.
+    static let stepMax: Float = 0.014
+    /// The two levels' intercepts must differ by this many of their own standard errors: a chance
+    /// split of one surface reaches 3, a 3 mm bowed wall stays under 5, a real step above it.
+    static let stepSigma: Float = 5
+    /// A level re-gathers the pool samples within this of its line: the 6 mm band RANSAC itself
+    /// calls one surface, wide enough to span a flat-topped scatter rather than tilt inside it.
+    static let levelHalf: Float = 0.006
+    /// Gather and refit passes per level; the third moves an offset by under 0.1 mm.
+    static let gatherPasses = 3
+    /// The two levels must be parallel within this |det| (3.4°), half `duplicate`'s tolerance:
+    /// real steps stay under 0.05, the two legs of a shallow bend do not.
+    static let levelDet: Float = 0.06
     /// Spacing along an open front at which the observed base's reach is sampled.
     static let frontBin: Float = 0.02
 
@@ -579,10 +598,94 @@ struct InteriorSweep: Sendable {
         }
         return out
     }
+    /// Two parallel levels 5–14 mm apart in one RANSAC inlier set, each on its own stretch of the
+    /// line: a panel and a strip that replaces it over part of its length, which the 6 mm band
+    /// fitted as one tilted blend. `points` are the inliers, (`normal`, `offset`, `tangent`) their
+    /// PCA line and `residue` the band residue. Each element is one level's runs as lines sharing
+    /// its fit; nil when the set is one surface.
+    private static func steppedSurfaces(of points: [Sample], residue: [Sample], normal: SIMD2<Float>, offset: Float,
+                                        tangent: SIMD2<Float>) -> [[Line]]? {
+        let td=points.map { (t:simd_dot(tangent,$0.p),d:simd_dot(normal,$0.p)-offset,s:$0) }
+        guard let tLow=td.map(\.t).min(), let tHigh=td.map(\.t).max() else { return nil }
+        let kmin=Int((tLow/Self.stepBin).rounded(.down)), kmax=Int((tHigh/Self.stepBin).rounded(.down))
+        guard kmax > kmin else { return nil }
+        var best: (sse: Float, split: Float, slope: Float, gap: Float, sigma: Float, sides: [[Sample]])? = nil
+        for k in (kmin+1)...kmax {   // ascending, so of equal residuals the first split wins
+            let split=Float(k)*Self.stepBin
+            let sides=[td.filter { $0.t < split }, td.filter { $0.t >= split }]
+            // Each side needs a line's own support before the split is scored.
+            guard sides.allSatisfy({ g in g.count >= 12 && Set(g.map { $0.s.view }).count >= 2
+                                      && g.map(\.t).max()!-g.map(\.t).min()! >= 0.035 }) else { continue }
+            // One slope shared by both sides, one intercept each: two parallel lines in the blend's frame.
+            let means=sides.map { g in (t:g.map(\.t).reduce(0,+)/Float(g.count),d:g.map(\.d).reduce(0,+)/Float(g.count)) }
+            var stt: Float=0, std: Float=0
+            for (g,m) in zip(sides,means) { for e in g { stt += (e.t-m.t)*(e.t-m.t); std += (e.t-m.t)*(e.d-m.d) } }
+            guard stt > 0 else { continue }
+            let slope=std/stt
+            var sse: Float=0
+            for (g,m) in zip(sides,means) { for e in g { let r=e.d-m.d-slope*(e.t-m.t); sse += r*r } }
+            let dc=abs((means[1].d-slope*means[1].t)-(means[0].d-slope*means[0].t))
+            let gap=dc/(1+slope*slope).squareRoot()
+            // Standard error of the intercept difference: the scatter about the two lines over the
+            // counts, plus the slope's own uncertainty levered by the distance between the sides' means.
+            let lever=means[1].t-means[0].t, variance=sse/Float(max(td.count-3,1))
+            let se=(variance*(1/Float(sides[0].count)+1/Float(sides[1].count)+lever*lever/stt)).squareRoot()
+            // With no scatter about either level, a separation is exact: as significant as it gets.
+            let sigma: Float=se > 0 ? dc/se : (dc > 0 ? .infinity : 0)
+            if best.map({ sse < $0.sse }) ?? true {
+                best=(sse:sse,split:split,slope:slope,gap:gap,sigma:sigma,sides:sides.map { $0.map(\.s) })
+            }
+        }
+        guard let best, best.gap >= Self.stepMin, best.gap <= Self.stepMax, best.sigma >= Self.stepSigma else { return nil }
+        // Each level starts parallel to the shared slope, at the median offset of its own side of the
+        // pool (inliers plus residue): the band clips each surface toward the other, the pool holds
+        // its whole scatter, and the median is unbiased for a symmetric scatter and robust to a few
+        // of the other surface's samples beside the split.
+        let pool=points+residue
+        let direction=simd_normalize(tangent+normal*best.slope)
+        let across=SIMD2(-direction.y,direction.x), levelNormal=simd_dot(across,normal) < 0 ? -across : across
+        let poolSides=[pool.filter { simd_dot(tangent,$0.p) < best.split }, pool.filter { simd_dot(tangent,$0.p) >= best.split }]
+        var levels: [(normal: SIMD2<Float>, offset: Float, tangent: SIMD2<Float>)]=poolSides.map { side in
+            let ds=side.map { simd_dot(levelNormal,$0.p) }.sorted()
+            return (normal:levelNormal,offset:ds[ds.count/2],tangent:direction)   // upper median, as overheadHeight takes it
+        }
+        var groups=best.sides
+        for _ in 0..<Self.gatherPasses {
+            // A pool sample joins the nearer level when within levelHalf of it, on that level's side
+            // of the split only: any reach past the split lets a level claim the other surface's
+            // near tail and tilt toward it.
+            groups=[[],[]]
+            for s in pool {
+                let d=levels.map { abs(simd_dot($0.normal,s.p)-$0.offset) }
+                guard min(d[0],d[1]) <= Self.levelHalf else { continue }
+                let g=d[0] <= d[1] ? 0 : 1, t=simd_dot(tangent,s.p)
+                let ownSide=g == 0 ? t < best.split : t >= best.split
+                if ownSide { groups[g].append(s) }
+            }
+            guard groups.allSatisfy({ $0.count >= 3 }) else { return nil }
+            levels=groups.map(Self.fit)
+        }
+        let det=levels[0].normal.x*levels[1].normal.y-levels[0].normal.y*levels[1].normal.x
+        let at=tangent*best.split+normal*offset   // the split point on the blend
+        let flip: Float=simd_dot(levels[0].normal,levels[1].normal) >= 0 ? 1 : -1
+        let sep=abs((simd_dot(levels[0].normal,at)-levels[0].offset)-flip*(simd_dot(levels[1].normal,at)-levels[1].offset))
+        guard abs(det) <= Self.levelDet, sep >= Self.stepMin, sep <= Self.stepMax else { return nil }
+        var out: [[Line]]=[]
+        for (g,f) in zip(groups,levels) {
+            // Each level keeps a line's own support, or the set stays one surface.
+            guard g.count >= 12, Set(g.map(\.view)).count >= 2 else { return nil }
+            let runs=Self.runs(of:g,tangent:f.tangent).filter { $0.samples.count >= 12 }
+            guard !runs.isEmpty else { return nil }
+            out.append(runs.map { Line(normal:f.normal,offset:f.offset,low:$0.low,high:$0.high) })
+        }
+        return out
+    }
 
     /// With `nearerSurfaces`, a denser band of samples a few millimetres inside a fitted line
     /// also gets a line of its own (`nearerParallelSurfaces`); its band is cleared like any
-    /// line's, and it is never itself searched again.
+    /// line's, and it is never itself searched again. One inlier set may also be a tilted blend
+    /// of a panel and a strip that replaces it over part of its length (`steppedSurfaces`): then
+    /// each level gets its own line and band instead, and the pair is not searched further.
     static func fitLines(_ input: [Sample], nearerSurfaces: Bool = false) -> [Line] {
         var remaining = input, lines: [Line] = []
         while remaining.count >= 12 && lines.count < 32 {
@@ -612,6 +715,16 @@ struct InteriorSweep: Sendable {
             let offset=simd_dot(normal,mean)
             // What the band holds besides the inliers, out to one slab past it, before it is cleared.
             let residue=nearerSurfaces ? remaining.filter { abs(simd_dot(normal,$0.p)-offset) <= Self.slabReach } : []
+            if nearerSurfaces, let levels=Self.steppedSurfaces(of:points,residue:residue,normal:normal,offset:offset,tangent:tangent),
+               lines.count+levels.reduce(0, { $0+$1.count }) <= 32 {
+                for level in levels {
+                    lines += level
+                    // Each level is an accepted surface: clear its own scatter band as any line's.
+                    let s=level[0]
+                    remaining=remaining.filter { abs(simd_dot(s.normal,$0.p)-s.offset) > surfaceBand }
+                }
+                continue   // the pair already explains the band: neither level is searched for nearer surfaces
+            }
             remaining=remaining.filter { abs(simd_dot(normal,$0.p)-offset) > surfaceBand }
             let sorted=points.map { (t:simd_dot(tangent,$0.p),view:$0.view) }.sorted { $0.t < $1.t }
             var group: [(t:Float,view:Int)] = []

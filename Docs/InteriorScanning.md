@@ -73,9 +73,12 @@ Line fitting itself now tells such a plate apart from a side's own scatter. A se
 band of samples 5–14 mm inside a fitted wall gets a line of its own when it has a
 line's support (two views, at least 3.5 cm long), is as dense as the wall's samples and
 stands out from the thinner scatter on either side of it; a single noisy side still fits
-as one edge at its mean, and the open front and the device fixture are unchanged. A
-surface that fully replaces the panel over its span at under about 13 mm can still blend
-into one tilted fit, which is a known limitation.
+as one edge at its mean, and the open front and the device fixture are unchanged. A strip
+that replaces the side over part of its length, which the band fits as one tilted blend, is
+now split from the side when the two levels are 5–14 mm apart and clearly separated
+relative to their scatter; a straight or gently bowed wall is never split. A strip under
+about 5 mm, or one seen with heavy scatter, is still left at the blended offset, which
+errs a few millimetres wide.
 
 ### Physical acceptance
 
