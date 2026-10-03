@@ -110,6 +110,7 @@ struct RoomScanReviewView: View {
 }
 
 struct RoomWallSelectionView: View {
+    @Environment(AppPreferences.self) private var preferences
     let room: MeasuredRoom
     @Binding var keptIDs: Set<UUID>
     @Environment(\.dismiss) private var dismiss
@@ -143,10 +144,10 @@ struct RoomWallSelectionView: View {
                 }.padding(.horizontal, 20).padding(.vertical, 12)
                 ZStack {
                     FloorplanScrollView(walls: room.walls, selected: $selected, reset: reset, zoomRequest: zoom,
-                                        labelMode: .wallIDs, omittedWallIDs: omittedIDs)
+                                        labelMode: .wallIDs, units: preferences.units, omittedWallIDs: omittedIDs)
                         .opacity(showing3D ? 0 : 1).allowsHitTesting(!showing3D).accessibilityHidden(showing3D)
                     RoomWireframeView(walls: room.renderedWalls, selected: $selected, reset: reset3D, zoomRequest: zoom3D,
-                                      labelMode: .wallIDs, omittedWallIDs: omittedIDs)
+                                      labelMode: .wallIDs, units: preferences.units, omittedWallIDs: omittedIDs)
                         .opacity(showing3D ? 1 : 0).allowsHitTesting(showing3D).accessibilityHidden(!showing3D)
                 }.frame(minHeight: 160).clipped()
                 ScrollView {
@@ -166,7 +167,7 @@ struct RoomWallSelectionView: View {
                                 Button("Previous wall", systemImage: "chevron.left") { step(-1) }.labelStyle(.iconOnly)
                                 Button("Next wall", systemImage: "chevron.right") { step(1) }.labelStyle(.iconOnly)
                             }
-                            Text("Length \(MeasuredRoom.dimension(wall.length)) · Captured height \(MeasuredRoom.dimension(wall.height))")
+                            Text("Length \(MeasuredRoom.dimension(wall.length, units: preferences.units)) · Captured height \(MeasuredRoom.dimension(wall.height, units: preferences.units))")
                                 .font(.subheadline).monospacedDigit()
                             Text("\(wall.confidence.capitalized) capture confidence").font(.caption).foregroundStyle(.secondary)
                             Toggle("Keep Wall \(selected + 1)", isOn: keepBinding(wall.id))
@@ -209,8 +210,8 @@ struct RoomWallSelectionView: View {
                         VStack(alignment: .leading, spacing: 6) {
                             Toggle("Keep Wall \(index + 1)", isOn: keepBinding(wall.id))
                                 .accessibilityIdentifier("keep-room-wall-\(index + 1)")
-                            Text("Length \(MeasuredRoom.dimension(wall.length))").font(.caption)
-                            Text("Height \(MeasuredRoom.dimension(wall.height)) · \(wall.confidence) confidence")
+                            Text("Length \(MeasuredRoom.dimension(wall.length, units: preferences.units))").font(.caption)
+                            Text("Height \(MeasuredRoom.dimension(wall.height, units: preferences.units)) · \(wall.confidence) confidence")
                                 .font(.caption).foregroundStyle(.secondary)
                             Button("Locate Wall \(index + 1)") { selected = index; showingList = false }
                                 .font(.caption).buttonStyle(.borderless)

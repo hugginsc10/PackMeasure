@@ -34,7 +34,7 @@ final class WireUITests: XCTestCase {
         let app=XCUIApplication();app.launchArguments=["result"];app.launch()
         XCTAssertTrue(app.buttons["use-wire-shelf"].waitForExistence(timeout:5))
         XCTAssertTrue(app.staticTexts["Matched-point estimate"].exists)
-        for value in ["12.0 in · 30.5 cm","48.0 in · 121.9 cm","15.0 in · 38.1 cm"] {
+        for value in ["12.00 in","48.00 in","15.00 in"] {
             XCTAssertTrue(app.staticTexts.matching(NSPredicate(format:"label CONTAINS %@",value)).firstMatch.exists)
         }
         screenshot(app,"synthetic-wire-measurement-review")

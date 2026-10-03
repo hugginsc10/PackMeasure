@@ -1221,6 +1221,7 @@ struct ScannerSheetView: View {
     }
 
     @Environment(AppModel.self) private var appModel
+    @Environment(AppPreferences.self) private var preferences
     @Environment(\.dismiss) private var dismiss
 
     @State private var scannerState = ScannerStateModel()
@@ -1268,9 +1269,7 @@ struct ScannerSheetView: View {
                         Section(ScannerResultCopy.sizeSectionTitle) {
                             MeasureEyebrow(text: "Capture result")
                             Text(
-                                "\(MeasurementMath.inchString(from: estimate.lengthMeters)) × " +
-                                "\(MeasurementMath.inchString(from: estimate.widthMeters)) × " +
-                                "\(MeasurementMath.inchString(from: estimate.heightMeters))"
+                                dimensionString(estimate)
                             )
                             Text(ScannerResultCopy.qualitySummary(for: estimate))
                                 .font(.footnote)
@@ -1910,9 +1909,9 @@ struct ScannerSheetView: View {
     }
 
     private func dimensionString(_ estimate: MeasurementEstimate) -> String {
-        "\(MeasurementMath.inchString(from: estimate.lengthMeters)) × "
-            + "\(MeasurementMath.inchString(from: estimate.widthMeters)) × "
-            + "\(MeasurementMath.inchString(from: estimate.heightMeters))"
+        "\(preferences.units.length(meters: estimate.lengthMeters)) × "
+            + "\(preferences.units.length(meters: estimate.widthMeters)) × "
+            + "\(preferences.units.length(meters: estimate.heightMeters))"
     }
 
     private func retryDiagnosticLabel(_ message: String) -> some View {

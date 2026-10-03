@@ -3,10 +3,24 @@ import simd
 
 @main struct PackMeasureQAApp: App {
     @State private var appModel = AppModel()
+    @State private var preferences: AppPreferences
     @State private var accepted = false
     @State private var pickerPoint: CGPoint?
     @State private var capturedSource: RoomShelfMeasurement.Source?
     private var args: [String] { ProcessInfo.processInfo.arguments }
+
+    init() {
+        let args = ProcessInfo.processInfo.arguments
+        let suite = "PackMeasureQA.settings"
+        let defaults = UserDefaults(suiteName: suite)!
+        if !args.contains("settings-preserve") { defaults.removePersistentDomain(forName: suite) }
+        let preferences = AppPreferences(defaults: defaults)
+        if args.contains("light") { preferences.appearance = .light }
+        if args.contains("dark") { preferences.appearance = .dark }
+        if args.contains("centimeters") { preferences.units = .centimeters }
+        if args.contains("both-units") { preferences.units = .both }
+        _preferences = State(initialValue: preferences)
+    }
     @MainActor private var rejected: ShelfScanState {
         let s=ShelfScanState();s.ready=true;s.request();s.receive([0,1,0],horizontalSurface:false,request:s.requestID);return s
     }
@@ -38,7 +52,12 @@ import simd
     var body: some Scene {
         WindowGroup {
             Group {
-                if args.contains("home") {
+                if args.contains("settings-room") {
+                    TabView {
+                        RoomUIFixture(route: .library).tabItem { Label("Rooms", systemImage: "square.split.2x2") }
+                        NavigationStack { SettingsView() }.tabItem { Label("Settings", systemImage: "gearshape") }
+                    }
+                } else if args.contains("home") {
                     HomeView().environment(appModel).task { appModel.loadIfNeeded() }
                 } else if args.contains("room-library") || args.contains("room-review") || args.contains("room-compare") {
                     RoomUIFixture(route: args.contains("room-library") ? .library : args.contains("room-compare") ? .comparison : .review)
@@ -60,7 +79,8 @@ import simd
                 } else {
                     ShelfCaptureFlow(onMeasured:{_,_,_,source,_ in capturedSource=source})
                 }
-            }.preferredColorScheme(args.contains("light") ? .light : args.contains("dark") ? .dark : nil)
+            }.environment(preferences)
+                .preferredColorScheme(preferences.appearance.colorScheme)
                 .tint(MeasureStyle.accent)
         }
     }

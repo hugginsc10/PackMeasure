@@ -3,10 +3,10 @@ import RoomPlan
 import SwiftUI
 
 struct RoomMeasurementView: View {
+    @Environment(AppPreferences.self) private var preferences
     @State private var rooms: [MeasuredRoom] = []
     @State private var scanning = false
     @State private var errorMessage: String?
-    @State private var guidance: RoomCaptureGuidance = .room
     private let store: RoomScanStore
 
     init(store: RoomScanStore = RoomScanStore()) {
@@ -14,7 +14,8 @@ struct RoomMeasurementView: View {
     }
 
     var body: some View {
-        ScrollView {
+        @Bindable var preferences = preferences
+        return ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 VStack(alignment: .leading, spacing: 12) {
                     Button { scanning = true } label: {
@@ -27,11 +28,11 @@ struct RoomMeasurementView: View {
                         Text("Room capture needs a LiDAR iPhone. You can still open saved rooms below.")
                             .font(.footnote).foregroundStyle(.secondary)
                     }
-                    Picker("Scan guidance", selection: $guidance) {
+                    Picker("Scan guidance", selection: $preferences.roomGuidance) {
                         ForEach(RoomCaptureGuidance.allCases, id: \.self) { mode in Text(mode.rawValue).tag(mode) }
                     }.pickerStyle(.segmented)
                         .accessibilityIdentifier("room-scan-guidance")
-                    Text(guidance.preparation).font(.footnote).foregroundStyle(.secondary)
+                    Text(preferences.roomGuidance.preparation).font(.footnote).foregroundStyle(.secondary)
                 }
                 HStack {
                     Text("Saved rooms").font(.headline)
@@ -73,7 +74,7 @@ struct RoomMeasurementView: View {
         .navigationTitle("Rooms")
         .onAppear { reload() }
         .fullScreenCover(isPresented: $scanning, onDismiss: reload) {
-            RoomScanSheet(store: store, guidance: guidance)
+            RoomScanSheet(store: store, guidance: preferences.roomGuidance)
         }
         .alert("Couldn’t load room scans", isPresented: Binding(
             get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } }
@@ -89,6 +90,7 @@ struct RoomMeasurementView: View {
 }
 
 struct RoomScanSheet: View {
+    @Environment(AppPreferences.self) private var preferences
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     @State private var cameraReady = false
@@ -191,6 +193,7 @@ struct RoomScanSheet: View {
                 do { try await Task.sleep(for: .seconds(1)) } catch { return }
             }
         }
+        .onChange(of: guidance) { _, mode in preferences.roomGuidance = mode }
         .onChange(of: failure) { _, error in
             if error != nil { coaching.end(at: ProcessInfo.processInfo.systemUptime) }
         }
@@ -308,6 +311,7 @@ struct RoomCaptureGuidanceCard: View {
 }
 
 struct RoomResultView<Header: View>: View {
+    @Environment(AppPreferences.self) private var preferences
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let room: MeasuredRoom
     var onEditMeasurements: (() -> Void)? = nil
@@ -354,7 +358,7 @@ struct RoomResultView<Header: View>: View {
                         Text("\(omitted) \(omitted == 1 ? "wall" : "walls") excluded. Measurements use only the walls you kept.")
                             .font(.footnote).foregroundStyle(.secondary)
                     }
-                    if let message = room.heightReviewMessage {
+                    if let message = room.heightReviewMessage(units: preferences.units) {
                         Label {
                             Text(message)
                         } icon: {
@@ -368,7 +372,7 @@ struct RoomResultView<Header: View>: View {
                             HStack(alignment: .top, spacing: 16) { spanMetrics }
                         }
                         Divider()
-                        LabeledContent("Maximum captured wall height", value: MeasuredRoom.dimension(room.wallHeight))
+                        LabeledContent("Maximum captured wall height", value: MeasuredRoom.dimension(room.wallHeight, units: preferences.units))
                             .font(.footnote)
                         Text("Approximate extent, not floor area or verified ceiling height. Missing walls and recesses affect these spans.")
                             .font(.footnote).foregroundStyle(.secondary)
@@ -378,16 +382,16 @@ struct RoomResultView<Header: View>: View {
                     DisclosureGroup {
                         VStack(alignment: .leading, spacing: 12) {
                             if let height = room.ceilingHeight {
-                                LabeledContent("Entered ceiling height", value: MeasuredRoom.dimension(height.meters))
+                                LabeledContent("Entered ceiling height", value: MeasuredRoom.dimension(height.meters, units: preferences.units))
                                 Text("Used for the 3D outline. Captured wall heights stay unchanged.")
                                     .font(.caption).foregroundStyle(.secondary)
                             }
                             ForEach(room.shelves ?? []) { shelf in
                                 VStack(alignment: .leading, spacing: 5) {
                                     Text(shelf.name).font(.headline)
-                                    LabeledContent("Depth", value: RoomShelfMeasurement.dimension(shelf.depth))
-                                    LabeledContent("Top above floor", value: RoomShelfMeasurement.dimension(shelf.heightAboveFloor))
-                                    LabeledContent("Clear space above", value: shelf.clearanceAbove.map(RoomShelfMeasurement.dimension) ?? "Not measured")
+                                    LabeledContent("Depth", value: RoomShelfMeasurement.dimension(shelf.depth, units: preferences.units))
+                                    LabeledContent("Top above floor", value: RoomShelfMeasurement.dimension(shelf.heightAboveFloor, units: preferences.units))
+                                    LabeledContent("Clear space above", value: shelf.clearanceAbove.map { RoomShelfMeasurement.dimension($0, units: preferences.units) } ?? "Not measured")
                                     Text(shelf.sourceLabel).font(.caption).foregroundStyle(.secondary)
                                 }.font(.subheadline)
                             }
@@ -404,8 +408,8 @@ struct RoomResultView<Header: View>: View {
                     ForEach(Array(room.walls.enumerated()), id: \.element.id) { index, wall in
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Wall \(index + 1)").font(.headline)
-                            LabeledContent("Length", value: MeasuredRoom.dimension(wall.length))
-                            LabeledContent("Captured height", value: MeasuredRoom.dimension(wall.height))
+                            LabeledContent("Length", value: MeasuredRoom.dimension(wall.length, units: preferences.units))
+                            LabeledContent("Captured height", value: MeasuredRoom.dimension(wall.height, units: preferences.units))
                             Text("\(wall.confidence.capitalized) capture confidence").font(.caption).foregroundStyle(.secondary)
                         }.font(.subheadline).padding(.vertical, 12)
                         if index < room.walls.count - 1 { Divider() }
@@ -413,7 +417,7 @@ struct RoomResultView<Header: View>: View {
                 } label: {
                     Label("Wall measurements · \(room.walls.count)", systemImage: "ruler").font(.headline)
                 }.measurePanel()
-                ShareLink(item: room.shareText) {
+                ShareLink(item: room.shareText(units: preferences.units)) {
                     Label("Share measurements", systemImage: "square.and.arrow.up")
                 }.buttonStyle(.bordered).frame(maxWidth: .infinity)
                 Text("Verify dimensions with a tape or laser measure. Room scans are separate from moving inventory.")
@@ -426,8 +430,8 @@ struct RoomResultView<Header: View>: View {
     }
 
     @ViewBuilder private var spanMetrics: some View {
-        MeasureMetric(title: "Long span", value: MeasuredRoom.dimension(room.spanLength))
-        MeasureMetric(title: "Short span", value: MeasuredRoom.dimension(room.spanWidth))
+        MeasureMetric(title: "Long span", value: MeasuredRoom.dimension(room.spanLength, units: preferences.units))
+        MeasureMetric(title: "Short span", value: MeasuredRoom.dimension(room.spanWidth, units: preferences.units))
     }
 }
 

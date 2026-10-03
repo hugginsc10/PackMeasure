@@ -242,6 +242,7 @@ struct ShelfCamera: UIViewRepresentable {
 }
 
 struct ShelfScannerView: View {
+    @Environment(AppPreferences.self) private var preferences
     let onMeasured: (ShelfGeometry, [SIMD3<Float>], SIMD3<Float>) -> Void
     var onUseMatchedViews: (() -> Void)? = nil
     var onChooseMethod: (() -> Void)? = nil
@@ -256,9 +257,9 @@ struct ShelfScannerView: View {
                 if let result = state.result {
                     Form {
                         Section("Selected shelf · LiDAR estimate") {
-                            LabeledContent("Depth", value: RoomShelfMeasurement.dimension(result.depth))
-                            LabeledContent("Top above floor", value: RoomShelfMeasurement.dimension(result.height))
-                            LabeledContent("Clear space above", value: result.clearance.map(RoomShelfMeasurement.dimension) ?? "Not measured")
+                            LabeledContent("Depth", value: RoomShelfMeasurement.dimension(result.depth, units: preferences.units))
+                            LabeledContent("Top above floor", value: RoomShelfMeasurement.dimension(result.height, units: preferences.units))
+                            LabeledContent("Clear space above", value: result.clearance.map { RoomShelfMeasurement.dimension($0, units: preferences.units) } ?? "Not measured")
                             Text("Verify these dimensions. Stored items and wire shelving can obscure the actual edges. You can correct the values before saving.").font(.footnote)
                         }
                         Button("Use shelf measurements") {

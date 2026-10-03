@@ -176,6 +176,7 @@ struct WireShelfCamera: UIViewRepresentable {
 }
 
 struct WireShelfScannerView: View {
+    @Environment(AppPreferences.self) private var preferences
     let onMeasured: (ShelfGeometry, [SIMD3<Float>], SIMD3<Float>, [ShelfPointMatch]) -> Void
     var automaticReason: String? = nil
     var onChooseMethod: (() -> Void)? = nil
@@ -190,9 +191,9 @@ struct WireShelfScannerView: View {
                 if let result = state.sequence.result {
                     Form {
                         Section("Matched-point estimate") {
-                            LabeledContent("Depth", value: RoomShelfMeasurement.dimension(result.depth))
-                            LabeledContent("Top above floor", value: RoomShelfMeasurement.dimension(result.height))
-                            LabeledContent("Clear space above", value: result.clearance.map(RoomShelfMeasurement.dimension) ?? "Not measured")
+                            LabeledContent("Depth", value: RoomShelfMeasurement.dimension(result.depth, units: preferences.units))
+                            LabeledContent("Top above floor", value: RoomShelfMeasurement.dimension(result.height, units: preferences.units))
+                            LabeledContent("Clear space above", value: result.clearance.map { RoomShelfMeasurement.dimension($0, units: preferences.units) } ?? "Not measured")
                             Text("Verify with a tape. Accuracy depends on choosing the same physical point in both views and stable camera tracking.").font(.footnote)
                         }
                         Button("Use shelf measurements") {
@@ -241,7 +242,7 @@ struct WireShelfScannerView: View {
                 if let first = state.firstPhoto, let point = state.firstPoint {
                     HStack(alignment: .top) {
                         ShelfReferencePhoto(image: first.image, point: point).frame(width: 75, height: 95)
-                        Text(state.photo == nil ? "Move sideways 20–40 cm, keeping this exact point visible. Movement: \(Int(state.movement * 100)) cm. Then freeze view 2." : "Match the same wire crossing or corner shown here. Pinch to zoom, then tap to place the cross.")
+                        Text(state.photo == nil ? "Move sideways \(preferences.units.length(meters: 0.2))–\(preferences.units.length(meters: 0.4)), keeping this exact point visible. Movement: \(preferences.units.preciseLength(millimeters: Double(state.movement) * 1_000)). Then freeze view 2." : "Match the same wire crossing or corner shown here. Pinch to zoom, then tap to place the cross.")
                             .font(.caption)
                     }
                 } else {

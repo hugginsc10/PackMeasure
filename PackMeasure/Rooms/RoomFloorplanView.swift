@@ -5,6 +5,13 @@ enum FloorplanLabelMode: String, CaseIterable {
     case lengths = "Lengths"
     case wallIDs = "Wall IDs"
 
+    func text(for wall: MeasuredRoom.Wall, index: Int, units: MeasurementUnits) -> String {
+        switch self {
+        case .lengths: units.length(meters: Double(wall.length))
+        case .wallIDs: String(index + 1)
+        }
+    }
+
     func text(for wall: MeasuredRoom.Wall, index: Int) -> String {
         switch self {
         case .lengths: String(format: "%.1f ft", wall.length * 3.28084)
@@ -98,18 +105,19 @@ struct RoomFloorplanPreview: View {
 }
 
 struct RoomFloorplanView: View {
+    @Environment(AppPreferences.self) private var preferences
     let room: MeasuredRoom
     @Environment(\.dismiss) private var dismiss
     @State private var selected: Int?
     @State private var reset = 0
     @State private var zoomRequest = 0
-    @State private var labelMode: FloorplanLabelMode = .lengths
     @State private var showing3D = false
     @State private var reset3D = 0
     @State private var zoom3D = 0
 
     var body: some View {
-        NavigationStack {
+        @Bindable var preferences = preferences
+        return NavigationStack {
             VStack(spacing: 0) {
                 Picker("Room view", selection: $showing3D) {
                     Label("2D Plan", systemImage: "square").tag(false)
@@ -122,16 +130,16 @@ struct RoomFloorplanView: View {
                     Text(showing3D ? "Drag · Rotate · Pinch" : "Pinch · Pan · Select")
                         .font(.caption).foregroundStyle(.secondary)
                 }.padding(.horizontal, 20).padding(.vertical, 12)
-                Picker("Floorplan labels", selection: $labelMode) {
+                Picker("Floorplan labels", selection: $preferences.floorplanLabels) {
                     ForEach(FloorplanLabelMode.allCases, id: \.self) { mode in
                         Text(mode.rawValue).tag(mode)
                     }
                 }.pickerStyle(.segmented).padding(.horizontal, 20).padding(.bottom, 12)
                 ZStack {
-                    FloorplanScrollView(walls: room.walls, selected: $selected, reset: reset, zoomRequest: zoomRequest, labelMode: labelMode)
+                    FloorplanScrollView(walls: room.walls, selected: $selected, reset: reset, zoomRequest: zoomRequest, labelMode: preferences.floorplanLabels, units: preferences.units)
                         .accessibilityLabel("Interactive scanned floorplan")
                         .opacity(showing3D ? 0 : 1).allowsHitTesting(!showing3D).accessibilityHidden(showing3D)
-                    RoomWireframeView(walls: room.renderedWalls, selected: $selected, reset: reset3D, zoomRequest: zoom3D, labelMode: labelMode)
+                    RoomWireframeView(walls: room.renderedWalls, selected: $selected, reset: reset3D, zoomRequest: zoom3D, labelMode: preferences.floorplanLabels, units: preferences.units)
                         .opacity(showing3D ? 1 : 0).allowsHitTesting(showing3D).accessibilityHidden(!showing3D)
                 }.clipped()
                 VStack(alignment: .leading, spacing: 10) {
@@ -149,7 +157,7 @@ struct RoomFloorplanView: View {
                     HStack {
                         Menu {
                             ForEach(room.walls.indices, id: \.self) { index in
-                                Button("Wall \(index + 1) — \(MeasuredRoom.dimension(room.walls[index].length))") { selected = index }
+                                Button("Wall \(index + 1) — \(MeasuredRoom.dimension(room.walls[index].length, units: preferences.units))") { selected = index }
                             }
                         } label: {
                             Label(selected.map { "Wall \($0 + 1)" } ?? "Choose a wall", systemImage: "line.3.horizontal.decrease")
@@ -164,12 +172,12 @@ struct RoomFloorplanView: View {
                         let wall = room.walls[selected]
                         ViewThatFits(in: .horizontal) {
                             HStack(spacing: 16) {
-                                MeasureMetric(title: "Length", value: MeasuredRoom.dimension(wall.length))
-                                MeasureMetric(title: room.ceilingHeight == nil ? "Captured height" : "Entered height", value: MeasuredRoom.dimension(room.ceilingHeight?.meters ?? wall.height))
+                                MeasureMetric(title: "Length", value: MeasuredRoom.dimension(wall.length, units: preferences.units))
+                                MeasureMetric(title: room.ceilingHeight == nil ? "Captured height" : "Entered height", value: MeasuredRoom.dimension(room.ceilingHeight?.meters ?? wall.height, units: preferences.units))
                             }
                             VStack(alignment: .leading, spacing: 12) {
-                                MeasureMetric(title: "Length", value: MeasuredRoom.dimension(wall.length))
-                                MeasureMetric(title: room.ceilingHeight == nil ? "Captured height" : "Entered height", value: MeasuredRoom.dimension(room.ceilingHeight?.meters ?? wall.height))
+                                MeasureMetric(title: "Length", value: MeasuredRoom.dimension(wall.length, units: preferences.units))
+                                MeasureMetric(title: room.ceilingHeight == nil ? "Captured height" : "Entered height", value: MeasuredRoom.dimension(room.ceilingHeight?.meters ?? wall.height, units: preferences.units))
                             }
                         }
                         Text("\(wall.confidence.capitalized) capture confidence").font(.caption).foregroundStyle(.secondary)
@@ -223,13 +231,12 @@ struct RoomFloorplanView: View {
     private func extentMetric(_ title: String, meters: Float) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title).font(.caption).foregroundStyle(.secondary)
-            Text(String(format: "%.1f ft", meters * 3.28084))
+            Text(MeasuredRoom.dimension(meters, units: preferences.units))
                 .font(.system(.headline, design: .rounded)).monospacedDigit()
-            Text(String(format: "%.2f m", meters)).font(.caption2).foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(title), \(MeasuredRoom.dimension(meters))")
+        .accessibilityLabel("\(title), \(MeasuredRoom.dimension(meters, units: preferences.units))")
     }
 
     private func step(_ delta: Int) {
@@ -244,11 +251,13 @@ struct FloorplanScrollView: UIViewRepresentable {
     let reset: Int
     let zoomRequest: Int
     let labelMode: FloorplanLabelMode
+    let units: MeasurementUnits
     var omittedWallIDs: Set<UUID> = []
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeUIView(context: Context) -> FloorplanScrollContainer {
-        let view = FloorplanScrollContainer()
+        let view = FloorplanScrollContainer(units: units)
+        view.drawing.labelMode = labelMode
         view.delegate = context.coordinator
         view.drawing.walls = walls
         let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.tap(_:)))
@@ -264,6 +273,7 @@ struct FloorplanScrollView: UIViewRepresentable {
         view.drawing.omittedWallIDs = omittedWallIDs
         view.drawing.selected = selected
         view.drawing.labelMode = labelMode
+        view.drawing.units = units
         if view.reset != reset { view.reset = reset; view.fit() }
         if view.zoomRequest != zoomRequest {
             let factor: CGFloat = zoomRequest > view.zoomRequest ? 2 : 0.5
@@ -311,12 +321,13 @@ struct FloorplanScrollView: UIViewRepresentable {
 
 final class FloorplanScrollContainer: UIScrollView {
     let plane = UIView()
-    let drawing = FloorplanDrawing()
+    let drawing: FloorplanDrawing
     var reset = 0
     var zoomRequest = 0
     private var viewport = CGSize.zero
-    override init(frame: CGRect) {
-        super.init(frame: frame)
+    init(units: MeasurementUnits) {
+        drawing = FloorplanDrawing(units: units)
+        super.init(frame: .zero)
         minimumZoomScale = 1; maximumZoomScale = 8
         contentInsetAdjustmentBehavior = .never
         showsHorizontalScrollIndicator = false; showsVerticalScrollIndicator = false
@@ -353,10 +364,11 @@ final class FloorplanDrawing: UIView {
     var omittedWallIDs: Set<UUID> = []
     var selected: Int?
     var labelMode: FloorplanLabelMode = .lengths
+    var units: MeasurementUnits
     private let labelFont = UIFont.monospacedDigitSystemFont(ofSize: 13, weight: .semibold)
     var labels: [(index: Int, rect: CGRect)] {
         let sizes = walls.enumerated().map { index, wall in
-            let size = (labelMode.text(for: wall, index: index) as NSString).size(withAttributes: [.font: labelFont])
+            let size = (labelMode.text(for: wall, index: index, units: units) as NSString).size(withAttributes: [.font: labelFont])
             return CGSize(width: ceil(size.width) + 14, height: max(24, ceil(size.height) + 8))
         }
         return geometry.labels(zoom: 1, selected: selected, sizes: sizes)
@@ -366,8 +378,9 @@ final class FloorplanDrawing: UIView {
     var geometry: FloorplanGeometry {
         FloorplanGeometry(walls: walls, size: bounds.size).transformed(zoom: zoom, offset: offset)
     }
-    override init(frame: CGRect) {
-        super.init(frame: frame)
+    init(units: MeasurementUnits) {
+        self.units = units
+        super.init(frame: .zero)
         backgroundColor = .clear
         isOpaque = false
         contentMode = .redraw
@@ -395,7 +408,7 @@ final class FloorplanDrawing: UIView {
                 UIColor(MeasureStyle.violet).setFill()
                 UIBezierPath(roundedRect: label.rect, cornerRadius: 7).fill()
             }
-            let text = labelMode.text(for: walls[label.index], index: label.index) as NSString
+            let text = labelMode.text(for: walls[label.index], index: label.index, units: units) as NSString
             let attributes: [NSAttributedString.Key: Any] = [
                 .font: labelFont,
                 .foregroundColor: label.index == selected ? UIColor(MeasureStyle.buttonText) : omittedWallIDs.contains(walls[label.index].id) ? UIColor.secondaryLabel : UIColor.label
