@@ -29,6 +29,7 @@ final class InteriorScanState {
     var trackingInterrupted = false
     var result: InteriorMeasurement?
     var sweepEnabled = true
+    var footprintModel: InteriorFootprintModel = .observed
     var sweepSeed: SIMD3<Float>?
     var sweepResult = InteriorSweepResult()
     var stableSweepPreviews = 0
@@ -148,6 +149,7 @@ final class InteriorScanState {
         var measurement = measurement
         if !sweepResult.loops.isEmpty && loops == sweepResult.loops {
             measurement.capturedBoundaryAgreement = sweepResult.boundaryAgreement
+            measurement.footprintModel = sweepResult.footprintModel
         }
         return measurement
     }
@@ -395,9 +397,10 @@ struct InteriorCamera: UIViewRepresentable {
                let snapshot=InteriorSweepFrame(frame:frame) {
                 lastPreviewTime=frame.timestamp; sweepBusy=true
                 let generation=state.generation
+                let footprintModel=state.footprintModel
                 Task { @MainActor [weak self] in
                     guard let self else { return }
-                    let value=await state.sweepWorker.process(snapshot,seed:seed,generation:generation)
+                    let value=await state.sweepWorker.process(snapshot,seed:seed,generation:generation,footprintModel:footprintModel)
                     sweepBusy=false
                     guard active else { return }
                     state.receiveSweep(value,generation:generation)

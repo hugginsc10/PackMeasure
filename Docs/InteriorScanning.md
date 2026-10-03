@@ -45,8 +45,10 @@ An 8 mm spatial grid identifies the connected target footprint and orders its
 boundaries. Supported lines are robustly fitted to the boundary samples and their
 intersections provide the final corner positions. The grid does not determine the
 reported dimensions. Disconnected neighboring floors are excluded. Concave
-boundaries and supported holes are preserved; no rectangle or convex hull is
-substituted. Unsupported borders, significant unknown interior patches, crossing
+boundaries and supported holes are preserved by the default **Follow edges**
+model. **Rectangle** is an explicit choice before selecting the base, for four
+straight sides at right angles; it requires four supported sides first.
+Unsupported borders, significant unknown interior patches, crossing
 geometry and inconsistent reconstruction prevent review.
 
 Overhead capture requires horizontal patches observed from below in at least two
@@ -101,8 +103,9 @@ unmeasured. It does not change the ready gate, dimensions or insert clearance.
 
 Diagnostics v2 retains bounded 3D wall samples (8 mm voxels, up to 8,000 per view)
 before height is discarded for the existing planar fit. This preserves evidence
-needed to distinguish wall inclination from capture/projection error on a future
-device scan; legacy v1 captures cannot recover it. V2 also exports acceptance
+used by the rectangular model to fit wall planes on a new device scan; legacy
+v1 captures cannot recover it. Plane inclination alone cannot distinguish a real
+leaning wall from capture/projection bias. V2 also exports acceptance
 counters, the worker reconstruction, the selected scan result, and available
 review height/source as separate fields. The review measurement is the scanner's
 draft, before any edits made locally in the review form.
@@ -114,12 +117,42 @@ stream: the 40-view fixture has already undergone replacement, and readmission
 rejects a view that was admitted with the original, now-discarded history. V1 is
 supported; its missing total acceptance counter falls back to retained count.
 
-The line fitter and outline readiness are unchanged. Re-gathering wider bands and
-equalizing fit weights were investigated in a scratch replay harness: improving
-one capture traded off error in the other, so those changes were not adopted.
-Next accuracy work should compare 3D wall planes and agreement across viewpoints,
-then evaluate an explicit rectangular model alongside the existing irregular
-outline path. Every edge, obstacle and height still needs physical validation.
+The default line fitter and outline readiness are unchanged. The optional
+**Rectangle** model adds a fit after the original supported corners resolve. It
+rejects outer outlines with other than four corners or directions more than
+0.12 radians from common orthogonal axes. Wall views vote on a shared orientation;
+each qualifying view contributes one median offset, so a dense view cannot
+outvote several agreeing views. The open front retains its supported location,
+including the existing observed-floor snap; it is not extended to a tape value.
+Nearer hinge/trim constraints and obstacle loops are preserved. Adjusted corners
+must remain within 40 mm of their supported originals; final geometry validation
+and the existing 97 percent floor coverage gate still apply.
+
+When 3D evidence is available, a wall view fits normal distance against position
+along the edge and height above the selected base, using three Huber-weighted
+passes. It needs 12 samples, at least 75 mm along the edge and 35 mm vertically,
+and a well-conditioned covariance. Along-edge/height slopes are limited to
+0.12/0.2 and the base intercept to 25 mm from the initial wall. The fitted plane's
+intersection with the selected level base supplies that view's offset. Thin or
+diagonal patches fall back to 2D evidence. The diagnostics record how many views
+used a plane for each edge; v1 fixtures correctly report zero.
+
+This estimates a **base footprint**, not the usable cavity at every height.
+Real inward-leaning walls or overhangs can require a smaller insert above the
+base. Check all four sides and clearance at the intended insert height.
+The chosen model is retained in diagnostics and saved measurements. Review labels
+rectangular captures explicitly; Follow edges remains the default for irregular
+compartments.
+
+Both legacy captures become straight rectangles in the native Swift replay.
+Width error drops to about 0.34/0.44 mm and worst actual-edge error improves from
+19.99/9.11 mm to 19.26/6.42 mm. The wide capture's bounding depth becomes shorter
+than its original bounding span even while its worst actual-edge error improves;
+bounding spans alone are not the accuracy criterion. These are two regression
+fixtures with a user-confirmed rectangular prior, not independent dimensional
+acceptance. No tape dimensions enter the production fit. A fresh v2 device scan
+is still required to validate the 3D path. Every edge, obstacle and height needs
+physical validation.
 
 ### Physical acceptance
 

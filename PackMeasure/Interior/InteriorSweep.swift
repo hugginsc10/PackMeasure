@@ -1,6 +1,11 @@
 import Foundation
 import simd
 
+enum InteriorFootprintModel: String, Codable, CaseIterable, Sendable {
+    case observed, rectangular
+    var title: String { self == .rectangular ? "Rectangle" : "Follow edges" }
+}
+
 /// Geometry-only keyframes. No camera photographs are retained in diagnostics.
 struct InteriorSweepObservation: Codable, Sendable {
     var timestamp: TimeInterval
@@ -40,6 +45,8 @@ struct InteriorSweepResult: Codable, Equatable, Sendable {
     /// coverage. Diagnostic only: `loops` stays empty until every ring resolves.
     var outline: [SIMD3<Float>] = []
     var boundaryAgreement: [InteriorBoundaryAgreement]? = nil
+    var footprintModel: InteriorFootprintModel? = nil
+    var wallPlaneViews: [Int]? = nil
     var ready: Bool { !loops.isEmpty && views >= 3 }
 }
 
@@ -54,13 +61,16 @@ struct InteriorSweepSnapshot: Codable, Sendable {
     var reconstruction: InteriorSweepResult? = nil
     var selectedResult: InteriorSweepResult? = nil
     var reviewMeasurement: InteriorMeasurement? = nil
+    var footprintModel: InteriorFootprintModel? = nil
 }
 
 /// A bounded map of observed floor and boundary samples, shared across camera views.
 /// The raster only orders edges; dimensions come from supported fitted lines.
-/// Unobserved borders never become walls, and no rectangular/convex hull is imposed.
+/// Unobserved borders never become walls. A rectangular prior is used only when
+/// explicitly selected and all four near-orthogonal sides already have support.
 struct InteriorSweep: Sendable {
     let seed: SIMD3<Float>
+    let footprintModel: InteriorFootprintModel
     private(set) var observations: [InteriorSweepObservation] = []
     private(set) var rejectedViews = 0
     /// Views accepted over the sweep, including repeats confirmed at the budget.
@@ -122,7 +132,9 @@ struct InteriorSweep: Sendable {
     /// Spacing along an open front at which the observed base's reach is sampled.
     static let frontBin: Float = 0.02
 
-    init(seed: SIMD3<Float>) { self.seed = seed }
+    init(seed: SIMD3<Float>, footprintModel: InteriorFootprintModel = .observed) {
+        self.seed = seed; self.footprintModel = footprintModel
+    }
 
     enum SnapshotError: Error { case invalid }
 
@@ -134,7 +146,7 @@ struct InteriorSweep: Sendable {
               snapshot.rejectedViews >= 0,
               snapshot.acceptedViews.map({ $0 >= snapshot.observations.count }) ?? true,
               snapshot.observations.allSatisfy(Self.valid) else { throw SnapshotError.invalid }
-        self.init(seed: snapshot.seed)
+        self.init(seed: snapshot.seed, footprintModel:snapshot.footprintModel ?? .observed)
         observations = snapshot.observations
         rejectedViews = snapshot.rejectedViews
         acceptedViews = snapshot.acceptedViews ?? observations.count
@@ -159,6 +171,7 @@ struct InteriorSweep: Sendable {
     struct Line {
         var normal: SIMD2<Float>; var offset: Float
         var low: Float; var high: Float
+        var isFront = false
         var tangent: SIMD2<Float> { [normal.y, -normal.x] }
         func distance(_ p: SIMD2<Float>) -> Float { abs(simd_dot(normal, p) - offset) }
         func supports(_ p: SIMD2<Float>, margin: Float = 0.028) -> Bool {
@@ -168,7 +181,7 @@ struct InteriorSweep: Sendable {
         /// This line with its extent widened to cover `o`'s end points, projected onto its tangent.
         func covering(_ o: Line) -> Line {
             let ts = [o.low, o.high].map { simd_dot(tangent, o.tangent*$0 + o.normal*o.offset) }
-            return Line(normal: normal, offset: offset, low: min(low, ts.min()!), high: max(high, ts.max()!))
+            return Line(normal: normal, offset: offset, low: min(low, ts.min()!), high: max(high, ts.max()!), isFront:isFront)
         }
     }
 
@@ -320,7 +333,7 @@ struct InteriorSweep: Sendable {
     }
 
     func reconstruct() -> InteriorSweepResult {
-        var result = InteriorSweepResult(views: observations.count, revision: acceptedViews)
+        var result = InteriorSweepResult(views: observations.count, revision: acceptedViews, footprintModel:footprintModel)
         let floorCells = observedBase()
         guard floorCells.count > 40 else { result.hint = "Show more of this compartment’s base."; return result }
         let queue = connectedBase(floorCells)
@@ -410,6 +423,12 @@ struct InteriorSweep: Sendable {
                 if polygon.last.map({ simd_distance($0,corner)>=0.001 }) ?? true { polygon.append(corner) }
             }
             if polygon.count>2, simd_distance(polygon[0],polygon.last!)<0.001 { polygon.removeLast() }
+            if ringIndex == 0 && footprintModel == .rectangular {
+                guard let fitted = rectangularOutline(polygon, lines:sides) else {
+                    result.hint = "Show four straight sides, or choose Follow edges for taper and notches."; return result
+                }
+                polygon = fitted.outline; result.wallPlaneViews = fitted.planeViews
+            }
             outlines.append(polygon)
             if ringIndex == 0 { result.outline = polygon }
         }
@@ -559,7 +578,9 @@ struct InteriorSweep: Sendable {
         }
         // Only the walls are searched for a nearer surface inside them: an open front is a
         // drop, not a surface, and `snappedToObservedBase` only ever moves it outward.
-        return Self.fitLines(samples(\.walls), nearerSurfaces: true) + Self.fitLines(samples(\.front)).map(snappedToObservedBase)
+        return Self.fitLines(samples(\.walls), nearerSurfaces: true) + Self.fitLines(samples(\.front)).map {
+            var line = snappedToObservedBase($0); line.isFront = true; return line
+        }
     }
 
     /// An open front cannot cut through base the sweep observed. Depth blur at the drop

@@ -162,8 +162,10 @@ actor InteriorSweepWorker {
     private var generation: UUID?
     private var sweep: InteriorSweep?
     private var result=InteriorSweepResult()
-    func process(_ frame: InteriorSweepFrame, seed: SIMD3<Float>, generation: UUID) -> InteriorSweepResult {
-        if self.generation != generation { self.generation=generation; sweep=InteriorSweep(seed:seed); result=InteriorSweepResult() }
+    func process(_ frame: InteriorSweepFrame, seed: SIMD3<Float>, generation: UUID, footprintModel: InteriorFootprintModel = .observed) -> InteriorSweepResult {
+        if self.generation != generation || sweep?.footprintModel != footprintModel {
+            self.generation=generation; sweep=InteriorSweep(seed:seed,footprintModel:footprintModel); result=InteriorSweepResult()
+        }
         if let last=sweep?.observations.last,
            simd_distance(last.camera,frame.camera)<0.018 && simd_dot(last.forward,frame.forward)>0.9986 { return result }
         result=sweep!.add(frame.observation(seed:seed))
@@ -176,7 +178,7 @@ actor InteriorSweepWorker {
         guard self.generation==generation, let sweep else { return .unavailable("No sweep observations in this camera session.") }
         let value=InteriorSweepSnapshot(seed:sweep.seed,observations:sweep.observations,rejectedViews:sweep.rejectedViews,
                                        acceptedViews:sweep.acceptedViews,reconstruction:result,
-                                       selectedResult:selectedResult,reviewMeasurement:reviewMeasurement)
+                                       selectedResult:selectedResult,reviewMeasurement:reviewMeasurement,footprintModel:sweep.footprintModel)
         let encoder=JSONEncoder(); encoder.outputFormatting=[.sortedKeys]
         guard let data=try? encoder.encode(value), let text=String(data:data,encoding:.utf8) else { return .unavailable("Could not export scan diagnostics.") }
         return .available(text)

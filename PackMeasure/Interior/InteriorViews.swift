@@ -93,6 +93,10 @@ struct InteriorReviewView: View {
     var body: some View {
         Form {
             Section("Inside footprint · \(unit.title.lowercased())") {
+                if record.footprintModel == .rectangular {
+                    Text("Rectangular fit · verify all four sides").font(.caption).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("interior-rectangular-fit")
+                }
                 Picker("Units", selection: $unit) {
                     ForEach(InteriorUnit.allCases, id: \.self) { Text($0.title).tag($0) }
                 }.pickerStyle(.segmented).accessibilityIdentifier("interior-units").disabled(editing != nil)

@@ -87,4 +87,23 @@ struct InteriorSweepDeviceReplayTests {
         // Neither high-confidence depth nor similar successive polygons proves
         // dimensional accuracy; the two captures fail for different reasons.
     }
+
+    @Test(arguments:["cabinet-sweep-b61-short","cabinet-sweep-b61-wide"])
+    func explicitRectangleReducesWidthAndWorstEdgeErrorWithoutInventingDepth(_ name: String) throws {
+        var capture = try snapshot(name)
+        let old = try InteriorSweep(snapshot:capture).reconstruct()
+        capture.footprintModel = .rectangular
+        let fitted = try InteriorSweep(snapshot:capture).reconstruct()
+        #expect(fitted.ready,"\(fitted.hint)")
+        let loop = try #require(fitted.loops.first)
+        let edges = loop.indices.map { simd_distance(loop[$0],loop[($0+1)%4])/Self.inch }
+        #expect(abs(edges[0]-edges[2])<0.0001 && abs(edges[1]-edges[3])<0.0001)
+        #expect(abs(edges[1]-10.5)<0.02)
+        #expect(edges[0]<11.2,"An unobserved front must not extend to the tape reference")
+        let oldErrors = old.outline.indices.map { abs(simd_distance(old.outline[$0],old.outline[($0+1)%4])/Self.inch - ($0%2==0 ? 11.2:10.5)) }
+        let newErrors = edges.indices.map { abs(edges[$0]-($0%2==0 ? 11.2:10.5)) }
+        #expect(newErrors.max()!<oldErrors.max()!)
+        #expect(newErrors.reduce(0,+)<oldErrors.reduce(0,+))
+        #expect(fitted.wallPlaneViews == [0,0,0,0],"v1 captures must not fabricate wall heights")
+    }
 }

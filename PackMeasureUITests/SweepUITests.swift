@@ -1,6 +1,24 @@
 import XCTest
 
 final class SweepUITests: XCTestCase {
+    @MainActor func testRectangleChoiceSurvivesCaptureSaveAndReopen() {
+        let app=XCUIApplication(); app.launchArguments=["sweep","choose-model"]; app.launch()
+        let models=app.segmentedControls["interior-footprint-model"]
+        XCTAssertTrue(models.waitForExistence(timeout:5))
+        XCTAssertTrue(models.buttons["Follow edges"].isSelected)
+        models.buttons["Rectangle"].tap()
+        app.buttons["sweep-select-base"].tap()
+        let review=app.buttons["sweep-review"]
+        XCTAssertTrue(review.waitForExistence(timeout:5))
+        expectation(for:NSPredicate(format:"enabled == true"),evaluatedWith:review); waitForExpectations(timeout:8)
+        review.tap()
+        XCTAssertTrue(app.staticTexts["interior-rectangular-fit"].waitForExistence(timeout:4))
+        screenshot(app,"rectangular-fit-review")
+        app.buttons["save-interior-review"].tap()
+        XCTAssertTrue(app.staticTexts["saved-sweep"].waitForExistence(timeout:3))
+        app.terminate(); app.launchArguments=["sweep","reopen"]; app.launch()
+        XCTAssertTrue(app.staticTexts["interior-rectangular-fit"].waitForExistence(timeout:4))
+    }
     @MainActor func testSweepToReviewSaveAndReopenWithoutCornerTaps() {
         let app=XCUIApplication(); app.launchArguments=["sweep"]; app.launch()
         let review=app.buttons["sweep-review"]
