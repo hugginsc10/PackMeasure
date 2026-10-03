@@ -630,8 +630,10 @@ struct InteriorSweep: Sendable {
             // counts, plus the slope's own uncertainty levered by the distance between the sides' means.
             let lever=means[1].t-means[0].t, variance=sse/Float(max(td.count-3,1))
             let se=(variance*(1/Float(sides[0].count)+1/Float(sides[1].count)+lever*lever/stt)).squareRoot()
+            // With no scatter about either level, a separation is exact: as significant as it gets.
+            let sigma: Float=se > 0 ? dc/se : (dc > 0 ? .infinity : 0)
             if best.map({ sse < $0.sse }) ?? true {
-                best=(sse:sse,split:split,slope:slope,gap:gap,sigma:se > 0 ? dc/se : 0,sides:sides.map { $0.map(\.s) })
+                best=(sse:sse,split:split,slope:slope,gap:gap,sigma:sigma,sides:sides.map { $0.map(\.s) })
             }
         }
         guard let best, best.gap >= Self.stepMin, best.gap <= Self.stepMax, best.sigma >= Self.stepSigma else { return nil }
