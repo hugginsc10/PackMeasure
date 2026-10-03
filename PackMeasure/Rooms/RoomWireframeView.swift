@@ -7,15 +7,19 @@ struct RoomWireframeView: UIViewRepresentable {
     let reset: Int
     let zoomRequest: Int
     let labelMode: FloorplanLabelMode
+    let units: MeasurementUnits
     var omittedWallIDs: Set<UUID> = []
 
-    func makeUIView(context: Context) -> RoomWireframeDrawing { RoomWireframeDrawing() }
+    func makeUIView(context: Context) -> RoomWireframeDrawing {
+        RoomWireframeDrawing(units: units)
+    }
 
     func updateUIView(_ view: RoomWireframeDrawing, context: Context) {
         view.walls = walls
         view.omittedWallIDs = omittedWallIDs
         view.selected = selected
         view.labelMode = labelMode
+        view.units = units
         view.onSelect = { selected = $0 }
         if view.reset != reset { view.reset = reset; view.fit() }
         if view.zoomRequest != zoomRequest {
@@ -32,6 +36,7 @@ final class RoomWireframeDrawing: UIView {
     var omittedWallIDs: Set<UUID> = []
     var selected: Int?
     var labelMode: FloorplanLabelMode = .lengths
+    var units: MeasurementUnits
     var onSelect: ((Int?) -> Void)?
     var reset = 0
     var zoomRequest = 0
@@ -44,8 +49,9 @@ final class RoomWireframeDrawing: UIView {
         RoomWireframeGeometry(walls: walls, size: bounds.size, yaw: yaw, pitch: pitch, zoom: zoom)
     }
 
-    override init(frame: CGRect) {
-        super.init(frame: frame)
+    init(units: MeasurementUnits) {
+        self.units = units
+        super.init(frame: .zero)
         backgroundColor = .clear
         isOpaque = false
         contentMode = .redraw
@@ -105,7 +111,7 @@ final class RoomWireframeDrawing: UIView {
     }
 
     private func labelText(_ index: Int) -> String {
-        labelMode == .lengths ? "\(index + 1) · \(labelMode.text(for: walls[index], index: index))" : "Wall \(index + 1)"
+        labelMode == .lengths ? "\(index + 1) · \(labelMode.text(for: walls[index], index: index, units: units))" : "Wall \(index + 1)"
     }
 
     private func badgeSize(_ text: String) -> CGSize {
@@ -134,7 +140,7 @@ final class RoomWireframeDrawing: UIView {
         let x = face.corners[edge.0].x + 16
         let bottom = CGPoint(x: x, y: face.corners[edge.0].y)
         let top = CGPoint(x: x, y: face.corners[edge.1].y)
-        let text = String(format: "H %.1f ft", walls[index].height * 3.28084)
+        let text = "H " + MeasuredRoom.dimension(walls[index].height, units: units)
         let size = badgeSize(text)
         let rect = CGRect(x: min(bounds.maxX - size.width - 6, max(6, x + 6)),
                           y: min(bounds.maxY - size.height - 6, max(6, top.y - size.height / 2)),
@@ -181,8 +187,8 @@ final class RoomWireframeDrawing: UIView {
             badge(labelText(label.index), rect: label.rect, color: wallColor(label.index))
         }
         accessibilityValue = "\(walls.count) captured walls. " + (selected.flatMap { index in
-            walls.indices.contains(index) ? "Wall \(index + 1), length \(MeasuredRoom.dimension(walls[index].length)), height \(MeasuredRoom.dimension(walls[index].height))" : nil
-        } ?? "Maximum captured wall height \(MeasuredRoom.dimension(walls.filter(\.isValid).map(\.height).max() ?? 0)).")
+            walls.indices.contains(index) ? "Wall \(index + 1), length \(MeasuredRoom.dimension(walls[index].length, units: units)), height \(MeasuredRoom.dimension(walls[index].height, units: units))" : nil
+        } ?? "Maximum captured wall height \(MeasuredRoom.dimension(walls.filter(\.isValid).map(\.height).max() ?? 0, units: units)).")
     }
 
     private func wallColor(_ index: Int) -> UIColor {

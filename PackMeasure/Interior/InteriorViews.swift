@@ -79,11 +79,15 @@ struct InteriorReviewView: View {
     @State private var exporting = false
     @State private var document = InteriorSVGDocument(text: "")
     @State private var message: String?
-    @AppStorage(InteriorUnit.storageKey) private var unit: InteriorUnit = .inches
+    @Environment(AppPreferences.self) private var preferences
+    @State private var editingUnit: InteriorUnit?
     /// The numeric field being edited. Its uncommitted text would be read in the new unit,
     /// so units cannot change until editing ends.
     @FocusState private var editing: Field?
     private enum Field: Hashable { case height, point(loop: Int, index: Int, axis: Int) }
+    private var unit: InteriorUnit {
+        editingUnit ?? (preferences.units.inputUnit == .inches ? .inches : .centimeters)
+    }
     private var output: Result<[[InteriorPoint]], Error> { Result { try record.insertContours() } }
     /// Edits a stored millimeter value in the chosen unit.
     private func length(_ millimeters: Binding<Double>) -> Binding<Double> {
@@ -92,13 +96,13 @@ struct InteriorReviewView: View {
     }
     var body: some View {
         Form {
-            Section("Inside footprint · \(unit.title.lowercased())") {
+            Section("Inside footprint · \(preferences.units.title.lowercased())") {
                 if record.footprintModel == .rectangular {
                     Text("Rectangular fit · verify all four sides").font(.caption).foregroundStyle(.secondary)
                         .accessibilityIdentifier("interior-rectangular-fit")
                 }
-                Picker("Units", selection: $unit) {
-                    ForEach(InteriorUnit.allCases, id: \.self) { Text($0.title).tag($0) }
+                Picker("Units", selection: Binding(get: { preferences.units }, set: { preferences.units = $0 })) {
+                    ForEach(MeasurementUnits.allCases, id: \.self) { Text($0.title).tag($0) }
                 }.pickerStyle(.segmented).accessibilityIdentifier("interior-units").disabled(editing != nil)
                 if editing != nil { Text("Finish editing to change units.").font(.caption).foregroundStyle(.secondary) }
                 InteriorOutlineView(contours: record.contours, inset: try? output.get())
@@ -108,13 +112,13 @@ struct InteriorReviewView: View {
                 if let outer = record.contours.first,
                    let minX = outer.map(\.x).min(), let maxX = outer.map(\.x).max(),
                    let minY = outer.map(\.y).min(), let maxY = outer.map(\.y).max() {
-                    LabeledContent("Overall span along first edge", value: unit.format(millimeters: maxX - minX))
-                    LabeledContent("Overall span across first edge", value: unit.format(millimeters: maxY - minY))
+                    LabeledContent("Overall span along first edge", value: preferences.units.preciseLength(millimeters: maxX - minX))
+                    LabeledContent("Overall span across first edge", value: preferences.units.preciseLength(millimeters: maxY - minY))
                 }
                 Text("Overall spans are bounding dimensions; an irregular insert must follow the outline.")
                     .font(.caption).foregroundStyle(.secondary)
                 if let spread = record.capturedBoundaryAgreement?.compactMap(\.spreadMM).max() {
-                    LabeledContent("Captured boundary variation", value: unit.format(millimeters:spread))
+                    LabeledContent("Captured boundary variation", value: preferences.units.preciseLength(millimeters: spread))
                         .accessibilityIdentifier("interior-boundary-variation")
                     Text("This is the variation between views of observed edges. Similar views can share measurement bias; verify dimensions with a tape before sizing an insert.")
                         .font(.caption).foregroundStyle(.secondary)
@@ -125,18 +129,18 @@ struct InteriorReviewView: View {
                 HStack {
                     Text("Usable height (\(unit.symbol))")
                     TextField("Height", value: length(Binding(get: { record.heightMM }, set: { record.heightMM = $0; record.heightSource = .entered })),
-                              format: .number.precision(.fractionLength(unit.fractionDigits)))
+                              format: .number.precision(.fractionLength(unit.fractionDigits...10)))
                         .focused($editing, equals: .height)
                         .keyboardType(.decimalPad).multilineTextAlignment(.trailing)
                 }
                 Text(record.heightSource == .entered ? "Height entered by you" : record.heightSource == .lidar ? "Captured height · verify available space" : "Verify available height")
                     .font(.caption).foregroundStyle(.secondary)
-                Stepper("Side clearance: \(unit.format(millimeters: record.sideClearanceMM))", value: $record.sideClearanceMM, in: 0...30, step: 0.5)
-                Stepper("Top clearance: \(unit.format(millimeters: record.topClearanceMM))", value: $record.topClearanceMM, in: 0...30, step: 0.5)
+                Stepper("Side clearance: \(preferences.units.preciseLength(millimeters: record.sideClearanceMM))", value: $record.sideClearanceMM, in: 0...30, step: 0.5)
+                Stepper("Top clearance: \(preferences.units.preciseLength(millimeters: record.topClearanceMM))", value: $record.topClearanceMM, in: 0...30, step: 0.5)
                 Text("Side clearance is applied at every wall and around obstacles. A rectangular insert loses twice this amount per horizontal dimension. Top clearance is subtracted once from usable height.")
                     .font(.caption).foregroundStyle(.secondary)
                 if case .success = output {
-                    LabeledContent("Draft extrusion height", value: unit.format(millimeters: record.heightMM - record.topClearanceMM))
+                    LabeledContent("Draft extrusion height", value: preferences.units.preciseLength(millimeters: record.heightMM - record.topClearanceMM))
                 } else if case .failure(let error) = output {
                     Text(error.localizedDescription).foregroundStyle(.orange)
                 }
@@ -185,6 +189,10 @@ struct InteriorReviewView: View {
         }
         .navigationTitle("Review interior")
         .navigationBarTitleDisplayMode(.inline)
+        .onChange(of: editing) { _, next in
+            if next != nil, editingUnit == nil { editingUnit = unit }
+            else if next == nil { editingUnit = nil }
+        }
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
                 Button("Save") {
