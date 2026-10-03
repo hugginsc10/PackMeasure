@@ -32,8 +32,8 @@ surface or image-center fallback is used.
 at most one reconstruction at a time. Useful camera movement produces keyframes
 (approximately 18 mm translation or 3 degrees rotation); stationary repeats do not
 establish independent support. Collection is bounded to 40 keyframes within 1.2 m
-of the selected base. At that limit the existing evidence stays available; an
-incomplete result asks for a new selection from a clearer angle.
+of the selected base. At that limit novel usable evidence can replace a redundant
+view, preserving coverage and corroboration of late edges and lower obstructions.
 
 The worker accumulates observed base patches, near-base vertical surface samples,
 and open-front edge samples. An open front needs observed depth beyond the base
@@ -45,8 +45,10 @@ An 8 mm spatial grid identifies the connected target footprint and orders its
 boundaries. Supported lines are robustly fitted to the boundary samples and their
 intersections provide the final corner positions. The grid does not determine the
 reported dimensions. Disconnected neighboring floors are excluded. Concave
-boundaries and supported holes are preserved; no rectangle or convex hull is
-substituted. Unsupported borders, significant unknown interior patches, crossing
+boundaries and supported holes are preserved by the default **Follow edges**
+model. **Rectangle** is an explicit choice before selecting the base, for four
+straight sides at right angles; it requires four supported sides first.
+Unsupported borders, significant unknown interior patches, crossing
 geometry and inconsistent reconstruction prevent review.
 
 Overhead capture requires horizontal patches observed from below in at least two
@@ -79,6 +81,78 @@ now split from the side when the two levels are 5–14 mm apart and clearly sepa
 relative to their scatter; a straight or gently bowed wall is never split. A strip under
 about 5 mm, or one seen with heavy scatter, is still left at the blended offset, which
 errs a few millimetres wide.
+
+#### 2026-10-03 — Accuracy investigation and retained-state replay
+
+Two Build 61 captures of the same rectangular compartment reproduce 10.57 × 10.61
+and 11.05 × 10.71 inches along/across the first edge. Tape measurements confirm
+both widths are 10.5 inches and both depths are 11.2 inches; the first edge is the
+depth direction in these captures. These are error regression fixtures, not
+physical acceptance results. Broader coverage improves depth but does not remove
+the spurious taper or width error.
+
+Similar consecutive reconstructions establish output stability, not agreement
+between the views used to fit them. Each resolved edge now records the 10th–90th
+percentile span of per-view median normal residuals within the 15 mm surface band,
+excluding 20 mm at the corners. A view needs six samples spanning 35 mm; a spread
+needs three views. Views get equal weight irrespective of sample density. The
+largest recorded spread is shown as **Captured boundary variation** in review
+and survives save/reopen. It is not an absolute error bound: shared bias, samples
+outside the band, sparse/unobserved edges and weak viewpoint diversity remain
+unmeasured. It does not change the ready gate, dimensions or insert clearance.
+
+Diagnostics v2 retains bounded 3D wall samples (8 mm voxels, up to 8,000 per view)
+before height is discarded for the existing planar fit. This preserves evidence
+used by the rectangular model to fit wall planes on a new device scan; legacy
+v1 captures cannot recover it. Plane inclination alone cannot distinguish a real
+leaning wall from capture/projection bias. V2 also exports acceptance
+counters, the worker reconstruction, the selected scan result, and available
+review height/source as separate fields. The review measurement is the scanner's
+draft, before any edits made locally in the review form.
+
+`InteriorSweep(snapshot:)` restores retained observations directly, with bounds
+and finite-value validation, rebuilding evidence cells for subsequent use. Do
+not feed a retained snapshot through `add` as if it were the original acquisition
+stream: the 40-view fixture has already undergone replacement, and readmission
+rejects a view that was admitted with the original, now-discarded history. V1 is
+supported; its missing total acceptance counter falls back to retained count.
+
+The default line fitter and outline readiness are unchanged. The optional
+**Rectangle** model adds a fit after the original supported corners resolve. It
+rejects outer outlines with other than four corners or directions more than
+0.12 radians from common orthogonal axes. Wall views vote on a shared orientation;
+each qualifying view contributes one median offset, so a dense view cannot
+outvote several agreeing views. The open front retains its supported location,
+including the existing observed-floor snap; it is not extended to a tape value.
+Nearer hinge/trim constraints and obstacle loops are preserved. Adjusted corners
+must remain within 40 mm of their supported originals; final geometry validation
+and the existing 97 percent floor coverage gate still apply.
+
+When 3D evidence is available, a wall view fits normal distance against position
+along the edge and height above the selected base, using three Huber-weighted
+passes. It needs 12 samples, at least 75 mm along the edge and 35 mm vertically,
+and a well-conditioned covariance. Along-edge/height slopes are limited to
+0.12/0.2 and the base intercept to 25 mm from the initial wall. The fitted plane's
+intersection with the selected level base supplies that view's offset. Thin or
+diagonal patches fall back to 2D evidence. The diagnostics record how many views
+used a plane for each edge; v1 fixtures correctly report zero.
+
+This estimates a **base footprint**, not the usable cavity at every height.
+Real inward-leaning walls or overhangs can require a smaller insert above the
+base. Check all four sides and clearance at the intended insert height.
+The chosen model is retained in diagnostics and saved measurements. Review labels
+rectangular captures explicitly; Follow edges remains the default for irregular
+compartments.
+
+Both legacy captures become straight rectangles in the native Swift replay.
+Width error drops to about 0.34/0.44 mm and worst actual-edge error improves from
+19.99/9.11 mm to 19.26/6.42 mm. The wide capture's bounding depth becomes shorter
+than its original bounding span even while its worst actual-edge error improves;
+bounding spans alone are not the accuracy criterion. These are two regression
+fixtures with a user-confirmed rectangular prior, not independent dimensional
+acceptance. No tape dimensions enter the production fit. A fresh v2 device scan
+is still required to validate the 3D path. Every edge, obstacle and height needs
+physical validation.
 
 ### Physical acceptance
 

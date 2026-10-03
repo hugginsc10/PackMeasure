@@ -29,6 +29,7 @@ final class InteriorScanState {
     var trackingInterrupted = false
     var result: InteriorMeasurement?
     var sweepEnabled = true
+    var footprintModel: InteriorFootprintModel = .observed
     var sweepSeed: SIMD3<Float>?
     var sweepResult = InteriorSweepResult()
     var stableSweepPreviews = 0
@@ -60,7 +61,7 @@ final class InteriorScanState {
         // over USB even if sharing fails later.
         Task { await prepareDiagnostics() }
         if let height=sweepResult.height {
-            do { result=try InteriorGeometry.project(loops,heightPoint:seed+SIMD3(0,height,0)); error=nil }
+            do { result=withSweepEvidence(try InteriorGeometry.project(loops,heightPoint:seed+SIMD3(0,height,0))); error=nil }
             catch { self.error=error.localizedDescription; takingHeight=true }
         } else { takingHeight=true }
     }
@@ -68,7 +69,7 @@ final class InteriorScanState {
     /// the latest real sweep on the device. A placeholder never replaces a kept sweep.
     func prepareDiagnostics(saveTo directory: URL? = InteriorScanState.diagnosticsDirectory) async {
         let generation = self.generation
-        let replay = await sweepWorker.replay(generation: generation)
+        let replay = await sweepWorker.replay(generation: generation, selectedResult: sweepResult, reviewMeasurement: result)
         guard generation == self.generation else { return }
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"
         let header = "Build \(build) interior sweep\nLast interruption: \(interruptionReason ?? "none")\n"
@@ -141,8 +142,16 @@ final class InteriorScanState {
     func editOutline() { guard !isCapturingPoint else { return }; takingHeight = false; error = nil }
     func enterHeight(_ millimeters: Double) {
         guard takingHeight, !isCapturingPoint else { return }
-        do { result = try InteriorGeometry.project(loops, enteredHeightMM: millimeters); error = nil }
+        do { result = withSweepEvidence(try InteriorGeometry.project(loops, enteredHeightMM: millimeters)); error = nil }
         catch { self.error = error.localizedDescription }
+    }
+    private func withSweepEvidence(_ measurement: InteriorMeasurement) -> InteriorMeasurement {
+        var measurement = measurement
+        if !sweepResult.loops.isEmpty && loops == sweepResult.loops {
+            measurement.capturedBoundaryAgreement = sweepResult.boundaryAgreement
+            measurement.footprintModel = sweepResult.footprintModel
+        }
+        return measurement
     }
     func useOutline(now: TimeInterval = CACurrentMediaTime()) {
         pinOutline(now: now)
@@ -201,7 +210,7 @@ final class InteriorScanState {
         guard result == nil else { return }
         do {
             if takingHeight {
-                result = try InteriorGeometry.project(loops, heightPoint: point)
+                result = withSweepEvidence(try InteriorGeometry.project(loops, heightPoint: point))
             } else if let selectedCorner {
                 guard let origin = loops.first?.first, abs(point.y - origin.y) <= 0.008 else {
                     throw InteriorGeometryError.nonPlanar
@@ -388,9 +397,10 @@ struct InteriorCamera: UIViewRepresentable {
                let snapshot=InteriorSweepFrame(frame:frame) {
                 lastPreviewTime=frame.timestamp; sweepBusy=true
                 let generation=state.generation
+                let footprintModel=state.footprintModel
                 Task { @MainActor [weak self] in
                     guard let self else { return }
-                    let value=await state.sweepWorker.process(snapshot,seed:seed,generation:generation)
+                    let value=await state.sweepWorker.process(snapshot,seed:seed,generation:generation,footprintModel:footprintModel)
                     sweepBusy=false
                     guard active else { return }
                     state.receiveSweep(value,generation:generation)

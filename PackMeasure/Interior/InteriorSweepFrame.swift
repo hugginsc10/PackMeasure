@@ -101,7 +101,7 @@ struct InteriorSweepFrame: Sendable {
     }
     func observation(seed: SIMD3<Float>) -> InteriorSweepObservation {
         let points=points()
-        var result=InteriorSweepObservation(timestamp:timestamp,camera:camera,forward:forward,floor:[],walls:[],front:[],overhead:[])
+        var result=InteriorSweepObservation(timestamp:timestamp,camera:camera,forward:forward,floor:[],walls:[],front:[],overhead:[],wallPoints3D:[])
         guard points.count==width*height else { return result }
         for y in 2..<height-2 { for x in 2..<width-2 {
             let i=y*width+x
@@ -113,6 +113,7 @@ struct InteriorSweepFrame: Sendable {
             }
             if (0.015...0.15).contains(dy), let n, abs(n.y)<0.15 {
                 result.walls.append([p.x,p.z])
+                result.wallPoints3D?.append(p)
             }
             if (0.04...3).contains(dy), camera.y<p.y-0.025, let n, abs(n.y)>0.94 {
                 result.overhead.append(p)
@@ -161,8 +162,10 @@ actor InteriorSweepWorker {
     private var generation: UUID?
     private var sweep: InteriorSweep?
     private var result=InteriorSweepResult()
-    func process(_ frame: InteriorSweepFrame, seed: SIMD3<Float>, generation: UUID) -> InteriorSweepResult {
-        if self.generation != generation { self.generation=generation; sweep=InteriorSweep(seed:seed); result=InteriorSweepResult() }
+    func process(_ frame: InteriorSweepFrame, seed: SIMD3<Float>, generation: UUID, footprintModel: InteriorFootprintModel = .observed) -> InteriorSweepResult {
+        if self.generation != generation || sweep?.footprintModel != footprintModel {
+            self.generation=generation; sweep=InteriorSweep(seed:seed,footprintModel:footprintModel); result=InteriorSweepResult()
+        }
         if let last=sweep?.observations.last,
            simd_distance(last.camera,frame.camera)<0.018 && simd_dot(last.forward,frame.forward)>0.9986 { return result }
         result=sweep!.add(frame.observation(seed:seed))
@@ -171,15 +174,11 @@ actor InteriorSweepWorker {
     /// The sweep's replayable evidence, or why there is none to report.
     enum Replay: Sendable { case available(String), unavailable(String) }
 
-    func replay(generation: UUID) -> Replay {
-        struct Export: Encodable {
-            var format="PackMeasure interior sweep v1"
-            var seed: SIMD3<Float>
-            var observations: [InteriorSweepObservation]
-            var rejectedViews: Int
-        }
+    func replay(generation: UUID, selectedResult: InteriorSweepResult? = nil, reviewMeasurement: InteriorMeasurement? = nil) -> Replay {
         guard self.generation==generation, let sweep else { return .unavailable("No sweep observations in this camera session.") }
-        let value=Export(seed:sweep.seed,observations:sweep.observations,rejectedViews:sweep.rejectedViews)
+        let value=InteriorSweepSnapshot(seed:sweep.seed,observations:sweep.observations,rejectedViews:sweep.rejectedViews,
+                                       acceptedViews:sweep.acceptedViews,reconstruction:result,
+                                       selectedResult:selectedResult,reviewMeasurement:reviewMeasurement,footprintModel:sweep.footprintModel)
         let encoder=JSONEncoder(); encoder.outputFormatting=[.sortedKeys]
         guard let data=try? encoder.encode(value), let text=String(data:data,encoding:.utf8) else { return .unavailable("Could not export scan diagnostics.") }
         return .available(text)

@@ -126,6 +126,11 @@ struct InteriorScannerView: View {
                 }
                 if state.isSweeping {
                     if state.sweepSeed == nil {
+                        Picker("Footprint shape", selection:$state.footprintModel) {
+                            ForEach(InteriorFootprintModel.allCases,id:\.self) { model in Text(model.title).tag(model) }
+                        }.pickerStyle(.segmented).accessibilityIdentifier("interior-footprint-model")
+                        Text("Rectangle fits four straight sides at right angles. Follow edges keeps taper and notches.")
+                            .font(.caption).foregroundStyle(.secondary)
                         Button("Scan base at cross") { state.requestPoint() }
                             .buttonStyle(.borderedProminent).disabled(!state.ready || state.isCapturingPoint)
                             .accessibilityIdentifier("sweep-select-base")

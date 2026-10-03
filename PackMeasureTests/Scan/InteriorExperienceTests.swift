@@ -111,6 +111,7 @@ struct InteriorExperienceTests {
         var old = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any]); old.removeValue(forKey: "heightSource")
         let restored = try JSONDecoder().decode(InteriorMeasurement.self, from: JSONSerialization.data(withJSONObject: old))
         #expect(restored.heightSource == nil && restored.contours == record.contours)
+        #expect(restored.capturedBoundaryAgreement == nil)
     }
     @Test func completedDraftSurvivesInterruptionButUnfinishedPhotoDoesNot() {
         let state = InteriorScanState(); state.loops = world; state.finishLoop(addObstacle: false); state.enterHeight(100)

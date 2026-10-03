@@ -7,6 +7,18 @@ struct SweepFixture: View {
     private let store=InteriorStore(url:URL.documentsDirectory.appending(path:"sweep-fixture.json"))
     init() {
         let s=InteriorScanState(); s.ready=true; s.sweepSeed=[0.1,0,0.1]
+        if ProcessInfo.processInfo.arguments.contains("rectangle") { s.footprintModel = .rectangular }
+        if ProcessInfo.processInfo.arguments.contains("choose-model") {
+            s.sweepSeed = nil
+            // A transient synthetic image makes the pre-seed controls available on
+            // a simulator. The task below supplies a synthetic seed after the tap.
+            let image = UIGraphicsImageRenderer(size:CGSize(width:8,height:8)).image { context in
+                UIColor.black.setFill(); context.fill(CGRect(x:0,y:0,width:8,height:8))
+            }
+            s.photo = InteriorPhoto(generation:s.generation,image:image,
+                grid:DepthGrid(width:1,height:1,depths:[1],confidences:[2]),imageSize:[1,1],
+                intrinsics:matrix_identity_float3x3,transform:matrix_identity_float4x4)
+        }
         _state=State(initialValue:s)
     }
     var body: some View {
@@ -18,7 +30,12 @@ struct SweepFixture: View {
             } else {
                 InteriorScannerView(state:state,onSave:{record in try store.save([record]);saved=record})
                     .task {
-                        var map=InteriorSweep(seed:[0.1,0,0.1])
+                        if ProcessInfo.processInfo.arguments.contains("choose-model") {
+                            while !state.isCapturingPoint && !Task.isCancelled { try? await Task.sleep(for:.milliseconds(100)) }
+                            guard !Task.isCancelled else { return }
+                            state.sweepSeed = [0.1,0,0.1]; state.isCapturingPoint = false; state.resumeCamera()
+                        }
+                        var map=InteriorSweep(seed:[0.1,0,0.1],footprintModel:state.footprintModel)
                         for i in 0..<5 {
                             let result=map.add(Self.observation(i))
                             state.receiveSweep(result,generation:state.generation)
