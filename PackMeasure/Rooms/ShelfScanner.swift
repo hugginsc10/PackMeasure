@@ -320,6 +320,6 @@ struct ShelfScannerView: View {
                     restartOnForeground = false; cameraID = UUID()
                 }
             }
-        }.tint(MeasureStyle.accent).preferredColorScheme(.dark)
+        }.tint(MeasureStyle.accent)
     }
 }
