@@ -32,8 +32,8 @@ surface or image-center fallback is used.
 at most one reconstruction at a time. Useful camera movement produces keyframes
 (approximately 18 mm translation or 3 degrees rotation); stationary repeats do not
 establish independent support. Collection is bounded to 40 keyframes within 1.2 m
-of the selected base. At that limit the existing evidence stays available; an
-incomplete result asks for a new selection from a clearer angle.
+of the selected base. At that limit novel usable evidence can replace a redundant
+view, preserving coverage and corroboration of late edges and lower obstructions.
 
 The worker accumulates observed base patches, near-base vertical surface samples,
 and open-front edge samples. An open front needs observed depth beyond the base
@@ -79,6 +79,47 @@ now split from the side when the two levels are 5–14 mm apart and clearly sepa
 relative to their scatter; a straight or gently bowed wall is never split. A strip under
 about 5 mm, or one seen with heavy scatter, is still left at the blended offset, which
 errs a few millimetres wide.
+
+#### 2026-10-03 — Accuracy investigation and retained-state replay
+
+Two Build 61 captures of the same rectangular compartment reproduce 10.57 × 10.61
+and 11.05 × 10.71 inches along/across the first edge. Tape measurements confirm
+both widths are 10.5 inches and both depths are 11.2 inches; the first edge is the
+depth direction in these captures. These are error regression fixtures, not
+physical acceptance results. Broader coverage improves depth but does not remove
+the spurious taper or width error.
+
+Similar consecutive reconstructions establish output stability, not agreement
+between the views used to fit them. Each resolved edge now records the 10th–90th
+percentile span of per-view median normal residuals within the 15 mm surface band,
+excluding 20 mm at the corners. A view needs six samples spanning 35 mm; a spread
+needs three views. Views get equal weight irrespective of sample density. The
+largest recorded spread is shown as **Captured boundary variation** in review
+and survives save/reopen. It is not an absolute error bound: shared bias, samples
+outside the band, sparse/unobserved edges and weak viewpoint diversity remain
+unmeasured. It does not change the ready gate, dimensions or insert clearance.
+
+Diagnostics v2 retains bounded 3D wall samples (8 mm voxels, up to 8,000 per view)
+before height is discarded for the existing planar fit. This preserves evidence
+needed to distinguish wall inclination from capture/projection error on a future
+device scan; legacy v1 captures cannot recover it. V2 also exports acceptance
+counters, the worker reconstruction, the selected scan result, and available
+review height/source as separate fields. The review measurement is the scanner's
+draft, before any edits made locally in the review form.
+
+`InteriorSweep(snapshot:)` restores retained observations directly, with bounds
+and finite-value validation, rebuilding evidence cells for subsequent use. Do
+not feed a retained snapshot through `add` as if it were the original acquisition
+stream: the 40-view fixture has already undergone replacement, and readmission
+rejects a view that was admitted with the original, now-discarded history. V1 is
+supported; its missing total acceptance counter falls back to retained count.
+
+The line fitter and outline readiness are unchanged. Re-gathering wider bands and
+equalizing fit weights were investigated in a scratch replay harness: improving
+one capture traded off error in the other, so those changes were not adopted.
+Next accuracy work should compare 3D wall planes and agreement across viewpoints,
+then evaluate an explicit rectangular model alongside the existing irregular
+outline path. Every edge, obstacle and height still needs physical validation.
 
 ### Physical acceptance
 

@@ -109,6 +109,12 @@ struct InteriorReviewView: View {
                 }
                 Text("Overall spans are bounding dimensions; an irregular insert must follow the outline.")
                     .font(.caption).foregroundStyle(.secondary)
+                if let spread = record.capturedBoundaryAgreement?.compactMap(\.spreadMM).max() {
+                    LabeledContent("Captured boundary variation", value: unit.format(millimeters:spread))
+                        .accessibilityIdentifier("interior-boundary-variation")
+                    Text("This is the variation between views of observed edges. Similar views can share measurement bias; verify dimensions with a tape before sizing an insert.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
             Section("Insert settings") {
                 TextField("Interior name", text: $record.name)
