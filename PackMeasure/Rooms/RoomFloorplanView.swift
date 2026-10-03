@@ -17,14 +17,14 @@ enum FloorplanLabelMode: String, CaseIterable {
 struct FloorplanGeometry {
     let segments: [(start: CGPoint, end: CGPoint)]
 
-    init(walls: [MeasuredRoom.Wall], size: CGSize) {
+    init(walls: [MeasuredRoom.Wall], size: CGSize, inset: CGFloat = 32) {
         let points = walls.flatMap { [$0.start, $0.end] }
         guard let minX = points.map(\.x).min(), let maxX = points.map(\.x).max(),
               let minY = points.map(\.y).min(), let maxY = points.map(\.y).max() else {
             segments = []; return
         }
-        let scale = max(0, min((size.width - 64) / CGFloat(max(0.1, maxX - minX)),
-                              (size.height - 64) / CGFloat(max(0.1, maxY - minY))))
+        let scale = max(0, min((size.width - inset * 2) / CGFloat(max(0.1, maxX - minX)),
+                              (size.height - inset * 2) / CGFloat(max(0.1, maxY - minY))))
         func project(_ p: SIMD2<Float>) -> CGPoint {
             CGPoint(x: size.width / 2 + CGFloat(p.x - (minX + maxX) / 2) * scale,
                     y: size.height / 2 + CGFloat(p.y - (minY + maxY) / 2) * scale)
@@ -86,7 +86,9 @@ struct RoomFloorplanPreview: View {
     let walls: [MeasuredRoom.Wall]
     var body: some View {
         Canvas { context, size in
-            for (index, line) in FloorplanGeometry(walls: walls, size: size).segments.enumerated() {
+            // Unlabeled previews need only stroke padding; interactive plans keep
+            // the geometry's larger default inset for their wall labels.
+            for (index, line) in FloorplanGeometry(walls: walls, size: size, inset: 8).segments.enumerated() {
                 var path = Path(); path.move(to: line.start); path.addLine(to: line.end)
                 context.stroke(path, with: .color(walls[index].confidence == "low" ? .orange : MeasureStyle.accent), lineWidth: 3)
             }
@@ -379,7 +381,7 @@ final class FloorplanDrawing: UIView {
                 dots.append(UIBezierPath(ovalIn: CGRect(x: x, y: y, width: 1, height: 1)))
             }
         }
-        UIColor.white.withAlphaComponent(0.09).setFill(); dots.fill()
+        UIColor.label.withAlphaComponent(0.09).setFill(); dots.fill()
         for (index, line) in geometry.segments.enumerated() {
             let path = UIBezierPath(); path.move(to: line.start); path.addLine(to: line.end)
             let omitted = omittedWallIDs.contains(walls[index].id)
@@ -396,7 +398,7 @@ final class FloorplanDrawing: UIView {
             let text = labelMode.text(for: walls[label.index], index: label.index) as NSString
             let attributes: [NSAttributedString.Key: Any] = [
                 .font: labelFont,
-                .foregroundColor: label.index == selected ? UIColor(MeasureStyle.background) : omittedWallIDs.contains(walls[label.index].id) ? UIColor.lightGray : UIColor.white
+                .foregroundColor: label.index == selected ? UIColor(MeasureStyle.buttonText) : omittedWallIDs.contains(walls[label.index].id) ? UIColor.secondaryLabel : UIColor.label
             ]
             let size = text.size(withAttributes: attributes)
             text.draw(at: CGPoint(x: label.rect.midX - size.width / 2, y: label.rect.midY - size.height / 2), withAttributes: attributes)

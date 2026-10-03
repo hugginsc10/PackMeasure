@@ -42,7 +42,8 @@ struct InteriorScannerView: View {
                                     .frame(maxWidth: .infinity, maxHeight: .infinity).allowsHitTesting(false)
                             }
                             Text(state.photo != nil ? "FROZEN · PINCH TO ZOOM" : state.ready ? "LIVE" : state.cameraStatus)
-                                .font(.caption.weight(.semibold)).padding(8).background(.black.opacity(0.7), in: Capsule())
+                                .font(.caption.weight(.semibold)).foregroundStyle(.white)
+                                .padding(8).background(.black.opacity(0.7), in: Capsule())
                                 .padding(12).allowsHitTesting(false)
                         }.frame(maxWidth: .infinity, maxHeight: .infinity).clipped()
                         controls
@@ -86,9 +87,9 @@ struct InteriorScannerView: View {
                         } else { ProgressView("Preparing diagnostics…") }
                     }.padding().navigationTitle("Scan diagnostics").navigationBarTitleDisplayMode(.inline)
                         .toolbar { ToolbarItem(placement:.confirmationAction) { Button("Done") { showingDiagnostics=false } } }
-                }.preferredColorScheme(.dark)
+                }
             }
-        }.tint(MeasureStyle.accent).preferredColorScheme(.dark)
+        }.tint(MeasureStyle.accent)
         .onChange(of: scenePhase) { _, phase in
             if phase == .background && state.result == nil { state.invalidate("The camera session ended. Start a fresh outline after returning."); restartOnForeground = true }
             else if phase == .active && state.result == nil && restartOnForeground {
@@ -227,7 +228,7 @@ struct InteriorScannerView: View {
                 Text("This captures a level footprint and usable height. Check dimensions before making an insert.").font(.footnote)
             }.navigationTitle("Scan an interior").navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showingHelp = false } } }
-        }.tint(MeasureStyle.accent).preferredColorScheme(.dark)
+        }.tint(MeasureStyle.accent)
     }
     private func reset() { state = InteriorScanState(); cameraID = UUID() }
 }
@@ -261,7 +262,7 @@ struct InteriorHeightEntry: View {
                         onApply(number * (inches ? 25.4 : 1)); dismiss()
                     }.accessibilityIdentifier("apply-interior-height") }
                 }
-        }.tint(MeasureStyle.accent).preferredColorScheme(.dark)
+        }.tint(MeasureStyle.accent)
     }
     private var number: Double? {
         let parsed = Double(value.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: ",", with: "."))

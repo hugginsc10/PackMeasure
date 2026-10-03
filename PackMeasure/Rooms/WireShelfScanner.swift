@@ -229,7 +229,7 @@ struct WireShelfScannerView: View {
                     restartOnForeground = false; cameraID = UUID()
                 }
             }
-        }.tint(MeasureStyle.accent).preferredColorScheme(.dark)
+        }.tint(MeasureStyle.accent)
     }
     private var controls: some View {
         ScrollView {

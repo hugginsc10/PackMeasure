@@ -8,38 +8,37 @@ struct HomeView: View {
         TabView {
             NavigationStack {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 20) {
-                        VStack(alignment: .leading, spacing: 12) {
-                            MeasureEyebrow(text: "Measure • Plan • Move")
-                            Text("Know your space.")
-                                .font(.system(.largeTitle, design: .rounded).bold())
-                            Text("From a single item to the room around it.")
+                    VStack(alignment: .leading, spacing: 14) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("What are you measuring?")
+                                .font(.title2.bold())
+                            Text("Choose a room, a small space, or an item.")
                                 .font(.subheadline).foregroundStyle(.secondary)
-                            BlueprintArtwork().frame(height: 140)
-                        }
-                        .measurePanel()
+                        }.padding(.vertical, 8)
                         NavigationLink {
                             RoomMeasurementView()
                         } label: {
-                            MeasureActionLabel(title: "Measure a room", subtitle: "Capture walls. Explore your floorplan.", symbol: "viewfinder")
-                        }.buttonStyle(.plain)
+                            MeasureActionLabel(title: "Measure a room", subtitle: "Scan walls and explore the floorplan.", symbol: "viewfinder")
+                        }.buttonStyle(.plain).accessibilityIdentifier("home-measure-room")
                         NavigationLink {
                             InteriorLibraryView()
                         } label: {
-                            MeasureActionLabel(title: "Measure a drawer or cabinet", subtitle: "Capture the inside. Plan an insert.", symbol: "square.dashed.inset.filled")
-                        }.buttonStyle(.plain)
+                            MeasureActionLabel(title: "Drawer or cabinet", subtitle: "Measure the inside and plan an insert.", symbol: "square.dashed.inset.filled")
+                        }.buttonStyle(.plain).accessibilityIdentifier("home-measure-interior")
                         Button { appModel.showingScanner = true } label: {
-                            MeasureActionLabel(title: "Scan an item", subtitle: "Measure boxes, furniture, and more.", symbol: "shippingbox")
-                        }.buttonStyle(.plain)
+                            MeasureActionLabel(title: "Scan an item", subtitle: "Boxes, furniture, and moving inventory.", symbol: "shippingbox")
+                        }.buttonStyle(.plain).accessibilityIdentifier("home-measure-item")
                         Button { manualEntryPresented = true } label: {
                             Label("Enter dimensions manually", systemImage: "ruler")
                                 .font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity, minHeight: 48)
                         }.buttonStyle(.bordered)
+                        Divider().padding(.vertical, 6)
                         NavigationLink {
                             PackingDashboardView(manualEntryPresented: $manualEntryPresented)
                         } label: {
                             HStack {
-                                MeasureEyebrow(text: "View your load")
+                                Label("Your moving load", systemImage: "truck.box")
+                                    .font(.subheadline.weight(.semibold))
                                 Spacer()
                                 Text("\(appModel.planningSummary.pieceCount) pieces")
                                     .font(.system(.subheadline, design: .monospaced)).foregroundStyle(.secondary)
@@ -57,6 +56,7 @@ struct HomeView: View {
                 .tabItem { Label("Load", systemImage: "shippingbox") }
         }
         .tint(MeasureStyle.accent)
+        .toolbarBackground(MeasureStyle.background, for: .tabBar)
         .sheet(isPresented: Binding(get: { appModel.showingScanner }, set: { appModel.showingScanner = $0 })) {
             ScannerSheetView().environment(appModel)
         }

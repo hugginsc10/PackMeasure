@@ -266,7 +266,7 @@ struct InteriorSweep: Sendable {
         // Only evidence reconstruction can use counts, judged exactly as reconstruction
         // judges it: the connected base, edges near it, the underside above it. Seeing more
         // of a background surface never displaces a stored view.
-        let base = Set(connectedBase(observedBase())), near = base.isEmpty ? [] : neighborhood(of: base)
+        let base = Set(connectedBase(observedBase(adding: incoming))), near = base.isEmpty ? [] : neighborhood(of: base)
         let above = Set(base.map { c in let p = position(c); return Cell(x:Int(floor(p.x/0.05)), y:Int(floor(p.y/0.05))) })
         func usable(_ e: Evidence) -> Bool {
             guard !base.isEmpty else { return true }
@@ -308,12 +308,15 @@ struct InteriorSweep: Sendable {
 
     /// Observed base cells, each widened by a one-cell footprint for the depth pixel's finite
     /// sampling area. Its displacement is removed when the boundary is intersected.
-    private func observedBase() -> Set<Cell> {
+    private func observedBase(adding incoming: Set<Evidence> = []) -> Set<Cell> {
         var floorCells = Set<Cell>()
-        for frame in observations { for p in frame.floor {
-            let c = cell(p)
+        func include(_ c: Cell) {
             for dx in -1...1 { for dy in -1...1 { floorCells.insert(.init(x:c.x+dx,y:c.y+dy)) } }
-        } }
+        }
+        for frame in observations { for p in frame.floor { include(cell(p)) } }
+        // Replacement prices the map after admission. Previously remote edge or
+        // underside evidence can become usable when this floor extends the base.
+        for e in incoming where e.kind == 0 { include(e.cell) }
         return floorCells
     }
 
@@ -579,7 +582,7 @@ struct InteriorSweep: Sendable {
         // Only the walls are searched for a nearer surface inside them: an open front is a
         // drop, not a surface, and `snappedToObservedBase` only ever moves it outward.
         return Self.fitLines(samples(\.walls), nearerSurfaces: true) + Self.fitLines(samples(\.front)).map {
-            var line = snappedToObservedBase($0); line.isFront = true; return line
+            var line = snappedToObservedBase($0, base: component); line.isFront = true; return line
         }
     }
 
@@ -587,10 +590,30 @@ struct InteriorSweep: Sendable {
     /// places front samples inside the true edge, while the base's own samples reach it,
     /// so refit the edge through the outermost base that two views agree on along its
     /// length. The edge only ever moves outward, never past `edgeReach`.
-    func snappedToObservedBase(_ line: Line) -> Line {
-        let seed2 = SIMD2(seed.x, seed.z)
-        // Orient the normal outward (away from the base) so positive distances lie beyond.
-        let flip: Float = simd_dot(line.normal, seed2) - line.offset > 0 ? -1 : 1
+    func snappedToObservedBase(_ line: Line, base: Set<Cell>? = nil) -> Line {
+        let component = base ?? Set(connectedBase(observedBase()))
+        guard !component.isEmpty else { return line }
+        // A concavity or obstacle can put the seed across the void from this edge.
+        // Judge inward locally along its span, using the same observed footprint
+        // and reach as reconstruction. Equal or conflicting sides cannot orient it.
+        let steps = Int((Self.edgeReach / Self.cell).rounded(.up))
+        var inward: Float?
+        for t in stride(from: line.low + Self.frontBin/2, through: line.high, by: Self.frontBin) {
+            let center = line.tangent*t + line.normal*line.offset
+            var positive = 0, negative = 0
+            for step in 1...steps {
+                let delta = line.normal*(Float(step)*Self.cell)
+                if component.contains(cell(center + delta)) { positive += 1 }
+                if component.contains(cell(center - delta)) { negative += 1 }
+            }
+            guard positive != negative else { continue }
+            let side: Float = positive > negative ? 1 : -1
+            if let inward, inward != side { return line }
+            inward = side
+        }
+        guard let inward else { return line }
+        // Positive signed distances now lie away from the local base.
+        let flip = -inward
         let normal = line.normal*flip, offset = line.offset*flip, tangent = SIMD2(normal.y, -normal.x)
         let low = min(line.low*flip, line.high*flip), high = max(line.low*flip, line.high*flip)
         var reach: [Int: [Int: Float]] = [:]   // bin -> view -> outermost base sample

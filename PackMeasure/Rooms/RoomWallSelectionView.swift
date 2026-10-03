@@ -30,28 +30,19 @@ struct RoomScanReviewView: View {
     private var keptRoom: MeasuredRoom? { try? draft.keepingWalls(keptIDs) }
 
     var body: some View {
-        VStack(spacing: 0) {
-            TextField("Room name", text: $name).textFieldStyle(.roundedBorder).padding()
-            Button { choosingWalls = true } label: {
-                HStack(spacing: 12) {
-                    Image(systemName: "checkmark.square").font(.title2)
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Choose walls to save").font(.headline)
-                        Text("Keeping \(keptIDs.count) of \(original.walls.count) walls · exclude walls outside the closet")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Image(systemName: "chevron.right")
-                }
-                .padding(16).background(MeasureStyle.panel, in: RoundedRectangle(cornerRadius: 18))
-            }
-            .buttonStyle(.plain).foregroundStyle(MeasureStyle.accent).padding(.horizontal, 20).padding(.bottom, 8)
-            .accessibilityIdentifier("choose-walls-to-save")
+        Group {
             if let room = keptRoom {
-                RoomResultView(room: room, onEditMeasurements: { editingMeasurements = true })
+                RoomResultView(room: room, onEditMeasurements: { editingMeasurements = true }) {
+                    reviewHeader
+                }
             } else {
-                ContentUnavailableView("Choose at least one wall", systemImage: "square.dashed",
-                                       description: Text("Open Choose walls to save and keep the walls that belong to this room."))
+                ScrollView {
+                    VStack(spacing: 16) {
+                        reviewHeader
+                        ContentUnavailableView("Choose at least one wall", systemImage: "square.dashed",
+                                               description: Text("Open Choose walls to save and keep the walls that belong to this room."))
+                    }.padding(20)
+                }
             }
         }
         .navigationTitle("Review room").navigationBarTitleDisplayMode(.inline)
@@ -92,6 +83,29 @@ struct RoomScanReviewView: View {
         .alert("Couldn’t save room", isPresented: Binding(get: { saveFailure != nil }, set: { if !$0 { saveFailure = nil } })) {
             Button("OK") { saveFailure = nil }
         } message: { Text(saveFailure ?? "") }
+    }
+
+    private var reviewHeader: some View {
+        VStack(spacing: 12) {
+            TextField("Room name", text: $name).textFieldStyle(.roundedBorder)
+                .accessibilityIdentifier("review-room-name")
+            Button { choosingWalls = true } label: {
+                HStack(alignment: .top, spacing: 12) {
+                    Image(systemName: "checkmark.square").font(.title3)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Choose walls to save").font(.headline)
+                        Text("Keeping \(keptIDs.count) of \(original.walls.count) walls · exclude walls outside this room")
+                            .font(.caption).foregroundStyle(Color(uiColor: .secondaryLabel))
+                    }.fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.right").font(.subheadline)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(14).background(MeasureStyle.panel, in: RoundedRectangle(cornerRadius: 16))
+            }
+            .buttonStyle(.plain).foregroundStyle(MeasureStyle.accent)
+            .accessibilityIdentifier("choose-walls-to-save")
+        }
     }
 }
 
@@ -170,7 +184,9 @@ struct RoomWallSelectionView: View {
             .background(MeasureStyle.background)
             .navigationTitle("Choose walls").navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }.accessibilityIdentifier("finish-room-wall-selection")
+                }
                 ToolbarItem(placement: .topBarLeading) {
                     Menu("Selection") {
                         Button("Keep all walls") { keptIDs = Set(room.walls.map(\.id)) }
@@ -192,6 +208,7 @@ struct RoomWallSelectionView: View {
                     ForEach(Array(room.walls.enumerated()), id: \.element.id) { index, wall in
                         VStack(alignment: .leading, spacing: 6) {
                             Toggle("Keep Wall \(index + 1)", isOn: keepBinding(wall.id))
+                                .accessibilityIdentifier("keep-room-wall-\(index + 1)")
                             Text("Length \(MeasuredRoom.dimension(wall.length))").font(.caption)
                             Text("Height \(MeasuredRoom.dimension(wall.height)) · \(wall.confidence) confidence")
                                 .font(.caption).foregroundStyle(.secondary)
@@ -202,8 +219,12 @@ struct RoomWallSelectionView: View {
                 }
             }
             .navigationTitle("Wall list").navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showingList = false } } }
-        }.tint(MeasureStyle.accent).preferredColorScheme(.dark)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { showingList = false }.accessibilityIdentifier("finish-room-wall-list")
+                }
+            }
+        }.tint(MeasureStyle.accent)
     }
 
     private func keepBinding(_ id: UUID) -> Binding<Bool> {

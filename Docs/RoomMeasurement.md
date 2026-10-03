@@ -13,6 +13,36 @@ ceiling clearance, or proof of a complete room. Each wall also has its own lengt
 height, and RoomPlan confidence. An L-shaped room preserves its separate walls.
 Missing walls can understate the extent. Low confidence walls remain visible.
 
+## Room UI refresh and light and dark appearance (Build 63 candidate)
+
+The Measure screen now puts rooms, drawers/cabinets, and items directly in view.
+The Rooms screen starts with **Scan a room**, the guidance choice, and short prep
+instructions. Saved scans use compact rows. Review leads with the floorplan and
+approximate extents; **Ceiling & shelves** and **Wall measurements** expand when
+needed. Partial-scan, live-outline, and height-variation explanations remain
+visible. Save, wall selection, scan-again, and diagnostic sharing remain available.
+
+The app follows the iPhone's light or dark appearance. Light mode uses native
+grouped surfaces and a teal accent; dark mode retains graphite and cyan. Room
+labels and the 2D/3D viewers adapt as well. At accessibility text sizes the span
+metrics stack rather than compressing both measurements into half-width columns.
+
+For a first room check, use one room and **Room** guidance. Walk slowly, show
+each corner and the floor-to-wall edges, then Finish. If outline comparison is
+offered, inspect the live and finished candidates separately; keep the outline
+that matches the room and exclude unrelated walls before saving. Compare two
+adjacent walls and height against a tape or laser measure. Name and save the room,
+reopen it, and verify the floorplan and wall measurements persisted. Switch the
+phone's appearance and check that names, dimensions, and wall labels remain readable.
+Share **Room diagnostics** before leaving review if Finish fails or changes the
+outline unexpectedly. A screenshot of the result helps interpret those diagnostics.
+
+Room retry now clears prior camera readiness before checking access again. The
+same candidate also fixes compartment view-replacement pricing and front-edge
+orientation; those geometry changes need their own compartment device checks.
+Simulator validation does not establish RoomPlan capture quality or dimensional
+accuracy, and this candidate does not claim either physical check has passed.
+
 ## Physical acceptance (pending)
 
 1. Rectangular room: independently measure two perpendicular walls and wall height.
@@ -78,7 +108,8 @@ Measure, Rooms, and Load tabs separate capture, saved floorplans, and moving
 inventory. The Measure dashboard also links directly to rooms and the load.
 Graphite surfaces, cyan actions, rounded measurement typography, and consistent
 cards carry across room results, manual entry, scanner controls, and load planning.
-The app uses a dark appearance. Low-confidence walls stay orange; selection is
+Build 46 used a dark appearance; the Build 63 candidate follows the phone's appearance.
+Low-confidence walls stay orange; selection is
 violet. Unselected wall badges no longer have opaque backgrounds that obscure
 lines. The floorplan has one Fit control and a compact measurement inspector.
 

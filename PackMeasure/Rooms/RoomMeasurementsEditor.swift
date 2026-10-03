@@ -86,7 +86,7 @@ struct RoomMeasurementsEditor: View {
             .alert("Check measurements", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
                 Button("OK") { error = nil }
             } message: { Text(error ?? "") }
-        }.tint(MeasureStyle.accent).preferredColorScheme(.dark)
+        }.tint(MeasureStyle.accent)
     }
     private func saveShelf(_ shelf: RoomShelfMeasurement) {
         var shelves = room.shelves ?? []
@@ -201,7 +201,7 @@ struct ShelfMeasurementEditor: View {
             .alert("Check shelf measurements", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
                 Button("OK") { error = nil }
             } message: { Text(error ?? "") }
-        }.tint(MeasureStyle.accent).preferredColorScheme(.dark)
+        }.tint(MeasureStyle.accent)
     }
     private func changeUnits(_ next: RoomEntryUnits) {
         do {
