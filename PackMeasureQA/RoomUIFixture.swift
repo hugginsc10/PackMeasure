@@ -50,7 +50,7 @@ struct RoomUIFixture: View {
             } else {
                 ProgressView("Preparing synthetic rooms…")
             }
-        }.task {
+        }.diagnosticSupport().task {
             guard !prepared else { return }
             try? FileManager.default.removeItem(at: store.directory)
             if route == .library {

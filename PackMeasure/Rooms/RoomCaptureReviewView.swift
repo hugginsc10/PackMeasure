@@ -52,7 +52,7 @@ struct RoomCaptureReviewView: View {
                         Text("Switching outlines resets wall selection. Ceiling height needs separate verification.")
                             .font(.footnote).foregroundStyle(.secondary)
                         Button("Scan again", action: onScanAgain).buttonStyle(.bordered)
-                        ShareLink("Diagnostics", item: report).font(.subheadline)
+                        DiagnosticButton(title: "Diagnostics", kind: .room, report: report).font(.subheadline)
                     }.padding(20)
                 }.navigationTitle("Compare outlines")
             }

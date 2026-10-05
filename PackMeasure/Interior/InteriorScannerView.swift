@@ -82,14 +82,15 @@ struct InteriorScannerView: View {
                     VStack(spacing:20) {
                         Text("Share the captured geometry to help investigate this scan. Camera photographs are not included.")
                         if let report=state.sweepDiagnostics {
-                            ShareLink("Share scan diagnostics", item:report).buttonStyle(.borderedProminent)
+                            DiagnosticButton(title: "Share scan diagnostics", kind: .interior, report: report).buttonStyle(.borderedProminent)
                             if let storage=state.diagnosticsStorage { Text(storage).font(.footnote).foregroundStyle(.secondary) }
                         } else { ProgressView("Preparing diagnostics…") }
                     }.padding().navigationTitle("Scan diagnostics").navigationBarTitleDisplayMode(.inline)
                         .toolbar { ToolbarItem(placement:.confirmationAction) { Button("Done") { showingDiagnostics=false } } }
                 }
+                .diagnosticSupport()
             }
-        }.tint(MeasureStyle.accent)
+        }.diagnosticSupport().tint(MeasureStyle.accent)
         .onChange(of: scenePhase) { _, phase in
             if phase == .background && state.result == nil { state.invalidate("The camera session ended. Start a fresh outline after returning."); restartOnForeground = true }
             else if phase == .active && state.result == nil && restartOnForeground {

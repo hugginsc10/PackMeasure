@@ -1381,9 +1381,8 @@ struct ScannerSheetView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     if !scannerState.captureDiagnostics.isEmpty {
-                        ShareLink(item: scannerState.captureDiagnosticsReport) {
-                            Label("Share scan diagnostics", systemImage: "square.and.arrow.up")
-                        }
+                        DiagnosticButton(title: "Share scan diagnostics", kind: .object,
+                                         report: scannerState.captureDiagnosticsReport)
                         .accessibilityLabel("Share scan diagnostics")
                     }
                 }
@@ -1395,6 +1394,7 @@ struct ScannerSheetView: View {
                 }
             }
         }
+        .diagnosticSupport()
     }
 
     private var cameraPreview: some View {

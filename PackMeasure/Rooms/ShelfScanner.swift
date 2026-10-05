@@ -265,7 +265,7 @@ struct ShelfScannerView: View {
                         Button("Use shelf measurements") {
                             if let selected = state.selectedTop { onMeasured(result, state.points, selected); dismiss() }
                         }.accessibilityIdentifier("use-shelf-scan")
-                        ShareLink("Shelf diagnostics", item: state.diagnosticSummary)
+                        DiagnosticButton(title: "Shelf diagnostics", kind: .shelf, report: state.diagnosticSummary)
                         Button("Scan again") { state = ShelfScanState(); cameraID = UUID() }
                     }
                 } else if !ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
@@ -300,7 +300,7 @@ struct ShelfScannerView: View {
                             } else if state.isCapturing || state.ready || state.error == nil {
                                 Text(state.isCapturing ? "Hold still to lock…" : state.ready ? "Tap a bare patch on the shelf top." : "Move slowly while tracking starts.").font(.caption)
                             }
-                            ShareLink("Shelf diagnostics", item: state.diagnosticSummary).font(.caption)
+                            DiagnosticButton(title: "Shelf diagnostics", kind: .shelf, report: state.diagnosticSummary).font(.caption)
                         }.padding(16)
                     }.frame(maxHeight: 280)
                 }
@@ -321,6 +321,6 @@ struct ShelfScannerView: View {
                     restartOnForeground = false; cameraID = UUID()
                 }
             }
-        }.tint(MeasureStyle.accent)
+        }.diagnosticSupport().tint(MeasureStyle.accent)
     }
 }
