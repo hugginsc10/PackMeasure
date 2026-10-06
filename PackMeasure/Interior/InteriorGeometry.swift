@@ -24,6 +24,44 @@ struct InteriorMeasurement: Identifiable, Codable, Equatable, Sendable {
     /// Repeatability evidence from the captured sweep, not a tolerance guarantee.
     var capturedBoundaryAgreement: [InteriorBoundaryAgreement]? = nil
     var footprintModel: InteriorFootprintModel? = nil
+    /// Optional so older saved records retain their exact geometry and still decode.
+    var originalGeometry: InteriorOriginalGeometry? = nil
+    var verification: InteriorVerification? = nil
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, capturedAt, contours, heightMM, heightSource, sideClearanceMM, topClearanceMM
+        case capturedBoundaryAgreement, footprintModel, originalGeometry, verification
+    }
+
+    init(id: UUID = UUID(), name: String = "Drawer interior", capturedAt: Date = .now,
+         contours: [[InteriorPoint]], heightMM: Double, heightSource: HeightSource? = nil,
+         sideClearanceMM: Double = 2, topClearanceMM: Double = 2,
+         capturedBoundaryAgreement: [InteriorBoundaryAgreement]? = nil,
+         footprintModel: InteriorFootprintModel? = nil,
+         originalGeometry: InteriorOriginalGeometry? = nil, verification: InteriorVerification? = nil) {
+        self.id = id; self.name = name; self.capturedAt = capturedAt
+        self.contours = contours; self.heightMM = heightMM; self.heightSource = heightSource
+        self.sideClearanceMM = sideClearanceMM; self.topClearanceMM = topClearanceMM
+        self.capturedBoundaryAgreement = capturedBoundaryAgreement; self.footprintModel = footprintModel
+        self.originalGeometry = originalGeometry; self.verification = verification
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(id: try values.decode(UUID.self, forKey: .id),
+                  name: try values.decode(String.self, forKey: .name),
+                  capturedAt: try values.decode(Date.self, forKey: .capturedAt),
+                  contours: try values.decode([[InteriorPoint]].self, forKey: .contours),
+                  heightMM: try values.decode(Double.self, forKey: .heightMM),
+                  heightSource: try values.decodeIfPresent(HeightSource.self, forKey: .heightSource),
+                  sideClearanceMM: try values.decode(Double.self, forKey: .sideClearanceMM),
+                  topClearanceMM: try values.decode(Double.self, forKey: .topClearanceMM),
+                  capturedBoundaryAgreement: try values.decodeIfPresent([InteriorBoundaryAgreement].self, forKey: .capturedBoundaryAgreement),
+                  footprintModel: try values.decodeIfPresent(InteriorFootprintModel.self, forKey: .footprintModel),
+                  // Corrupt new annotations must not hide an otherwise readable legacy scan.
+                  originalGeometry: try? values.decodeIfPresent(InteriorOriginalGeometry.self, forKey: .originalGeometry),
+                  verification: try? values.decodeIfPresent(InteriorVerification.self, forKey: .verification))
+    }
 
     func insertContours() throws -> [[InteriorPoint]] {
         guard heightMM.isFinite, topClearanceMM.isFinite,
