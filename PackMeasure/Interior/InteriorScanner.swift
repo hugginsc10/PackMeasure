@@ -151,6 +151,7 @@ final class InteriorScanState {
             measurement.capturedBoundaryAgreement = sweepResult.boundaryAgreement
             measurement.footprintModel = sweepResult.footprintModel
         }
+        measurement.preserveOriginalGeometry(source: .scanCapture, at: measurement.capturedAt)
         return measurement
     }
     func useOutline(now: TimeInterval = CACurrentMediaTime()) {

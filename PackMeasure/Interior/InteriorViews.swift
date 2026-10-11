@@ -81,12 +81,22 @@ struct InteriorReviewView: View {
     @State private var message: String?
     @Environment(AppPreferences.self) private var preferences
     @State private var editingUnit: InteriorUnit?
+    @State private var millimeterCorrections = false
+
+    init(record: InteriorMeasurement, onSave: @escaping (InteriorMeasurement) throws -> Void) {
+        var preserved = record
+        // Old saves may already contain corrections. Preserve what was saved without
+        // claiming it is the original scan, before any controls can change it.
+        preserved.preserveOriginalGeometry(source: .savedGeometry)
+        _record = State(initialValue: preserved)
+        self.onSave = onSave
+    }
     /// The numeric field being edited. Its uncommitted text would be read in the new unit,
     /// so units cannot change until editing ends.
     @FocusState private var editing: Field?
     private enum Field: Hashable { case height, point(loop: Int, index: Int, axis: Int) }
     private var unit: InteriorUnit {
-        editingUnit ?? (preferences.units.inputUnit == .inches ? .inches : .centimeters)
+        editingUnit ?? (millimeterCorrections ? .millimeters : preferences.units.inputUnit == .inches ? .inches : .centimeters)
     }
     private var output: Result<[[InteriorPoint]], Error> { Result { try record.insertContours() } }
     /// Edits a stored millimeter value in the chosen unit.
@@ -107,7 +117,7 @@ struct InteriorReviewView: View {
                 if editing != nil { Text("Finish editing to change units.").font(.caption).foregroundStyle(.secondary) }
                 InteriorOutlineView(contours: record.contours, inset: try? output.get())
                     .frame(height: 220)
-                Text("Gray: captured boundary · Teal: insert footprint · Blank cutouts: obstacles")
+                Text("Gray: current boundary · Teal: insert footprint · Blank cutouts: obstacles")
                     .font(.caption).foregroundStyle(.secondary)
                 if let outer = record.contours.first,
                    let minX = outer.map(\.x).min(), let maxX = outer.map(\.x).max(),
@@ -132,11 +142,14 @@ struct InteriorReviewView: View {
                               format: .number.precision(.fractionLength(unit.fractionDigits...10)))
                         .focused($editing, equals: .height)
                         .keyboardType(.decimalPad).multilineTextAlignment(.trailing)
+                        .accessibilityIdentifier("interior-usable-height")
                 }
                 Text(record.heightSource == .entered ? "Height entered by you" : record.heightSource == .lidar ? "Captured height · verify available space" : "Verify available height")
                     .font(.caption).foregroundStyle(.secondary)
                 Stepper("Side clearance: \(preferences.units.preciseLength(millimeters: record.sideClearanceMM))", value: $record.sideClearanceMM, in: 0...30, step: 0.5)
+                    .accessibilityIdentifier("interior-side-clearance")
                 Stepper("Top clearance: \(preferences.units.preciseLength(millimeters: record.topClearanceMM))", value: $record.topClearanceMM, in: 0...30, step: 0.5)
+                    .accessibilityIdentifier("interior-top-clearance")
                 Text("Side clearance is applied at every wall and around obstacles. A rectangular insert loses twice this amount per horizontal dimension. Top clearance is subtracted once from usable height.")
                     .font(.caption).foregroundStyle(.secondary)
                 if case .success = output {
@@ -145,7 +158,11 @@ struct InteriorReviewView: View {
                     Text(error.localizedDescription).foregroundStyle(.orange)
                 }
             }
+            InteriorVerificationCard(record: $record)
             Section("Verify or correct the outline") {
+                Toggle("Edit in millimeters", isOn: $millimeterCorrections)
+                    .disabled(editing != nil)
+                    .accessibilityIdentifier("interior-correction-millimeters")
                 Text("Coordinates are in \(unit.title.lowercased()), relative to point 1. The first edge defines the horizontal axis. Use physical measurements to correct points before exporting.")
                     .font(.caption).foregroundStyle(.secondary)
                 ForEach(record.contours.indices, id: \.self) { loopIndex in
@@ -156,9 +173,11 @@ struct InteriorReviewView: View {
                                 TextField("X (\(unit.symbol))", value: length($record.contours[loopIndex][pointIndex].x), format: .number)
                                     .focused($editing, equals: .point(loop: loopIndex, index: pointIndex, axis: 0))
                                     .accessibilityLabel("Point \(pointIndex + 1) X in \(unit.title.lowercased())")
+                                    .accessibilityIdentifier("interior-point-\(loopIndex)-\(pointIndex)-x")
                                 TextField("Y (\(unit.symbol))", value: length($record.contours[loopIndex][pointIndex].y), format: .number)
                                     .focused($editing, equals: .point(loop: loopIndex, index: pointIndex, axis: 1))
                                     .accessibilityLabel("Point \(pointIndex + 1) Y in \(unit.title.lowercased())")
+                                    .accessibilityIdentifier("interior-point-\(loopIndex)-\(pointIndex)-y")
                             }
                             .keyboardType(.numbersAndPunctuation)
                         }

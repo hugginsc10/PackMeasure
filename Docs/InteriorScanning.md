@@ -255,3 +255,39 @@ one correction and an obstacle, enter or capture height, and save/reopen. Compar
 with a ruler/caliper. For a cabinet, keep the compartment still and continue from
 a second angle. If tracking resets, start a fresh scan. Print a thin test outline
 before a full fitted insert.
+
+## Verify dimensions and record a physical fit
+
+The compartment review includes **Verify dimensions** for independently measured
+reference spans, usable height, measurement source/date, and intended insert
+height. Reference spans use the same first-edge axes as the displayed outline;
+they are bounding spans, not proof that every concave edge or obstacle was
+measured. Values are stored in millimeters regardless of the entry unit.
+
+Reference values are annotations. They do not resize the perimeter, move an
+obstacle, replace usable height, or change side/top clearance. Compare the
+references with the preserved original and the current editable geometry, then
+use the existing point/height correction controls where appropriate. Direct
+millimeter entry is available within this workflow without changing the global
+Settings choices. Edit sheets apply changes only after confirmation; Cancel
+discards the sheet draft. Save the interior to persist applied changes.
+
+New completed captures preserve their original geometry before review edits.
+An older saved record has no recoverable raw capture: its first preserved copy
+is labeled a saved geometry baseline. Subsequent corrections never replace that
+copy. Neither baseline is a claim of physical accuracy.
+
+A physical fit result records what the tester observed, with date and an
+optional note. Its geometry, usable height, clearance and intended-height
+context are retained. If that context changes, the earlier result is shown as
+stale rather than evidence that the edited insert still fits. Changing display
+units does not invalidate the result. Measured references and clearance remain
+distinct; intended insert height is a planning reference, while SVG draft
+extrusion still follows usable height minus top clearance.
+
+Before physical acceptance, measure every critical edge and constriction at the
+intended height and opening, compare raw and corrected values, save/reopen,
+check the exported SVG at 1:1 millimeter scale, and test a thin outline. Verify
+intended-height clearance and closure separately. Simulator tests establish
+software behavior and persistence only; they do not validate LiDAR accuracy,
+printer tolerances, insertion paths, or real fit.

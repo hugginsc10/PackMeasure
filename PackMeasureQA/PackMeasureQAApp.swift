@@ -52,7 +52,9 @@ import simd
     var body: some Scene {
         WindowGroup {
             Group {
-                if args.contains("diagnostics-lifecycle") {
+                if args.contains("interior-verification") {
+                    InteriorVerificationFixture()
+                } else if args.contains("diagnostics-lifecycle") {
                     DiagnosticLifecycleFixture().diagnosticSupport()
                 } else if args.contains("settings-room") {
                     TabView {
