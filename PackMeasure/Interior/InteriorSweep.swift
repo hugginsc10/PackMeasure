@@ -1,6 +1,11 @@
 import Foundation
 import simd
 
+enum InteriorFootprintModel: String, Codable, CaseIterable, Sendable {
+    case observed, rectangular
+    var title: String { self == .rectangular ? "Rectangle" : "Follow edges" }
+}
+
 /// Geometry-only keyframes. No camera photographs are retained in diagnostics.
 struct InteriorSweepObservation: Codable, Sendable {
     var timestamp: TimeInterval
@@ -10,9 +15,23 @@ struct InteriorSweepObservation: Codable, Sendable {
     var walls: [SIMD2<Float>]
     var front: [SIMD2<Float>]
     var overhead: [SIMD3<Float>]
+    /// Diagnostic evidence before wall height is discarded for the planar fit.
+    /// Absent from v1 captures; never synthesized from their flattened samples.
+    var wallPoints3D: [SIMD3<Float>]? = nil
 }
 
-struct InteriorSweepResult: Sendable {
+/// Repeatability of observed boundary positions, not an absolute accuracy estimate.
+struct InteriorBoundaryAgreement: Codable, Equatable, Sendable {
+    var loop: Int
+    var edge: Int
+    var views: Int
+    /// 10th–90th percentile span of per-view median normal residuals, in mm.
+    /// At least three views are needed; every view gets one vote regardless of density.
+    var spreadMM: Double?
+    var horizontalCameraSpanMM: Double
+}
+
+struct InteriorSweepResult: Codable, Equatable, Sendable {
     var loops: [[SIMD3<Float>]] = []
     var height: Float?
     var coverage: [SIMD3<Float>] = []
@@ -25,14 +44,33 @@ struct InteriorSweepResult: Sendable {
     /// The outer outline once its edges resolve, even while an inner gap still needs
     /// coverage. Diagnostic only: `loops` stays empty until every ring resolves.
     var outline: [SIMD3<Float>] = []
+    var boundaryAgreement: [InteriorBoundaryAgreement]? = nil
+    var footprintModel: InteriorFootprintModel? = nil
+    var wallPlaneViews: [Int]? = nil
     var ready: Bool { !loops.isEmpty && views >= 3 }
+}
+
+/// A retained map, rather than an acquisition stream. Admission/replacement already
+/// happened: running these observations through `add` again changes the capture.
+struct InteriorSweepSnapshot: Codable, Sendable {
+    var format = "PackMeasure interior sweep v2"
+    var seed: SIMD3<Float>
+    var observations: [InteriorSweepObservation]
+    var rejectedViews: Int
+    var acceptedViews: Int? = nil
+    var reconstruction: InteriorSweepResult? = nil
+    var selectedResult: InteriorSweepResult? = nil
+    var reviewMeasurement: InteriorMeasurement? = nil
+    var footprintModel: InteriorFootprintModel? = nil
 }
 
 /// A bounded map of observed floor and boundary samples, shared across camera views.
 /// The raster only orders edges; dimensions come from supported fitted lines.
-/// Unobserved borders never become walls, and no rectangular/convex hull is imposed.
+/// Unobserved borders never become walls. A rectangular prior is used only when
+/// explicitly selected and all four near-orthogonal sides already have support.
 struct InteriorSweep: Sendable {
     let seed: SIMD3<Float>
+    let footprintModel: InteriorFootprintModel
     private(set) var observations: [InteriorSweepObservation] = []
     private(set) var rejectedViews = 0
     /// Views accepted over the sweep, including repeats confirmed at the budget.
@@ -94,6 +132,37 @@ struct InteriorSweep: Sendable {
     /// Spacing along an open front at which the observed base's reach is sampled.
     static let frontBin: Float = 0.02
 
+    init(seed: SIMD3<Float>, footprintModel: InteriorFootprintModel = .observed) {
+        self.seed = seed; self.footprintModel = footprintModel
+    }
+
+    enum SnapshotError: Error { case invalid }
+
+    /// Restore the final retained state without reapplying live admission gates.
+    /// Validation still bounds storage and rejects invalid coordinates/counters.
+    init(snapshot: InteriorSweepSnapshot) throws {
+        guard ["PackMeasure interior sweep v1", "PackMeasure interior sweep v2"].contains(snapshot.format),
+              finite(snapshot.seed), snapshot.observations.count <= Self.maxViews,
+              snapshot.rejectedViews >= 0,
+              snapshot.acceptedViews.map({ $0 >= snapshot.observations.count }) ?? true,
+              snapshot.observations.allSatisfy(Self.valid) else { throw SnapshotError.invalid }
+        self.init(seed: snapshot.seed, footprintModel:snapshot.footprintModel ?? .observed)
+        observations = snapshot.observations
+        rejectedViews = snapshot.rejectedViews
+        acceptedViews = snapshot.acceptedViews ?? observations.count
+        viewEvidence = observations.map(evidenceCells)
+    }
+
+    private static func valid(_ observation: InteriorSweepObservation) -> Bool {
+        observation.timestamp.isFinite && finite(observation.camera) && finite(observation.forward)
+        && observation.floor.allSatisfy(finite) && observation.walls.allSatisfy(finite)
+        && observation.front.allSatisfy(finite) && observation.overhead.allSatisfy(finite)
+        && (observation.wallPoints3D?.allSatisfy(finite) ?? true)
+        && observation.floor.count <= 18000 && observation.walls.count <= 8000
+        && observation.front.count <= 4000 && observation.overhead.count <= 12000
+        && (observation.wallPoints3D?.count ?? 0) <= 8000
+    }
+
     struct Cell: Hashable, Sendable {
         var x: Int; var y: Int
         var neighbors: [Cell] { [.init(x:x-1,y:y), .init(x:x+1,y:y), .init(x:x,y:y-1), .init(x:x,y:y+1)] }
@@ -102,6 +171,7 @@ struct InteriorSweep: Sendable {
     struct Line {
         var normal: SIMD2<Float>; var offset: Float
         var low: Float; var high: Float
+        var isFront = false
         var tangent: SIMD2<Float> { [normal.y, -normal.x] }
         func distance(_ p: SIMD2<Float>) -> Float { abs(simd_dot(normal, p) - offset) }
         func supports(_ p: SIMD2<Float>, margin: Float = 0.028) -> Bool {
@@ -111,14 +181,15 @@ struct InteriorSweep: Sendable {
         /// This line with its extent widened to cover `o`'s end points, projected onto its tangent.
         func covering(_ o: Line) -> Line {
             let ts = [o.low, o.high].map { simd_dot(tangent, o.tangent*$0 + o.normal*o.offset) }
-            return Line(normal: normal, offset: offset, low: min(low, ts.min()!), high: max(high, ts.max()!))
+            return Line(normal: normal, offset: offset, low: min(low, ts.min()!), high: max(high, ts.max()!), isFront:isFront)
         }
     }
 
     mutating func add(_ observation: InteriorSweepObservation) -> InteriorSweepResult {
         guard observation.timestamp.isFinite, finite(observation.camera), finite(observation.forward),
               observation.floor.allSatisfy(finite), observation.walls.allSatisfy(finite),
-              observation.front.allSatisfy(finite), observation.overhead.allSatisfy(finite) else {
+              observation.front.allSatisfy(finite), observation.overhead.allSatisfy(finite),
+              observation.wallPoints3D?.allSatisfy(finite) ?? true else {
             rejectedViews += 1; return reconstruct()
         }
         if let last = observations.last {
@@ -143,6 +214,15 @@ struct InteriorSweep: Sendable {
         value.walls = compact(value.walls,limit:8000)
         value.front = compact(value.front,limit:4000)
         value.overhead = Array(value.overhead.filter { local([$0.x,$0.z]) && $0.y > seed.y + 0.04 && $0.y < seed.y + 3 }.prefix(12000))
+        if let points = value.wallPoints3D {
+            var seen = Set<Evidence>(), compacted = [SIMD3<Float>]()
+            for p in points where local([p.x,p.z]) && (0.015...0.15).contains(p.y-seed.y) {
+                let voxel = Evidence(kind:1, cell:cell([p.x,p.z]), level:Int(floor((p.y-seed.y)/Self.cell)))
+                if seen.insert(voxel).inserted { compacted.append(p) }
+                if compacted.count == 8000 { break }
+            }
+            value.wallPoints3D = compacted
+        }
         guard !value.floor.isEmpty || !value.walls.isEmpty || !value.front.isEmpty || !value.overhead.isEmpty else {
             rejectedViews += 1; return reconstruct()
         }
@@ -253,7 +333,7 @@ struct InteriorSweep: Sendable {
     }
 
     func reconstruct() -> InteriorSweepResult {
-        var result = InteriorSweepResult(views: observations.count, revision: acceptedViews)
+        var result = InteriorSweepResult(views: observations.count, revision: acceptedViews, footprintModel:footprintModel)
         let floorCells = observedBase()
         guard floorCells.count > 40 else { result.hint = "Show more of this compartment’s base."; return result }
         let queue = connectedBase(floorCells)
@@ -343,6 +423,12 @@ struct InteriorSweep: Sendable {
                 if polygon.last.map({ simd_distance($0,corner)>=0.001 }) ?? true { polygon.append(corner) }
             }
             if polygon.count>2, simd_distance(polygon[0],polygon.last!)<0.001 { polygon.removeLast() }
+            if ringIndex == 0 && footprintModel == .rectangular {
+                guard let fitted = rectangularOutline(polygon, lines:sides) else {
+                    result.hint = "Show four straight sides, or choose Follow edges for taper and notches."; return result
+                }
+                polygon = fitted.outline; result.wallPlaneViews = fitted.planeViews
+            }
             outlines.append(polygon)
             if ringIndex == 0 { result.outline = polygon }
         }
@@ -363,9 +449,49 @@ struct InteriorSweep: Sendable {
         } }
         guard total > 40, Float(covered)/Float(total) > 0.97 else { result.hint = "Sweep the remaining base area before reviewing."; return result }
         result.loops = outlines
+        result.boundaryAgreement = boundaryAgreement(for: outlines)
         result.height = overheadHeight(outer:outer, holes:inner)
         result.hint = result.ready ? (result.height == nil ? "Outline captured. Tilt up to see the underside above this compartment, or continue to height." : "Dimensions captured. Review the outline and clear height.") : "Move a little sideways to confirm these edges."
         return result
+    }
+
+    /// Measure disagreement outside the narrow RANSAC inlier set, using samples
+    /// within the wider surface band around the selected
+    /// edges. Corner samples are excluded so another wall cannot dominate a view's
+    /// median. Sparse views of a short patch do not establish boundary repeatability.
+    /// A small spread can still contain a shared sensor bias; it is not a fit guarantee.
+    func boundaryAgreement(for loops: [[SIMD3<Float>]]) -> [InteriorBoundaryAgreement] {
+        var output = [InteriorBoundaryAgreement]()
+        for (li, loop) in loops.enumerated() { for ei in loop.indices {
+            let a = SIMD2(loop[ei].x,loop[ei].z), b = SIMD2(loop[(ei+1)%loop.count].x,loop[(ei+1)%loop.count].z)
+            let length = simd_distance(a,b)
+            guard length > 0.075 else {
+                output.append(.init(loop:li,edge:ei,views:0,spreadMM:nil,horizontalCameraSpanMM:0)); continue
+            }
+            let tangent = (b-a)/length, normal = SIMD2(-tangent.y,tangent.x)
+            var medians = [Float](), cameras = [SIMD2<Float>]()
+            for frame in observations {
+                let samples = (frame.walls+frame.front).filter { p in
+                    let t = simd_dot(tangent,p-a)
+                    return t >= 0.02 && t <= length-0.02 && abs(simd_dot(normal,p-a)) <= Self.surfaceBand
+                }
+                guard samples.count >= 6 else { continue }
+                let ts = samples.map { simd_dot(tangent,$0-a) }
+                guard ts.max()!-ts.min()! >= 0.035 else { continue }
+                let ds = samples.map { simd_dot(normal,$0-a) }.sorted()
+                medians.append(ds[ds.count/2]); cameras.append([frame.camera.x,frame.camera.z])
+            }
+            medians.sort()
+            func percentile(_ q: Float) -> Float {
+                let at = q*Float(medians.count-1), low = Int(at), high = min(low+1,medians.count-1)
+                return medians[low]+(medians[high]-medians[low])*(at-Float(low))
+            }
+            let spread = medians.count >= 3 ? Double(percentile(0.9)-percentile(0.1))*1000 : nil
+            var cameraSpan: Float = 0
+            for i in cameras.indices { for j in cameras.indices where j > i { cameraSpan = max(cameraSpan,simd_distance(cameras[i],cameras[j])) } }
+            output.append(.init(loop:li,edge:ei,views:medians.count,spreadMM:spread,horizontalCameraSpanMM:Double(cameraSpan)*1000))
+        } }
+        return output
     }
 
     /// A stretch of ring matched to one line: where it starts, and the unit direction from
@@ -452,7 +578,9 @@ struct InteriorSweep: Sendable {
         }
         // Only the walls are searched for a nearer surface inside them: an open front is a
         // drop, not a surface, and `snappedToObservedBase` only ever moves it outward.
-        return Self.fitLines(samples(\.walls), nearerSurfaces: true) + Self.fitLines(samples(\.front)).map(snappedToObservedBase)
+        return Self.fitLines(samples(\.walls), nearerSurfaces: true) + Self.fitLines(samples(\.front)).map {
+            var line = snappedToObservedBase($0); line.isFront = true; return line
+        }
     }
 
     /// An open front cannot cut through base the sweep observed. Depth blur at the drop

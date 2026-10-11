@@ -93,6 +93,10 @@ struct InteriorReviewView: View {
     var body: some View {
         Form {
             Section("Inside footprint · \(unit.title.lowercased())") {
+                if record.footprintModel == .rectangular {
+                    Text("Rectangular fit · verify all four sides").font(.caption).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("interior-rectangular-fit")
+                }
                 Picker("Units", selection: $unit) {
                     ForEach(InteriorUnit.allCases, id: \.self) { Text($0.title).tag($0) }
                 }.pickerStyle(.segmented).accessibilityIdentifier("interior-units").disabled(editing != nil)
@@ -109,6 +113,12 @@ struct InteriorReviewView: View {
                 }
                 Text("Overall spans are bounding dimensions; an irregular insert must follow the outline.")
                     .font(.caption).foregroundStyle(.secondary)
+                if let spread = record.capturedBoundaryAgreement?.compactMap(\.spreadMM).max() {
+                    LabeledContent("Captured boundary variation", value: unit.format(millimeters:spread))
+                        .accessibilityIdentifier("interior-boundary-variation")
+                    Text("This is the variation between views of observed edges. Similar views can share measurement bias; verify dimensions with a tape before sizing an insert.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
             Section("Insert settings") {
                 TextField("Interior name", text: $record.name)

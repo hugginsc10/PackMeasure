@@ -547,7 +547,12 @@ struct InteriorSweepTests {
         let report=try #require(state.sweepDiagnostics)
         let build=Bundle.main.object(forInfoDictionaryKey:"CFBundleVersion") as? String ?? "unknown"
         #expect(report.hasPrefix("Build \(build) interior sweep"))
-        #expect(report.contains("PackMeasure interior sweep v1"))
+        #expect(report.contains("PackMeasure interior sweep v2"))
+        let json = try #require(report.split(separator:"\n").last)
+        let snapshot = try JSONDecoder().decode(InteriorSweepSnapshot.self,from:Data(json.utf8))
+        #expect(snapshot.observations.allSatisfy { !($0.wallPoints3D?.isEmpty ?? true) })
+        #expect(snapshot.reconstruction == (try InteriorSweep(snapshot:snapshot).reconstruct()))
+        #expect(snapshot.acceptedViews == 3)
         #expect(try String(contentsOf:directory.appending(path:"last-interior-sweep.txt"),encoding:.utf8)==report)
         #expect(state.diagnosticsStorage?.contains("retrieval over USB")==true)
     }
@@ -561,7 +566,7 @@ struct InteriorSweepTests {
         let kept=try String(contentsOf:directory.appending(path:"last-interior-sweep.txt"),encoding:.utf8)
         state.chooseAnotherBase()
         await state.prepareDiagnostics(saveTo:directory)
-        #expect(state.sweepDiagnostics?.contains("PackMeasure interior sweep v1")==false)
+        #expect(state.sweepDiagnostics?.contains("PackMeasure interior sweep v2")==false)
         #expect(try String(contentsOf:directory.appending(path:"last-interior-sweep.txt"),encoding:.utf8)==kept)
         #expect(state.diagnosticsStorage?.contains("retrieval over USB") != true)
     }

@@ -21,6 +21,9 @@ struct InteriorMeasurement: Identifiable, Codable, Equatable, Sendable {
     var heightSource: HeightSource? = nil
     var sideClearanceMM: Double = 2
     var topClearanceMM: Double = 2
+    /// Repeatability evidence from the captured sweep, not a tolerance guarantee.
+    var capturedBoundaryAgreement: [InteriorBoundaryAgreement]? = nil
+    var footprintModel: InteriorFootprintModel? = nil
 
     func insertContours() throws -> [[InteriorPoint]] {
         guard heightMM.isFinite, topClearanceMM.isFinite,
