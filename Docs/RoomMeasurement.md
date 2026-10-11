@@ -309,6 +309,29 @@ Diagnostics now include all live wall IDs, endpoints, lengths, heights and
 confidence, frozen state, candidate counts, processing failures and chosen source,
 as well as the existing final processed geometry and selected wall IDs.
 
+### Spatial changes after Finish
+
+Build 66 report `9B923FA9-DF9D-45C9-9317-CBA0B067BD37` contained five live
+walls and six finished walls. Total wall length fell by only 10.38%, while the
+live 2.04 m segment `91E06355…` had no nearby finished counterpart. The aggregate
+checks therefore opened finished review without first showing **Compare outlines**.
+The report does not establish whether that live segment belongs to the intended
+room or which outline is physically accurate.
+
+The comparison also checks spatial coverage of each live wall. Nearby parallel
+finished segments contribute a union of projected intervals, so changed IDs,
+reversed endpoints, duplicate segments, and collinear splits do not count as
+lost coverage. A live wall with more than 0.25 m **and** 25% of its length
+uncovered triggers explicit outline comparison. The distance/angle tolerances
+are review cues, not accuracy guarantees. Comparisons use the captured coordinate
+frame; a substantial whole-room shift may also prompt review. Neither candidate
+is moved, combined, repaired, or automatically saved.
+
+The simulator-only QA target replays the supplied coordinates to verify that
+comparison opens even with more finished walls and that either candidate remains
+selectable. This replay does not replace a fresh device scan, a room-outline
+check, or tape/laser measurements.
+
 Validation includes the four-to-one regression, freeze/late updates, latest vs
 peak and empty snapshots, errors/timeouts, invalid walls, normal refinements,
 large dimension loss, reset, persistence, sharing and old-save decoding. The

@@ -63,6 +63,8 @@ import simd
                     }
                 } else if args.contains("home") {
                     HomeView().environment(appModel).task { appModel.loadIfNeeded() }
+                } else if args.contains("room-spatial-compare") {
+                    RoomUIFixture(route: .spatialComparison)
                 } else if args.contains("room-library") || args.contains("room-review") || args.contains("room-compare") {
                     RoomUIFixture(route: args.contains("room-library") ? .library : args.contains("room-compare") ? .comparison : .review)
                 } else if args.contains("room-sheet") {
