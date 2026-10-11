@@ -26,14 +26,38 @@ final class InteriorUITests: XCTestCase {
         XCTAssertTrue(height.waitForExistence(timeout:3))
         // Uncommitted text would be read in the new unit, so units lock while a value is edited.
         height.tap()
-        XCTAssertFalse(app.buttons["Millimeters"].isEnabled)
+        XCTAssertFalse(app.buttons["Centimeters"].isEnabled)
         app.buttons["Done"].tap()
         app.swipeDown()   // editing scrolled the form; lazy rows above leave the hierarchy
-        let millimeters=app.buttons["Millimeters"]
-        XCTAssertTrue(millimeters.waitForExistence(timeout:3) && millimeters.isEnabled)
-        app.buttons["Millimeters"].tap()
-        XCTAssertTrue(app.textFields.matching(NSPredicate(format:"value == %@","88.9")).firstMatch.waitForExistence(timeout:3))
+        let centimeters=app.buttons["Centimeters"]
+        XCTAssertTrue(centimeters.waitForExistence(timeout:3) && centimeters.isEnabled)
+        centimeters.tap()
+        XCTAssertTrue(app.textFields.matching(NSPredicate(format:"value == %@","8.89")).firstMatch.waitForExistence(timeout:3))
+        app.buttons["Both"].tap()
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format:"label CONTAINS %@ AND label CONTAINS %@", " in", " cm")).firstMatch.exists)
         app.buttons["Inches"].tap()
+    }
+    @MainActor func testCentimeterHeightEntryConvertsBeforeApplyingExactMillimeters() {
+        let app=XCUIApplication();app.launchArguments=["interior"];app.launch()
+        let picker=app.descendants(matching:.any).matching(identifier:"interior-frozen-photo").firstMatch
+        XCTAssertTrue(picker.waitForExistence(timeout:5))
+        for (x,y) in [(0.2,0.2),(0.8,0.2),(0.8,0.8),(0.2,0.8)] {tapImage(app,picker,x,y)}
+        app.buttons["interior-next-height"].tap()
+        app.buttons["enter-interior-height"].tap()
+        XCTAssertTrue(app.buttons["Centimeters"].waitForExistence(timeout:3))
+        app.buttons["Centimeters"].tap()
+        let field=app.textFields["interior-height-value"]
+        field.tap();field.typeText("8.89")
+        app.buttons["Inches"].tap()
+        XCTAssertEqual(Double(field.value as? String ?? "") ?? 0, 3.5, accuracy:0.000001)
+        app.buttons["Centimeters"].tap()
+        XCTAssertEqual(Double(field.value as? String ?? "") ?? 0, 8.89, accuracy:0.000001)
+        app.buttons["apply-interior-height"].tap()
+        XCTAssertTrue(app.navigationBars["Review interior"].waitForExistence(timeout:4))
+        XCTAssertTrue(app.textFields.matching(NSPredicate(format:"value == %@","8.89")).firstMatch.exists)
+        save(app)
+        XCTAssertTrue(app.staticTexts["saved-interior"].waitForExistence(timeout:4))
+        XCTAssertTrue(app.staticTexts["saved-interior"].label.contains("88.9 mm"))
     }
     @MainActor func testPinnedOutlineCanAddObstacleWithoutLosingBase() {
         let app=XCUIApplication();app.launchArguments=["interior","pinned"];app.launch()

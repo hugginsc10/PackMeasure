@@ -66,11 +66,11 @@ final class RoomPresentationUITests: XCTestCase {
         app.launch()
         XCTAssertTrue(app.buttons["choose-walls-to-save"].waitForExistence(timeout: 5))
         capture(app, name: "room-review-accessibility-header-light")
-        let longSpan = app.staticTexts["5.00 m · 16.4 ft"]
+        let longSpan = app.staticTexts["16 ft 5 in"]
         reveal(longSpan, in: app)
         XCTAssertTrue(isFullyVisible(longSpan, in: app))
         capture(app, name: "room-review-accessibility-long-span-light")
-        let shortSpan = app.staticTexts["4.00 m · 13.1 ft"]
+        let shortSpan = app.staticTexts["13 ft 1 in"]
         reveal(shortSpan, in: app)
         XCTAssertTrue(isFullyVisible(shortSpan, in: app))
         capture(app, name: "room-review-accessibility-light")

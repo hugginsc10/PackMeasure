@@ -225,6 +225,53 @@ struct AppModelInventoryTests {
         #expect(abs(model.planningSummary.requiredFloorSquareFeet - 4.4) < 0.001)
     }
 
+    @Test func displayPreferencesDoNotRewriteInventoryOrChangePacking() throws {
+        let harness = try InventoryHarness()
+        let model = AppModel(store: harness.store)
+        model.addItem(name: "Metric box", estimate:.init(lengthMeters:0.6, widthMeters:0.4,
+            heightMeters:0.35, confidence:.high, sampleCount:0, frameCount:0), quantity:2)
+        let savedBytes = try Data(contentsOf:harness.url)
+        let summary = model.planningSummary
+        let suite = "inventory-units-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName:suite))
+        defer { defaults.removePersistentDomain(forName:suite) }
+        let preferences = AppPreferences(defaults:defaults)
+        preferences.units = .centimeters
+        let item = try #require(model.items.first)
+        #expect(preferences.units.length(meters:item.lengthMeters) == "60.0 cm")
+        let metricReason = PackingMeasurementCopy.recommendation(model.vehicleRecommendation, units:preferences.units)
+        #expect(metricReason.contains("cm") && metricReason.contains("m²") && metricReason.contains("m³"))
+        #expect(!metricReason.contains("ft²") && !metricReason.contains("ft³"))
+        preferences.units = .both
+        #expect(preferences.units.length(meters:item.lengthMeters).contains("60.0 cm"))
+        #expect(model.planningSummary == summary)
+        #expect(try Data(contentsOf:harness.url) == savedBytes)
+        let reloaded = AppModel(store:harness.store)
+        reloaded.loadIfNeeded()
+        #expect(reloaded.items.first?.lengthMeters == 0.6)
+        #expect(reloaded.items.first?.widthMeters == 0.4)
+        #expect(reloaded.items.first?.heightMeters == 0.35)
+    }
+
+    @Test func packingRejectionCopyUsesStructuredValuesInSelectedUnits() throws {
+        let vehicle = try #require(PackingVehicleCatalog.conservativeMovingFleet().first)
+        let floor = PackingVehicleRejection(vehicle:vehicle,
+            constraint:.insufficientFloor(requiredSquareFeet:100, availableSquareFeet:50),
+            reason:"Old floor copy in ft²")
+        let volume = PackingVehicleRejection(vehicle:vehicle,
+            constraint:.insufficientVolume(requiredCubicFeet:100, availableCubicFeet:50),
+            reason:"Old volume copy in ft³")
+        let floorCopy = PackingMeasurementCopy.rejection(floor, units:.centimeters)
+        #expect(floorCopy.contains("4.65 m²") && floorCopy.contains("9.29 m²"))
+        #expect(!floorCopy.contains("ft"))
+        let volumeCopy = PackingMeasurementCopy.rejection(volume, units:.centimeters)
+        #expect(volumeCopy.contains("1.42 m³") && volumeCopy.contains("2.83 m³"))
+        #expect(!volumeCopy.contains("ft"))
+        let both = PackingMeasurementCopy.rejection(volume, units:.both)
+        #expect(both.contains("cu ft") && both.contains("m³"))
+        #expect(volume.constraint == .insufficientVolume(requiredCubicFeet:100, availableCubicFeet:50))
+    }
+
     private func meters(fromInches inches: Double) -> Double {
         inches / 39.370_078_740_157_48
     }

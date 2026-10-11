@@ -18,7 +18,7 @@ enum RoomDimensionError: LocalizedError {
         case .invalidHeight: "Enter a ceiling height greater than zero and no more than 20 meters."
         case .invalidShelf: "Check the shelf dimensions: depth must be positive, height cannot be negative, and clear space must be positive if entered."
         case .invalidDifference: "The distance to the back edge must be greater than the distance to the front edge. Measure both from the same reference along the same direction."
-        case .invalidInput: "Enter a valid length. Feet must be a whole number and inches must be less than 12."
+        case .invalidInput: "Enter a valid, nonnegative length. When using feet and inches, feet must be whole and inches must be less than 12."
         case .wallReference: "Capture two points at least 20 cm apart along the same straight back edge."
         case .unevenShelf: "The shelf points aren’t level. Aim at the top of the same shelf, including its front edge, then try again."
         case .outsideSelection: "Those points don’t enclose the locked shelf surface. Capture the left and right ends of its back edge and its front edge."
@@ -92,16 +92,26 @@ struct RoomShelfMeasurement: Codable, Identifiable, Sendable {
         }
     }
 
+    static func dimension(_ meters: Float, units: MeasurementUnits) -> String {
+        units.preciseLength(millimeters: Double(meters) * 1_000)
+    }
+
     static func dimension(_ meters: Float) -> String {
         String(format: "%.1f in · %.1f cm", meters / 0.0254, meters * 100)
     }
 
-    var shareText: String {
-        var result = "\(name): depth \(Self.dimension(depth)); top above floor \(Self.dimension(heightAboveFloor))"
-        result += clearanceAbove.map { "; clear space above \(Self.dimension($0))" } ?? "; clear space above not measured"
+    var shareText: String { shareText(format: Self.dimension) }
+
+    func shareText(units: MeasurementUnits) -> String {
+        shareText { Self.dimension($0, units: units) }
+    }
+
+    private func shareText(format: (Float) -> String) -> String {
+        var result = "\(name): depth \(format(depth)); top above floor \(format(heightAboveFloor))"
+        result += clearanceAbove.map { "; clear space above \(format($0))" } ?? "; clear space above not measured"
         result += " (\(sourceLabel))"
         if let referenceToBack, let referenceToFront, source == .difference {
-            result += "\nDepth calculation: \(Self.dimension(referenceToBack)) − \(Self.dimension(referenceToFront)) from the same reference/direction."
+            result += "\nDepth calculation: \(format(referenceToBack)) − \(format(referenceToFront)) from the same reference/direction."
         }
         return result
     }
@@ -148,27 +158,46 @@ struct ShelfGeometry {
     }
 }
 
-enum RoomEntryUnits: String, CaseIterable { case imperial = "Feet & inches", metric = "Meters" }
+enum RoomEntryUnits: String, CaseIterable {
+    case inches = "Inches", centimeters = "Centimeters", imperial = "Feet & inches", metric = "Meters"
+
+    init(preferred units: MeasurementUnits) {
+        self = units == .centimeters ? .centimeters : .inches
+    }
+}
 
 struct RoomLengthEntry {
-    var feet = ""
-    var inches = ""
-    var meters = ""
+    var feet = "" { didSet { unchangedValue = nil } }
+    var inches = "" { didSet { unchangedValue = nil } }
+    var meters = "" { didSet { unchangedValue = nil } }
+    var totalInches = "" { didSet { unchangedValue = nil } }
+    var centimeters = "" { didSet { unchangedValue = nil } }
+    // Formatting an unchanged value must not round the stored measurement when
+    // the user switches entry units or applies an unedited captured dimension.
+    private var unchangedValue: Float?
     init(_ value: Float? = nil) {
         guard let value, value.isFinite, (0...1000).contains(value) else { return }
         // Round the total before splitting so 11.999 in never renders as 12 in.
         let total = (Double(value) / 0.0254 * 100).rounded() / 100
         feet = String(Int(total / 12))
         inches = String(format: "%.2f", total.truncatingRemainder(dividingBy: 12))
-        meters = String(format: "%.4f", value)
+        meters = String(format: "%.7f", value)
+        totalInches = String(format: "%.6f", Double(value) / 0.0254)
+        centimeters = String(format: "%.6f", Double(value) * 100)
+        unchangedValue = value
     }
     func value(in units: RoomEntryUnits) throws -> Float? {
+        if let unchangedValue { return unchangedValue }
         func number(_ text: String) -> Float? {
             Float(text.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: ",", with: "."))
         }
-        if units == .metric {
-            guard !meters.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-            guard let value = number(meters), value.isFinite, (0...1000).contains(value) else { throw RoomDimensionError.invalidInput }
+        if units != .imperial {
+            let text = units == .metric ? meters : units == .centimeters ? centimeters : totalInches
+            let scale: Float = units == .metric ? 1 : units == .centimeters ? 0.01 : 0.0254
+            guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+            guard let entered = number(text), entered.isFinite, entered >= 0 else { throw RoomDimensionError.invalidInput }
+            let value = entered * scale
+            guard value.isFinite, value <= 1000 else { throw RoomDimensionError.invalidInput }
             return value
         }
         guard !feet.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !inches.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }

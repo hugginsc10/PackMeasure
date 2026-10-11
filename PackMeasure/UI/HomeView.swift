@@ -2,6 +2,7 @@ import SwiftUI
 
 struct HomeView: View {
     @Environment(AppModel.self) private var appModel
+    @Environment(AppPreferences.self) private var preferences
     @State private var manualEntryPresented = false
 
     var body: some View {
@@ -54,13 +55,15 @@ struct HomeView: View {
                 .tabItem { Label("Rooms", systemImage: "square.split.2x2") }
             NavigationStack { PackingDashboardView(manualEntryPresented: $manualEntryPresented) }
                 .tabItem { Label("Load", systemImage: "shippingbox") }
+            NavigationStack { SettingsView() }
+                .tabItem { Label("Settings", systemImage: "gearshape") }
         }
         .tint(MeasureStyle.accent)
         .toolbarBackground(MeasureStyle.background, for: .tabBar)
         .sheet(isPresented: Binding(get: { appModel.showingScanner }, set: { appModel.showingScanner = $0 })) {
-            ScannerSheetView().environment(appModel)
+            ScannerSheetView().environment(appModel).environment(preferences)
         }
-        .sheet(isPresented: $manualEntryPresented) { ManualEntryView().environment(appModel) }
+        .sheet(isPresented: $manualEntryPresented) { ManualEntryView().environment(appModel).environment(preferences) }
         .alert("PackMeasure", isPresented: Binding(get: { appModel.bannerMessage != nil }, set: { if !$0 { appModel.bannerMessage = nil } })) {
             Button("OK", role: .cancel) { appModel.bannerMessage = nil }
         } message: { Text(appModel.bannerMessage ?? "") }
@@ -70,6 +73,7 @@ struct HomeView: View {
 
 private struct PackingDashboardView: View {
     @Environment(AppModel.self) private var appModel
+    @Environment(AppPreferences.self) private var preferences
     @Binding var manualEntryPresented: Bool
 
     var body: some View {
@@ -114,12 +118,12 @@ private struct PackingDashboardView: View {
             HStack(spacing: 12) {
                 SummaryTile(
                     title: "Cargo floor",
-                    value: MeasurementMath.decimalSquareFeetString(summary.requiredFloorSquareFeet),
+                    value: preferences.units.areaFromSquareFeet(summary.requiredFloorSquareFeet),
                     systemImage: "square.dashed"
                 )
                 SummaryTile(
                     title: "Cargo volume",
-                    value: MeasurementMath.decimalCubicFeetString(summary.requiredCubicFeet),
+                    value: preferences.units.volumeFromCubicFeet(summary.requiredCubicFeet),
                     systemImage: "shippingbox"
                 )
             }
@@ -129,7 +133,7 @@ private struct PackingDashboardView: View {
             LabeledContent("Saved pieces", value: "\(summary.pieceCount)")
             LabeledContent(
                 "Unstacked footprint",
-                value: MeasurementMath.decimalSquareFeetString(summary.rawFootprintSquareFeet)
+                value: preferences.units.areaFromSquareFeet(summary.rawFootprintSquareFeet)
             )
         } header: {
             Text("Space needed")
@@ -168,11 +172,11 @@ private struct PackingDashboardView: View {
                     recommendation: recommendation
                 )
             } else {
-                Label(recommendation.reason, systemImage: "exclamationmark.triangle.fill")
+                Label(PackingMeasurementCopy.recommendation(recommendation, units: preferences.units), systemImage: "exclamationmark.triangle.fill")
                     .foregroundStyle(.orange)
 
                 ForEach(Array(recommendation.rejections.suffix(3).enumerated()), id: \.offset) { _, rejection in
-                    Text(rejection.reason)
+                    Text(PackingMeasurementCopy.rejection(rejection, units: preferences.units))
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -260,6 +264,7 @@ private struct SummaryTile: View {
 }
 
 private struct VehicleRecommendationView: View {
+    @Environment(AppPreferences.self) private var preferences
     let vehicle: PackingVehicleProfile
     let recommendation: PackingVehicleRecommendation
 
@@ -278,22 +283,22 @@ private struct VehicleRecommendationView: View {
             if let door = vehicle.rearDoorOpening {
                 DetailLine(
                     title: "Rear door",
-                    value: "\(wholeNumber(door.widthInches)) × \(wholeNumber(door.heightInches)) in"
+                    value: [door.widthInches, door.heightInches].map { preferences.units.length(meters: $0 * 0.0254) }.joined(separator: " × ")
                 )
             }
             DetailLine(
                 title: "Usable volume",
-                value: MeasurementMath.decimalCubicFeetString(vehicle.usableCargoVolumeCubicFeet)
+                value: preferences.units.volumeFromCubicFeet(vehicle.usableCargoVolumeCubicFeet)
             )
 
-            Text(recommendation.reason)
+            Text(PackingMeasurementCopy.recommendation(recommendation, units: preferences.units))
                 .font(.footnote)
                 .foregroundStyle(.secondary)
 
             if !recommendation.rejections.isEmpty {
                 DisclosureGroup("Why smaller options were ruled out") {
                     ForEach(Array(recommendation.rejections.enumerated()), id: \.offset) { _, rejection in
-                        Text(rejection.reason)
+                        Text(PackingMeasurementCopy.rejection(rejection, units: preferences.units))
                             .font(.footnote)
                             .padding(.vertical, 3)
                     }
@@ -311,11 +316,8 @@ private struct VehicleRecommendationView: View {
     }
 
     private func dimensionString(_ dimensions: ItemDimensions) -> String {
-        "\(wholeNumber(dimensions.lengthInches)) × \(wholeNumber(dimensions.widthInches)) × \(wholeNumber(dimensions.heightInches)) in"
-    }
-
-    private func wholeNumber(_ value: Double) -> String {
-        String(format: "%.0f", value)
+        [dimensions.lengthInches, dimensions.widthInches, dimensions.heightInches]
+            .map { preferences.units.length(meters: $0 * 0.0254) }.joined(separator: " × ")
     }
 }
 
@@ -336,6 +338,7 @@ private struct DetailLine: View {
 }
 
 private struct ItemRow: View {
+    @Environment(AppPreferences.self) private var preferences
     let item: MeasuredItem
 
     var body: some View {
@@ -350,9 +353,9 @@ private struct ItemRow: View {
             }
 
             Text(
-                "\(MeasurementMath.inchString(from: item.lengthMeters)) × " +
-                "\(MeasurementMath.inchString(from: item.widthMeters)) × " +
-                "\(MeasurementMath.inchString(from: item.heightMeters))"
+                "\(preferences.units.length(meters: item.lengthMeters)) × " +
+                "\(preferences.units.length(meters: item.widthMeters)) × " +
+                "\(preferences.units.length(meters: item.heightMeters))"
             )
             .font(.subheadline)
 
@@ -384,6 +387,34 @@ private struct ItemRow: View {
     }
 }
 
+/// Render the planner's structured constraints in the selected display units.
+/// The planner and its stored imperial policy remain unchanged.
+enum PackingMeasurementCopy {
+    static func rejection(_ rejection: PackingVehicleRejection, units: MeasurementUnits) -> String {
+        switch rejection.constraint {
+        case let .insufficientFloor(required, available):
+            "\(rejection.vehicle.name) has \(units.areaFromSquareFeet(available)) of cargo floor, below the \(units.areaFromSquareFeet(required)) estimate."
+        case let .insufficientVolume(required, available):
+            "\(rejection.vehicle.name) has \(units.volumeFromCubicFeet(available)) of usable cargo volume, below the \(units.volumeFromCubicFeet(required)) estimate."
+        default:
+            rejection.reason
+        }
+    }
+
+    static func recommendation(_ recommendation: PackingVehicleRecommendation, units: MeasurementUnits,
+                               policy: PackingPolicy = .conservative) -> String {
+        guard units != .inches else { return recommendation.reason }
+        guard let vehicle = recommendation.vehicle else {
+            guard let final = recommendation.rejections.last else { return recommendation.reason }
+            return "No listed vehicle is suitable. \(rejection(final, units: units))"
+        }
+        let summary = recommendation.summary
+        let allowance = Int((policy.packingAllowanceFraction * 100).rounded())
+        let utilization = Int((vehicle.usableVolumeFraction * 100).rounded())
+        return "\(vehicle.name) is the smallest listed profile that clears every item and its rear door with a \(units.preciseLength(millimeters: policy.clearanceMarginInches * 25.4)) fit buffer: \(units.areaFromSquareFeet(summary.requiredFloorSquareFeet)) of \(units.areaFromSquareFeet(vehicle.cargoFloorAreaSquareFeet ?? 0)) floor, and \(units.volumeFromCubicFeet(summary.requiredCubicFeet)) of \(units.volumeFromCubicFeet(vehicle.usableCargoVolumeCubicFeet)) usable cargo volume. Includes a \(allowance)% packing allowance and assumes \(utilization)% of advertised cargo volume is usable."
+    }
+}
+
 enum SavedMeasurementCopy {
     static func qualitySummary(for item: MeasuredItem) -> String {
         guard let angleCount = item.comparisonAngleCount,
@@ -403,6 +434,7 @@ enum SavedMeasurementCopy {
 
 private struct ItemPackingEditorView: View {
     @Environment(AppModel.self) private var appModel
+    @Environment(AppPreferences.self) private var preferences
     @Environment(\.dismiss) private var dismiss
 
     let item: MeasuredItem
@@ -435,7 +467,7 @@ private struct ItemPackingEditorView: View {
                 Stepper("Quantity: \(quantity)", value: $quantity, in: 1 ... 999)
                 LabeledContent(
                     "Measured size",
-                    value: "\(MeasurementMath.inchString(from: item.lengthMeters)) × \(MeasurementMath.inchString(from: item.widthMeters)) × \(MeasurementMath.inchString(from: item.heightMeters))"
+                    value: "\(preferences.units.length(meters: item.lengthMeters)) × \(preferences.units.length(meters: item.widthMeters)) × \(preferences.units.length(meters: item.heightMeters))"
                 )
             }
 

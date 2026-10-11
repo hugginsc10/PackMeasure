@@ -16,6 +16,14 @@ struct RoomLengthInput: View {
                     TextField("0", text: $entry.inches).keyboardType(.decimalPad)
                         .accessibilityLabel("\(title) inches").accessibilityIdentifier("\(identifier)-inches")
                     Text("in").foregroundStyle(.secondary)
+                } else if units == .inches {
+                    TextField("Inches", text: $entry.totalInches).keyboardType(.decimalPad)
+                        .accessibilityLabel("\(title) inches").accessibilityIdentifier("\(identifier)-total-inches")
+                    Text("in").foregroundStyle(.secondary)
+                } else if units == .centimeters {
+                    TextField("Centimeters", text: $entry.centimeters).keyboardType(.decimalPad)
+                        .accessibilityLabel("\(title) centimeters").accessibilityIdentifier("\(identifier)-centimeters")
+                    Text("cm").foregroundStyle(.secondary)
                 } else {
                     TextField("Meters", text: $entry.meters).keyboardType(.decimalPad)
                         .accessibilityLabel("\(title) meters").accessibilityIdentifier("\(identifier)-meters")
@@ -27,10 +35,12 @@ struct RoomLengthInput: View {
 }
 
 struct RoomMeasurementsEditor: View {
+    @Environment(AppPreferences.self) private var preferences
     @State private var room: MeasuredRoom
     @State private var usesCeiling: Bool
     @State private var ceiling: RoomLengthEntry
-    @State private var units: RoomEntryUnits = .imperial
+    @State private var units: RoomEntryUnits = .inches
+    @State private var initializedUnits = false
     @State private var addingShelf = false
     @State private var editingShelf: RoomShelfMeasurement?
     @State private var error: String?
@@ -56,7 +66,7 @@ struct RoomMeasurementsEditor: View {
                     Toggle("Use measured ceiling height", isOn: $usesCeiling).accessibilityIdentifier("use-measured-ceiling")
                     if usesCeiling {
                         RoomLengthInput(title: "Floor to ceiling", identifier: "ceiling", entry: $ceiling, units: units)
-                        Text("Enter a measurement you took, such as 9 ft 0 in. This sets a flat ceiling height for the 3D outline. Original scanned wall heights stay unchanged.").font(.footnote).foregroundStyle(.secondary)
+                        Text("Enter a measurement you took. This sets a flat ceiling height for the 3D outline. Original scanned wall heights stay unchanged.").font(.footnote).foregroundStyle(.secondary)
                     } else {
                         Text("The 3D outline uses captured wall heights. Enable this after measuring the actual ceiling height.").font(.footnote).foregroundStyle(.secondary)
                     }
@@ -66,9 +76,9 @@ struct RoomMeasurementsEditor: View {
                         Button { editingShelf = shelf } label: {
                             VStack(alignment: .leading, spacing: 5) {
                                 Text(shelf.name).font(.headline)
-                                Text("Depth \(RoomShelfMeasurement.dimension(shelf.depth))").font(.caption)
-                                Text("Above floor \(RoomShelfMeasurement.dimension(shelf.heightAboveFloor))").font(.caption)
-                                Text(shelf.clearanceAbove.map { "Clear above \(RoomShelfMeasurement.dimension($0))" } ?? "Clear above not measured").font(.caption)
+                                Text("Depth \(RoomShelfMeasurement.dimension(shelf.depth, units: preferences.units))").font(.caption)
+                                Text("Above floor \(RoomShelfMeasurement.dimension(shelf.heightAboveFloor, units: preferences.units))").font(.caption)
+                                Text(shelf.clearanceAbove.map { "Clear above \(RoomShelfMeasurement.dimension($0, units: preferences.units))" } ?? "Clear above not measured").font(.caption)
                             }.foregroundStyle(.primary)
                         }
                     }.onDelete { offsets in room.shelves?.remove(atOffsets: offsets) }
@@ -87,6 +97,11 @@ struct RoomMeasurementsEditor: View {
                 Button("OK") { error = nil }
             } message: { Text(error ?? "") }
         }.tint(MeasureStyle.accent)
+            .task {
+                guard !initializedUnits else { return }
+                units = RoomEntryUnits(preferred: preferences.units)
+                initializedUnits = true
+            }
     }
     private func saveShelf(_ shelf: RoomShelfMeasurement) {
         var shelves = room.shelves ?? []
@@ -110,13 +125,15 @@ struct RoomMeasurementsEditor: View {
 }
 
 struct ShelfMeasurementEditor: View {
+    @Environment(AppPreferences.self) private var preferences
     let walls: [MeasuredRoom.Wall]
     let shelf: RoomShelfMeasurement?
     let onSave: (RoomShelfMeasurement) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var name: String
     @State private var wallID: UUID?
-    @State private var units: RoomEntryUnits = .imperial
+    @State private var units: RoomEntryUnits = .inches
+    @State private var initializedUnits = false
     @State private var subtractDistances: Bool
     @State private var depth: RoomLengthEntry
     @State private var floorHeight: RoomLengthEntry
@@ -175,7 +192,7 @@ struct ShelfMeasurementEditor: View {
                         RoomLengthInput(title: "Reference to front edge", identifier: "reference-front", entry: edited($front), units: units)
                         Text("Use the same starting reference and straight direction. Back-edge distance minus front-edge distance gives shelf depth. Use the back wall only if the shelf touches it.").font(.footnote).foregroundStyle(.secondary)
                         if let b = try? back.value(in: units), let f = try? front.value(in: units), let value = try? RoomShelfMeasurement.depthFromDistances(back: b, front: f) {
-                            LabeledContent("Calculated depth", value: RoomShelfMeasurement.dimension(value)).accessibilityIdentifier("calculated-shelf-depth")
+                            LabeledContent("Calculated depth", value: RoomShelfMeasurement.dimension(value, units: preferences.units)).accessibilityIdentifier("calculated-shelf-depth")
                         }
                     } else {
                         RoomLengthInput(title: "Shelf depth", identifier: "shelf-depth", entry: edited($depth), units: units)
@@ -202,6 +219,11 @@ struct ShelfMeasurementEditor: View {
                 Button("OK") { error = nil }
             } message: { Text(error ?? "") }
         }.tint(MeasureStyle.accent)
+            .task {
+                guard !initializedUnits else { return }
+                units = RoomEntryUnits(preferred: preferences.units)
+                initializedUnits = true
+            }
     }
     private func changeUnits(_ next: RoomEntryUnits) {
         do {

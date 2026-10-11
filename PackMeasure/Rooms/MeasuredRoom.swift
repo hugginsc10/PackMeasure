@@ -112,34 +112,52 @@ struct MeasuredRoom: Codable, Identifiable, Sendable {
                          shelves: shelves?.filter { $0.wallID.map(ids.contains) ?? true })
     }
 
-    var heightReviewMessage: String? {
+    var heightReviewMessage: String? { heightReviewMessage(format: Self.dimension) }
+
+    func heightReviewMessage(units: MeasurementUnits) -> String? {
+        heightReviewMessage { Self.dimension($0, units: units) }
+    }
+
+    private func heightReviewMessage(format: (Float) -> String) -> String? {
         guard let shortest = walls.map(\.height).min(), wallHeight - shortest > 0.2 else { return nil }
-        return "Captured wall heights range from \(Self.dimension(shortest)) to \(Self.dimension(wallHeight)). Check the upper inside corners and exclude outside walls. Wall heights do not verify the ceiling."
+        return "Captured wall heights range from \(format(shortest)) to \(format(wallHeight)). Check the upper inside corners and exclude outside walls. Wall heights do not verify the ceiling."
     }
 
     var shareText: String {
+        shareText(format: Self.dimension, shelfText: { $0.shareText })
+    }
+
+    func shareText(units: MeasurementUnits) -> String {
+        shareText(format: { Self.dimension($0, units: units) }, shelfText: { $0.shareText(units: units) })
+    }
+
+    private func shareText(format: (Float) -> String, shelfText: (RoomShelfMeasurement) -> String) -> String {
         var lines = [name, coverageMessage]
         if let captureSourceMessage { lines.append(captureSourceMessage) }
         if let ceilingHeight {
-            lines.append("Ceiling height: \(Self.dimension(ceilingHeight.meters)) (entered manually; used for 3D outline). Captured wall heights below are unchanged.")
+            lines.append("Ceiling height: \(format(ceilingHeight.meters)) (entered manually; used for 3D outline). Captured wall heights below are unchanged.")
         }
         if let omittedWallCount, omittedWallCount > 0 {
             lines.append("\(omittedWallCount) wall(s) left out during review.")
         }
-        if let heightReviewMessage { lines.append(heightReviewMessage) }
+        if let heightReviewMessage = heightReviewMessage(format: format) { lines.append(heightReviewMessage) }
         if hasRoomExtent {
-            lines += ["Scanned span: \(Self.dimension(spanLength)) × \(Self.dimension(spanWidth))",
-                      "Maximum wall height: \(Self.dimension(wallHeight))",
+            lines += ["Scanned span: \(format(spanLength)) × \(format(spanWidth))",
+                      "Maximum wall height: \(format(wallHeight))",
                       "Approximate scanned extent; missing walls and recesses affect the result. Not floor area."]
         }
         lines += walls.enumerated().map { index, wall in
-            "Wall \(index + 1): \(Self.dimension(wall.length)) long × \(Self.dimension(wall.height)) high (\(wall.confidence) confidence)"
+            "Wall \(index + 1): \(format(wall.length)) long × \(format(wall.height)) high (\(wall.confidence) confidence)"
         }
         if let shelves, !shelves.isEmpty {
             lines.append("Shelves")
-            lines += shelves.map(\.shareText)
+            lines += shelves.map(shelfText)
         }
         return lines.joined(separator: "\n")
+    }
+
+    static func dimension(_ meters: Float, units: MeasurementUnits) -> String {
+        units.length(meters: Double(meters))
     }
 
     static func dimension(_ meters: Float) -> String {

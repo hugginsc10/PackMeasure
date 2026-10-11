@@ -103,6 +103,84 @@ struct ManualEntryTests {
         #expect(submission.dimensions.heightInches == 480)
     }
 
+    @Test func centimetersPersistAsTheSameMetricGeometry() throws {
+        let harness = try ManualEntryInventoryHarness()
+        let model = AppModel(store: harness.store)
+        var draft = ManualEntryDraft(inputUnit: MeasurementUnits.centimeters.inputUnit)
+        draft.lengthText = "60"
+        draft.widthText = "40"
+        draft.heightText = "35"
+        draft.quantity = 2
+        let submission = try draft.validatedSubmission()
+        #expect(abs(submission.dimensions.lengthInches * 0.0254 - 0.6) < 1e-12)
+        #expect(abs(submission.dimensions.widthInches * 0.0254 - 0.4) < 1e-12)
+        #expect(abs(submission.dimensions.heightInches * 0.0254 - 0.35) < 1e-12)
+        let preview = try #require(draft.preview)
+        #expect(MeasurementUnits.centimeters.areaFromSquareFeet(preview.totalFootprintSquareFeet) == "0.48 m²")
+
+        try draft.save(to: model)
+        let reloaded = AppModel(store: harness.store)
+        reloaded.loadIfNeeded()
+        let item = try #require(reloaded.items.first)
+        #expect(abs(item.lengthMeters - 0.6) < 1e-12)
+        #expect(abs(item.widthMeters - 0.4) < 1e-12)
+        #expect(abs(item.heightMeters - 0.35) < 1e-12)
+        #expect(item.quantity == 2)
+    }
+
+    @Test func switchingInputUnitsConvertsValuesWithoutChangingDimensionsOrLimit() throws {
+        var draft = validDraft
+        draft.heightInches = "480"
+        let before = try draft.validatedSubmission().dimensions
+        for _ in 0..<5 {
+            draft.changeInputUnit(to: .centimeters)
+            #expect(abs(try #require(Double(draft.lengthText)) - 60.96) < 1e-10)
+            #expect(draft.canSave)
+            draft.changeInputUnit(to: .inches)
+            #expect(draft.canSave)
+        }
+        let after = try draft.validatedSubmission().dimensions
+        #expect(abs(after.lengthInches - before.lengthInches) < 1e-10)
+        #expect(abs(after.widthInches - before.widthInches) < 1e-10)
+        #expect(abs(after.heightInches - before.heightInches) < 1e-10)
+        #expect(MeasurementUnits.both.inputUnit == .inches)
+    }
+
+    @Test func switchingPartialInputLeavesInvalidAndBlankFieldsEditable() throws {
+        var draft = ManualEntryDraft()
+        draft.lengthText = "12"
+        draft.widthText = "twenty"
+        draft.heightText = ""
+        draft.changeInputUnit(to: .centimeters)
+        #expect(abs(try #require(Double(draft.lengthText)) - 30.48) < 1e-10)
+        #expect(draft.widthText == "twenty" && draft.heightText.isEmpty)
+        #expect(validationError(for: draft) == .missingDimensions)
+        #expect(draft.validationMessage?.contains("centimeters") == true)
+    }
+
+    @Test func centimetersUseTheExistingPhysicalDimensionLimit() throws {
+        var draft = ManualEntryDraft(inputUnit: .centimeters)
+        draft.lengthText = "1219.2"
+        draft.widthText = "40"
+        draft.heightText = "35"
+        #expect(draft.canSave)
+        draft.lengthText = "1219.21"
+        #expect(validationError(for: draft) == .dimensionsTooLarge)
+        #expect(draft.validationMessage?.contains("1219.2 cm") == true)
+    }
+
+    @Test func legacyInchPropertiesKeepTheirMeaningInAMetricDraft() throws {
+        var draft = ManualEntryDraft(inputUnit: .centimeters)
+        draft.lengthInches = "12"
+        draft.widthInches = "24"
+        draft.heightInches = "6"
+        #expect(abs(try #require(Double(draft.lengthText)) - 30.48) < 1e-10)
+        let dimensions = try draft.validatedSubmission().dimensions
+        #expect(abs(dimensions.lengthInches - 12) < 1e-10)
+        #expect(abs(dimensions.widthInches - 24) < 1e-10)
+        #expect(abs(dimensions.heightInches - 6) < 1e-10)
+    }
+
     private var validDraft: ManualEntryDraft {
         var draft = ManualEntryDraft()
         draft.name = "Box"

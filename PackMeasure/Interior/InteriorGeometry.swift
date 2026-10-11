@@ -65,7 +65,7 @@ enum InteriorGeometryError: Error, LocalizedError {
         case .invalidHeight: "Usable height must be positive and greater than the top clearance."
         case .invalidClearance: "This clearance collapses or crosses part of the outline. Reduce clearance or retrace the narrow section."
         case .nonPlanar: "The perimeter points are not on one level floor. Retake points on the drawer floor, not the rim."
-        case .heightPoint: "Choose a top edge above the traced base. Height must be 10–3,000 mm; you can also enter a measured height."
+        case .heightPoint: "Choose a top edge above the traced base within the supported height range. You can also enter a measured height."
         }
     }
 }

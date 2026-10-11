@@ -235,45 +235,48 @@ struct InteriorScannerView: View {
 
 struct InteriorHeightEntry: View {
     @Environment(\.dismiss) private var dismiss
-    @State private var value = ""
-    @AppStorage(InteriorUnit.storageKey) private var unit: InteriorUnit = .inches
-    private var inches: Bool { unit == .inches }
+    @Environment(AppPreferences.self) private var preferences
+    @State private var draft = InteriorHeightDraft()
     @State private var error: String?
     let onApply: (Double) -> Void
     var body: some View {
         NavigationStack {
             Form {
                 Section("Available space above the base") {
-                    Picker("Units", selection: Binding(get: { inches }, set: changeUnits)) {
-                        Text("Inches").tag(true); Text("Millimeters").tag(false)
+                    Picker("Units", selection: Binding(get: { preferences.units }, set: changeUnits)) {
+                        ForEach(MeasurementUnits.allCases, id: \.self) { Text($0.title).tag($0) }
                     }.pickerStyle(.segmented)
-                    TextField(inches ? "Height in inches" : "Height in millimeters", text: $value)
+                    TextField("Height in \(draft.inputUnit.title.lowercased())", text: $draft.text)
                         .keyboardType(.decimalPad).accessibilityIdentifier("interior-height-value")
                     Text("Enter a measured height that clears the drawer opening, shelf or lowest overhead obstruction.").font(.footnote)
+                    Text("Supported height: about \(preferences.units.preciseLength(millimeters: 10)) to \(preferences.units.preciseLength(millimeters: 3000)).")
+                        .font(.caption).foregroundStyle(.secondary)
                     if let error { Text(error).foregroundStyle(.orange) }
                 }
             }.navigationTitle("Enter height").navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                     ToolbarItem(placement: .confirmationAction) { Button("Use height") {
-                        guard let number = number, (10...3000).contains(number * (inches ? 25.4 : 1)) else {
-                            error = "Enter a height from 10 to 3,000 mm (about 0.4–118 inches)."; return
+                        guard let millimeters = draft.millimeters, (10...3000).contains(millimeters) else {
+                            error = "Enter a valid measured height within the supported range."; return
                         }
-                        onApply(number * (inches ? 25.4 : 1)); dismiss()
+                        onApply(millimeters); dismiss()
                     }.accessibilityIdentifier("apply-interior-height") }
                 }
         }.tint(MeasureStyle.accent)
+            .onAppear { draft.changeInputUnit(to: preferences.units.inputUnit) }
+            .onChange(of: preferences.units) { _, next in
+                if !draft.changeInputUnit(to: next.inputUnit) {
+                    error = "Check the height before changing its input units."
+                }
+            }
     }
-    private var number: Double? {
-        let parsed = Double(value.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: ",", with: "."))
-        return parsed?.isFinite == true ? parsed : nil
-    }
-    private func changeUnits(_ next: Bool) {
-        guard next != inches else { return }
-        if !value.isEmpty {
-            guard let number else { error = "Check the height before changing units."; return }
-            value = String(format: "%.3f", number * (next ? 1 / 25.4 : 25.4))
+    private func changeUnits(_ next: MeasurementUnits) {
+        guard next != preferences.units else { return }
+        guard draft.changeInputUnit(to: next.inputUnit) else {
+            error = "Check the height before changing units."; return
         }
-        unit = next ? .inches : .millimeters; error = nil
+        preferences.units = next
+        error = nil
     }
 }

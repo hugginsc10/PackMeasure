@@ -43,17 +43,50 @@ struct ManualEntrySubmission {
 struct ManualEntryDraft {
     static let maximumDimensionInches = 480.0
 
+    private(set) var inputUnit: MeasurementInputUnit
     var name = ""
     var quantity = 1
-    var lengthInches = ""
-    var widthInches = ""
-    var heightInches = ""
+    var lengthText = ""
+    var widthText = ""
+    var heightText = ""
     var isStackable = false
     var maxStackLayers = 2
     var mayRotate = false
 
+    init(inputUnit: MeasurementInputUnit = .inches) {
+        self.inputUnit = inputUnit
+    }
+
+    // Preserve the existing inches-based draft API. The form binds to the
+    // selected-unit text instead, so these aliases always retain their meaning.
+    var lengthInches: String {
+        get { convertedText(lengthText, from: inputUnit, to: .inches) }
+        set { lengthText = convertedText(newValue, from: .inches, to: inputUnit) }
+    }
+    var widthInches: String {
+        get { convertedText(widthText, from: inputUnit, to: .inches) }
+        set { widthText = convertedText(newValue, from: .inches, to: inputUnit) }
+    }
+    var heightInches: String {
+        get { convertedText(heightText, from: inputUnit, to: .inches) }
+        set { heightText = convertedText(newValue, from: .inches, to: inputUnit) }
+    }
+
+    mutating func changeInputUnit(to unit: MeasurementInputUnit) {
+        guard unit != inputUnit else { return }
+        lengthText = convertedText(lengthText, from: inputUnit, to: unit)
+        widthText = convertedText(widthText, from: inputUnit, to: unit)
+        heightText = convertedText(heightText, from: inputUnit, to: unit)
+        inputUnit = unit
+    }
+
+    private var maximumDimensionInInputUnit: Double {
+        inputUnit == .inches ? Self.maximumDimensionInches
+            : MeasurementInputUnit.inches.converted(value: Self.maximumDimensionInches, to: inputUnit)
+    }
+
     var hasDimensionInput: Bool {
-        !lengthInches.isEmpty || !widthInches.isEmpty || !heightInches.isEmpty
+        !lengthText.isEmpty || !widthText.isEmpty || !heightText.isEmpty
     }
 
     var preview: ManualEntryPreview? {
@@ -76,15 +109,20 @@ struct ManualEntryDraft {
         do {
             _ = try validatedSubmission()
             return nil
+        } catch ManualEntryValidationError.missingDimensions {
+            return "Enter length, width, and height as numbers in \(inputUnit.title.lowercased())."
+        } catch ManualEntryValidationError.dimensionsTooLarge {
+            let maximum = String(format: "%.15g", locale: Locale(identifier: "en_US_POSIX"), maximumDimensionInInputUnit)
+            return "Every dimension must be \(maximum) \(inputUnit.symbol) or less."
         } catch {
             return error.localizedDescription
         }
     }
 
     func validatedSubmission() throws -> ManualEntrySubmission {
-        guard let length = parseDimension(lengthInches),
-              let width = parseDimension(widthInches),
-              let height = parseDimension(heightInches)
+        guard let length = parseDimension(lengthText),
+              let width = parseDimension(widthText),
+              let height = parseDimension(heightText)
         else {
             throw ManualEntryValidationError.missingDimensions
         }
@@ -95,9 +133,9 @@ struct ManualEntryDraft {
             throw ManualEntryValidationError.nonPositiveDimensions
         }
 
-        guard length <= Self.maximumDimensionInches,
-              width <= Self.maximumDimensionInches,
-              height <= Self.maximumDimensionInches
+        guard length <= maximumDimensionInInputUnit,
+              width <= maximumDimensionInInputUnit,
+              height <= maximumDimensionInInputUnit
         else {
             throw ManualEntryValidationError.dimensionsTooLarge
         }
@@ -115,9 +153,9 @@ struct ManualEntryDraft {
             name: trimmedName.isEmpty ? "Manual item" : trimmedName,
             quantity: quantity,
             dimensions: try ItemDimensions(
-                lengthInches: length,
-                widthInches: width,
-                heightInches: height
+                lengthInches: inputUnit == .inches ? length : inputUnit.converted(value: length, to: .inches),
+                widthInches: inputUnit == .inches ? width : inputUnit.converted(value: width, to: .inches),
+                heightInches: inputUnit == .inches ? height : inputUnit.converted(value: height, to: .inches)
             ),
             stackability: isStackable
                 ? .stackable(maxLayers: maxStackLayers)
@@ -148,6 +186,15 @@ struct ManualEntryDraft {
     private func parseDimension(_ text: String) -> Double? {
         Double(text.trimmingCharacters(in: .whitespacesAndNewlines))
     }
+
+    private func convertedText(_ text: String, from unit: MeasurementInputUnit, to destination: MeasurementInputUnit) -> String {
+        guard unit != destination, let value = parseDimension(text), value.isFinite else { return text }
+        let converted = unit.converted(value: value, to: destination)
+        guard converted.isFinite else { return text }
+        // Avoid exposing floating-point tails while retaining far more precision
+        // than measurement input needs. Blank/invalid fields remain editable.
+        return String(format: "%.15g", locale: Locale(identifier: "en_US_POSIX"), converted)
+    }
 }
 
 struct ManualEntryView: View {
@@ -159,9 +206,11 @@ struct ManualEntryView: View {
     }
 
     @Environment(AppModel.self) private var appModel
+    @Environment(AppPreferences.self) private var preferences
     @Environment(\.dismiss) private var dismiss
 
     @State private var draft = ManualEntryDraft()
+    @State private var appliedPreferredInputUnit = false
     @State private var saveError: String?
     @FocusState private var focusedField: Field?
 
@@ -183,9 +232,16 @@ struct ManualEntryView: View {
                 }
 
                 Section {
-                    dimensionField("Length", text: $draft.lengthInches, field: .length)
-                    dimensionField("Width", text: $draft.widthInches, field: .width)
-                    dimensionField("Height", text: $draft.heightInches, field: .height)
+                    Picker("Input units", selection: Binding(
+                        get: { draft.inputUnit }, set: { draft.changeInputUnit(to: $0) }
+                    )) {
+                        ForEach(MeasurementInputUnit.allCases, id: \.self) { unit in
+                            Text(unit.title).tag(unit)
+                        }
+                    }.pickerStyle(.segmented)
+                    dimensionField("Length", text: $draft.lengthText, field: .length)
+                    dimensionField("Width", text: $draft.widthText, field: .width)
+                    dimensionField("Height", text: $draft.heightText, field: .height)
 
                     if draft.hasDimensionInput,
                        let message = draft.validationMessage,
@@ -198,24 +254,26 @@ struct ManualEntryView: View {
                 } header: {
                     Text("Dimensions")
                 } footer: {
-                    Text("Enter the outside measurements in inches. Decimals are okay; for example, use 24.5 for 24½ inches.")
+                    Text(draft.inputUnit == .inches
+                         ? "Enter the outside measurements in inches. Decimals are okay; for example, use 24.5 for 24½ inches."
+                         : "Enter the outside measurements in centimeters. Decimals are okay; for example, use 62.2 cm.")
                 }
 
                 if let preview = draft.preview {
                     Section("Space preview") {
                         LabeledContent(
                             "Each item footprint",
-                            value: squareFeet(preview.perItemFootprintSquareFeet)
+                            value: preferences.units.areaFromSquareFeet(preview.perItemFootprintSquareFeet)
                         )
                         if draft.quantity > 1 {
                             LabeledContent(
                                 "Total footprint",
-                                value: squareFeet(preview.totalFootprintSquareFeet)
+                                value: preferences.units.areaFromSquareFeet(preview.totalFootprintSquareFeet)
                             )
                         }
                         LabeledContent(
                             "Total volume",
-                            value: cubicFeet(preview.totalCubicFeet)
+                            value: preferences.units.volumeFromCubicFeet(preview.totalCubicFeet, imperialDecimalPlaces: 1, metricDecimalPlaces: 3)
                         )
                     }
                 }
@@ -271,6 +329,11 @@ struct ManualEntryView: View {
                 }
             }
         }
+        .onAppear {
+            guard !appliedPreferredInputUnit else { return }
+            draft.changeInputUnit(to: preferences.units.inputUnit)
+            appliedPreferredInputUnit = true
+        }
     }
 
     private func dimensionField(
@@ -285,8 +348,8 @@ struct ManualEntryView: View {
                     .multilineTextAlignment(.trailing)
                     .focused($focusedField, equals: field)
                     .frame(minWidth: 80)
-                    .accessibilityLabel("\(title) in inches")
-                Text("in")
+                    .accessibilityLabel("\(title) in \(draft.inputUnit.title.lowercased())")
+                Text(draft.inputUnit.symbol)
                     .foregroundStyle(.secondary)
             }
         }
@@ -297,15 +360,7 @@ struct ManualEntryView: View {
             try draft.save(to: appModel)
             dismiss()
         } catch {
-            saveError = error.localizedDescription
+            saveError = draft.validationMessage ?? error.localizedDescription
         }
-    }
-
-    private func squareFeet(_ value: Double) -> String {
-        String(format: "%.1f sq ft", value)
-    }
-
-    private func cubicFeet(_ value: Double) -> String {
-        String(format: "%.1f cu ft", value)
     }
 }
