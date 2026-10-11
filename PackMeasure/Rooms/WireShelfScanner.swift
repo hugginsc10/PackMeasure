@@ -201,7 +201,7 @@ struct WireShelfScannerView: View {
                                 onMeasured(result, state.sequence.measurementPoints, selected, state.sequence.orderedMatches); dismiss()
                             }
                         }.accessibilityIdentifier("use-wire-shelf")
-                        ShareLink("Shelf diagnostics", item: state.diagnostics)
+                        DiagnosticButton(title: "Shelf diagnostics", kind: .wireShelf, report: state.diagnostics)
                         Button("Scan again") { state = WireShelfScanState(); cameraID = UUID() }
                     }
                 } else if !ARWorldTrackingConfiguration.isSupported {
@@ -230,7 +230,7 @@ struct WireShelfScannerView: View {
                     restartOnForeground = false; cameraID = UUID()
                 }
             }
-        }.tint(MeasureStyle.accent)
+        }.diagnosticSupport().tint(MeasureStyle.accent)
     }
     private var controls: some View {
         ScrollView {
@@ -267,7 +267,7 @@ struct WireShelfScannerView: View {
                     else if state.sequence.stage > 0 { Button("Undo point", action: state.undo) }
                     if state.sequence.stage == 4 { Button("Skip clear space", action: state.skipClearance) }
                 }.font(.caption)
-                ShareLink("Shelf diagnostics", item: state.diagnostics).font(.caption)
+                DiagnosticButton(title: "Shelf diagnostics", kind: .wireShelf, report: state.diagnostics).font(.caption)
             }.padding(16)
         }.frame(maxHeight: 325)
     }

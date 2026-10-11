@@ -37,6 +37,14 @@ struct SettingsView: View {
                 Text("Choose the guidance for your next room scan and the labels shown when you open a floorplan. You can also change these while measuring.")
             }
 
+            Section {
+                DiagnosticButton(title: "Report a problem", kind: .app, report: "",
+                                 identifier: "settings-report-problem")
+                Text("Diagnostic email: \(SupportContact.email)")
+                    .font(.footnote).foregroundStyle(.secondary).textSelection(.enabled)
+            } header: { Text("Support") }
+              footer: { Text("For scan issues, use Diagnostics on the scan or review screen so its report is included.") }
+
             Section("About") {
                 LabeledContent("PackMeasure", value: version)
                 Text("Rooms and inventory are saved on this iPhone. These preferences apply across the app.")
@@ -46,6 +54,7 @@ struct SettingsView: View {
         .pickerStyle(.menu)
         .navigationTitle("Settings")
         .navigationBarTitleDisplayMode(.inline)
+        .diagnosticSupport()
     }
 
     private var version: String {

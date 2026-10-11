@@ -5,7 +5,11 @@ and furniture. **Box** uses a rigid-body profile check that is inappropriate for
 some connected, irregular shapes. General Item keeps ownership, photo-edge,
 LiDAR endpoint support, and cross-angle checks enabled.
 
-After a capture attempt, **Share scan diagnostics** in the scanner toolbar exports
+After a capture attempt, **Share scan diagnostics** in the scanner toolbar opens
+**Send diagnostics**. **Email report** prepares a message to the diagnostic inbox
+with a named text attachment; review it and tap Send. If Mail is unavailable,
+use **Share report** and **Copy email address** with another app or Files.
+The attachment preserves
 up to 12 recent frame extraction reports from this scanner session. It includes
 build, subject mode, request/series IDs, rejection code/details, sample count,
 region coverage, multiplicity route, and estimated dimensions. It contains no
@@ -13,6 +17,8 @@ camera image or point cloud. The share sheet lets the user choose a destination;
 the app does not transmit automatically. Reports are session-local, so share
 before closing the scanner. A successful frame report is not proof that the
 multi-angle ownership/consensus checks accepted it or that its dimensions are accurate.
+
+See [Diagnostic email](Diagnostics.md) for delivery checks and report handling.
 
 ## Repeatable physical test card
 

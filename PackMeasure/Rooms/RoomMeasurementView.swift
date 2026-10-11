@@ -140,7 +140,7 @@ struct RoomScanSheet: View {
                     VStack {
                         ContentUnavailableView("Room scan needs another try", systemImage: "exclamationmark.triangle", description: Text(failure))
                         Button("Start new scan", action: retry).buttonStyle(MeasurePrimaryButton())
-                        ShareLink("Share room diagnostics", item: diagnosticReport)
+                        DiagnosticButton(title: "Share room diagnostics", kind: .room, report: diagnosticReport)
                             .padding(.bottom)
                     }
                     // Names the scan the access gate last evaluated, so UI tests can
@@ -165,6 +165,7 @@ struct RoomScanSheet: View {
                 }
             }
         }
+        .diagnosticSupport()
         // Keyed to the scan so Start new scan re-runs the gate; otherwise a
         // denied first check leaves the sheet on "Checking camera access…".
         .task(id: scanID) {
@@ -306,7 +307,7 @@ struct RoomCaptureGuidanceCard: View {
         } else if guidance == .room {
             Button("Use closet guidance") { guidance = .tightCloset }
         }
-        ShareLink("Diagnostics", item: diagnosticReport)
+        DiagnosticButton(title: "Diagnostics", kind: .room, report: diagnosticReport)
     }
 }
 

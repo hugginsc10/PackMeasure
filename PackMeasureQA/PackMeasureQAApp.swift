@@ -52,7 +52,9 @@ import simd
     var body: some Scene {
         WindowGroup {
             Group {
-                if args.contains("settings-room") {
+                if args.contains("diagnostics-lifecycle") {
+                    DiagnosticLifecycleFixture().diagnosticSupport()
+                } else if args.contains("settings-room") {
                     TabView {
                         RoomUIFixture(route: .library).tabItem { Label("Rooms", systemImage: "square.split.2x2") }
                         NavigationStack { SettingsView() }.tabItem { Label("Settings", systemImage: "gearshape") }
