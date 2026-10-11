@@ -15,6 +15,20 @@ final class FloorplanGeometryTests: XCTestCase {
         XCTAssertEqual(walls[0].length, 5)
     }
 
+    func testCompactPreviewUsesAvailableSpaceWithoutDistortingRoom() {
+        let walls = [wall([10, 20], [15, 20]), wall([15, 20], [15, 24]),
+                     wall([15, 24], [10, 24]), wall([10, 24], [10, 20])]
+        let geometry = FloorplanGeometry(walls: walls, size: CGSize(width: 82, height: 76), inset: 8)
+        let points = geometry.segments.flatMap { [$0.start, $0.end] }
+        let width = points.map(\.x).max()! - points.map(\.x).min()!
+        let height = points.map(\.y).max()! - points.map(\.y).min()!
+        XCTAssertEqual(width, 66, accuracy: 0.01)
+        XCTAssertEqual(width / height, 5.0 / 4.0, accuracy: 0.01)
+        XCTAssertTrue(points.allSatisfy { (8...74).contains($0.x) && (8...68).contains($0.y) })
+        XCTAssertEqual(walls[0].length, 5)
+        XCTAssertEqual(walls[1].length, 4)
+    }
+
     func testSelectionUsesNearestSegmentWithScreenSpaceTolerance() {
         let geometry = FloorplanGeometry(walls: [wall([0, 0], [5, 0]), wall([5, 0], [5, 5])], size: CGSize(width: 300, height: 300))
         XCTAssertEqual(geometry.nearestWall(to: CGPoint(x: 150, y: 40), tolerance: 22), 0)

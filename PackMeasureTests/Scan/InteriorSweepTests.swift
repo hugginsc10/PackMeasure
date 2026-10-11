@@ -280,6 +280,40 @@ struct InteriorSweepTests {
         _=map.add(background)
         #expect(map.observations.map(\.timestamp)==stored)
     }
+    @Test func incomingFloorKeepsTheOnlyViewOfItsNewlyUsableSideAtTheBudget() throws {
+        // The right side was seen before its floor. It lies outside the old base's
+        // neighborhood, but becomes usable once this candidate extends the base.
+        // Every other view has one unique underside cell; losing one costs less
+        // than losing the only view of the now-usable right side.
+        let stored = (0..<40).map { i -> InteriorSweepObservation in
+            var o = observation(i, loops:[rectangle], open:true)
+            o.floor.removeAll { $0.x > 0.17 }
+            o.front = []
+            o.walls = i == 0 ? o.walls.filter { $0.x > 0.39 } : []
+            o.overhead = i == 0 ? [] : [[0.1,0.3+Float(i)*0.02,0.1]]
+            return o
+        }
+        var map = try InteriorSweep(snapshot:.init(seed:[0.1,0,0.1], observations:stored,
+                                                  rejectedViews:0))
+        var extensionView = observation(40, loops:[rectangle])
+        extensionView.walls = []
+        _ = map.add(extensionView)
+        #expect(map.observations.count == InteriorSweep.maxViews)
+        #expect(map.observations.contains { $0.timestamp == 0 })
+        #expect(map.observations.contains { $0.timestamp == extensionView.timestamp })
+    }
+    @Test func frontBeyondANotchIsNotSnappedIntoItsLocalBase() {
+        // The seed is below this notch's upper edge, but base at that edge is
+        // above it. Away from the seed would move the open edge into the base.
+        let notched: [SIMD2<Float>] = [[0,0],[0.4,0],[0.4,0.1],[0.2,0.1],
+                                     [0.2,0.2],[0.4,0.2],[0.4,0.3],[0,0.3]]
+        var map = InteriorSweep(seed:[0.1,0,0.05])
+        for i in 0..<2 { _ = map.add(observation(i, loops:[notched])) }
+        let front = InteriorSweep.Line(normal:[0,1], offset:0.2, low:0.2, high:0.4)
+        let snapped = map.snappedToObservedBase(front)
+        #expect(abs(abs(snapped.normal.y)-1) < 0.0001)
+        #expect(abs(abs(snapped.offset)-0.2) < 0.001, "\(snapped)")
+    }
     @Test func shortFloorPatchIsNotExtrapolatedAlongALongFront() {
         // Base seen past a 40 cm front only along its first 8 cm, rising 1 cm per 10 cm:
         // extrapolating that slope would push the far end past edgeReach.

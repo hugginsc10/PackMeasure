@@ -30,7 +30,8 @@ struct RoomCaptureReviewView: View {
                     if comparison.live != nil {
                         Button { self.chosen = nil } label: {
                             Label("Compare outlines", systemImage: "square.on.square")
-                        }.padding(.top, 8).accessibilityIdentifier("compare-outlines")
+                        }.buttonStyle(.bordered)
+                            .padding(.top, 8).accessibilityIdentifier("compare-outlines")
                     }
                     RoomScanReviewView(room: chosen, store: store,
                                        diagnostics: report + "\nreview_source=\(chosen.captureSource?.rawValue ?? "processed")",
@@ -40,7 +41,7 @@ struct RoomCaptureReviewView: View {
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
-                        Text(comparison.title).font(.title2.bold())
+                        Text(comparison.title).font(.headline)
                         Text(comparison.message).font(.subheadline).foregroundStyle(.secondary)
                         if let live = comparison.live {
                             candidate(live, title: "Live outline", subtitle: "Unprocessed · captured before Finish", action: "Review live outline")
@@ -48,10 +49,10 @@ struct RoomCaptureReviewView: View {
                         if let processed = comparison.processed {
                             candidate(processed, title: "Finished outline", subtitle: "After room processing", action: "Review finished outline")
                         }
-                        Text("Choosing another outline starts a new wall selection. Neither outline verifies the ceiling height.")
+                        Text("Switching outlines resets wall selection. Ceiling height needs separate verification.")
                             .font(.footnote).foregroundStyle(.secondary)
                         Button("Scan again", action: onScanAgain).buttonStyle(.bordered)
-                        ShareLink("Diagnostics", item: report)
+                        ShareLink("Diagnostics", item: report).font(.subheadline)
                     }.padding(20)
                 }.navigationTitle("Compare outlines")
             }
@@ -64,15 +65,17 @@ struct RoomCaptureReviewView: View {
             HStack {
                 Text(title).font(.headline)
                 Spacer()
-                Text("\(room.walls.count) \(room.walls.count == 1 ? "wall" : "walls")").font(.subheadline)
+                Text("\(room.walls.count) \(room.walls.count == 1 ? "wall" : "walls")")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             Text(subtitle).font(.caption).foregroundStyle(.secondary)
             Button { preview = room } label: {
-                RoomFloorplanPreview(walls: room.walls).frame(height: 115)
+                RoomFloorplanPreview(walls: room.walls).frame(height: 96)
                     .frame(maxWidth: .infinity)
                     .background(MeasureStyle.background, in: RoundedRectangle(cornerRadius: 12))
             }.buttonStyle(.plain).accessibilityLabel("Preview \(title.lowercased()) in 2D or 3D")
             Button(action) { chosen = room }.buttonStyle(MeasurePrimaryButton())
+                .accessibilityIdentifier(room.captureSource == .liveSnapshot ? "review-live-outline" : "review-finished-outline")
         }.measurePanel()
     }
 }

@@ -150,7 +150,7 @@ final class RoomWireframeDrawing: UIView {
                 dots.append(UIBezierPath(ovalIn: CGRect(x: x, y: y, width: 1, height: 1)))
             }
         }
-        UIColor.white.withAlphaComponent(0.09).setFill(); dots.fill()
+        UIColor.label.withAlphaComponent(0.09).setFill(); dots.fill()
         for face in geometry.faces {
             let color = wallColor(face.index)
             let omitted = omittedWallIDs.contains(walls[face.index].id)
@@ -199,7 +199,7 @@ final class RoomWireframeDrawing: UIView {
         let path = UIBezierPath(roundedRect: rect, cornerRadius: 7)
         UIColor(MeasureStyle.background).withAlphaComponent(0.96).setFill(); path.fill()
         color.withAlphaComponent(0.6).setStroke(); path.lineWidth = 0.75; path.stroke()
-        let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: UIColor.white]
+        let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: UIColor.label]
         let size = (text as NSString).size(withAttributes: attributes)
         (text as NSString).draw(at: CGPoint(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2), withAttributes: attributes)
     }

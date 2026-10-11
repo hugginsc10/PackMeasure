@@ -8,7 +8,6 @@ struct PackMeasureApp: App {
         WindowGroup {
             HomeView()
                 .environment(appModel)
-                .preferredColorScheme(.dark)
                 .tint(MeasureStyle.accent)
                 .task {
                     appModel.loadIfNeeded()

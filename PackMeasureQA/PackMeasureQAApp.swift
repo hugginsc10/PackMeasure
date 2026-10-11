@@ -2,6 +2,7 @@ import SwiftUI
 import simd
 
 @main struct PackMeasureQAApp: App {
+    @State private var appModel = AppModel()
     @State private var accepted = false
     @State private var pickerPoint: CGPoint?
     @State private var capturedSource: RoomShelfMeasurement.Source?
@@ -37,7 +38,11 @@ import simd
     var body: some Scene {
         WindowGroup {
             Group {
-                if args.contains("room-sheet") {
+                if args.contains("home") {
+                    HomeView().environment(appModel).task { appModel.loadIfNeeded() }
+                } else if args.contains("room-library") || args.contains("room-review") || args.contains("room-compare") {
+                    RoomUIFixture(route: args.contains("room-library") ? .library : args.contains("room-compare") ? .comparison : .review)
+                } else if args.contains("room-sheet") {
                     RoomScanSheet(store:RoomScanStore(directory:URL.temporaryDirectory.appending(path:"room-sheet-fixture")),guidance:.room)
                 } else if args.contains("sweep") { SweepFixture() } else if args.contains("interior") { InteriorFixture() } else if args.contains("picker") {
                     VStack {
@@ -55,7 +60,8 @@ import simd
                 } else {
                     ShelfCaptureFlow(onMeasured:{_,_,_,source,_ in capturedSource=source})
                 }
-            }.preferredColorScheme(.dark).tint(MeasureStyle.accent)
+            }.preferredColorScheme(args.contains("light") ? .light : args.contains("dark") ? .dark : nil)
+                .tint(MeasureStyle.accent)
         }
     }
 }
