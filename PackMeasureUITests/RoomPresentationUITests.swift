@@ -85,6 +85,24 @@ final class RoomPresentationUITests: XCTestCase {
         }
     }
 
+    @MainActor func testBuild66GeometryLossPromptsComparisonDespiteMoreFinishedWalls() {
+        let app = XCUIApplication()
+        app.launchArguments = ["room-spatial-compare", "dark"]
+        app.launch()
+        XCTAssertTrue(app.buttons["review-live-outline"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["review-finished-outline"].exists)
+        XCTAssertTrue(app.staticTexts["The outline changed after Finish"].exists)
+        XCTAssertFalse(app.buttons["compare-outlines"].exists, "Finished review must not open automatically")
+        capture(app, name: "room-report-spatial-comparison-dark")
+        app.buttons["review-finished-outline"].tap()
+        XCTAssertTrue(app.buttons["compare-outlines"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["review-live-outline"].exists)
+        app.buttons["compare-outlines"].tap()
+        XCTAssertTrue(app.buttons["review-live-outline"].waitForExistence(timeout: 5))
+        app.buttons["review-live-outline"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["live-outline-warning"].waitForExistence(timeout: 5))
+    }
+
     @MainActor private func isFullyVisible(_ element: XCUIElement, in app: XCUIApplication) -> Bool {
         let viewport = app.scrollViews.firstMatch.frame.insetBy(dx: 0, dy: 8)
         // Leave room for the native floating bottom toolbar.
