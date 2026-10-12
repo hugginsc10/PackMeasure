@@ -1,6 +1,11 @@
 import Foundation
 
-struct InventoryStore {
+protocol InventoryStoring {
+    func load() throws -> [MeasuredItem]
+    func save(_ items: [MeasuredItem]) throws
+}
+
+struct InventoryStore: InventoryStoring {
     private let fileManager: FileManager
     private let explicitStorageURL: URL?
     private let encoder = JSONEncoder()
@@ -37,10 +42,12 @@ struct InventoryStore {
 
     func load() throws -> [MeasuredItem] {
         let url = try storageURL()
-        guard fileManager.fileExists(atPath: url.path) else {
+        let data: Data
+        do {
+            data = try Data(contentsOf: url)
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
             return []
         }
-        let data = try Data(contentsOf: url)
         return try decoder.decode([MeasuredItem].self, from: data)
     }
 

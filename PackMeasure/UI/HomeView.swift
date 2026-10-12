@@ -16,6 +16,9 @@ struct HomeView: View {
                             Text("Choose a room, a small space, or an item.")
                                 .font(.subheadline).foregroundStyle(.secondary)
                         }.padding(.vertical, 8)
+                        if appModel.inventoryLoadFailed {
+                            InventoryRecoveryNotice()
+                        }
                         NavigationLink {
                             RoomMeasurementView()
                         } label: {
@@ -29,10 +32,13 @@ struct HomeView: View {
                         Button { appModel.showingScanner = true } label: {
                             MeasureActionLabel(title: "Scan an item", subtitle: "Boxes, furniture, and moving inventory.", symbol: "shippingbox")
                         }.buttonStyle(.plain).accessibilityIdentifier("home-measure-item")
+                            .disabled(appModel.inventoryLoadFailed)
                         Button { manualEntryPresented = true } label: {
                             Label("Enter dimensions manually", systemImage: "ruler")
                                 .font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity, minHeight: 48)
                         }.buttonStyle(.bordered)
+                            .disabled(appModel.inventoryLoadFailed)
+                            .accessibilityIdentifier("home-manual-entry")
                         Divider().padding(.vertical, 6)
                         NavigationLink {
                             PackingDashboardView(manualEntryPresented: $manualEntryPresented)
@@ -41,7 +47,7 @@ struct HomeView: View {
                                 Label("Your moving load", systemImage: "truck.box")
                                     .font(.subheadline.weight(.semibold))
                                 Spacer()
-                                Text("\(appModel.planningSummary.pieceCount) pieces")
+                                Text(appModel.inventoryLoadFailed ? "Unavailable" : "\(appModel.planningSummary.pieceCount) pieces")
                                     .font(.system(.subheadline, design: .monospaced)).foregroundStyle(.secondary)
                                 Image(systemName: "arrow.right")
                             }.frame(minHeight: 48)
@@ -70,6 +76,22 @@ struct HomeView: View {
     }
 }
 
+private struct InventoryRecoveryNotice: View {
+    @Environment(AppModel.self) private var appModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("Saved inventory unavailable", systemImage: "exclamationmark.triangle")
+                .font(.headline)
+            Text("Your saved file has been kept. Adding, editing and deleting items is paused until it can be read.")
+                .font(.subheadline)
+            Button("Try reading inventory again") { appModel.loadIfNeeded() }
+                .buttonStyle(.bordered)
+                .accessibilityIdentifier("inventory-retry")
+        }
+    }
+}
+
 
 private struct PackingDashboardView: View {
     @Environment(AppModel.self) private var appModel
@@ -85,10 +107,14 @@ private struct PackingDashboardView: View {
                     Text("Build your inventory. Find the space you need.").font(.subheadline).foregroundStyle(.secondary)
                 }.padding(.vertical, 8)
             }.listRowBackground(MeasureStyle.panel)
-            spaceNeededSection.listRowBackground(MeasureStyle.panel)
-            loadMixSection.listRowBackground(MeasureStyle.panel)
-            vehicleSection.listRowBackground(MeasureStyle.panel)
-            inventorySection.listRowBackground(MeasureStyle.panel)
+            if appModel.inventoryLoadFailed {
+                Section { InventoryRecoveryNotice() }.listRowBackground(MeasureStyle.panel)
+            } else {
+                spaceNeededSection.listRowBackground(MeasureStyle.panel)
+                loadMixSection.listRowBackground(MeasureStyle.panel)
+                vehicleSection.listRowBackground(MeasureStyle.panel)
+                inventorySection.listRowBackground(MeasureStyle.panel)
+            }
             planningDisclaimerSection.listRowBackground(Color.clear)
         }
         .navigationTitle("Your load")
@@ -208,7 +234,7 @@ private struct PackingDashboardView: View {
                         ItemRow(item: item)
                     }
                 }
-                .onDelete(perform: appModel.deleteItems)
+                .onDelete { offsets in appModel.deleteItems(at: offsets) }
             }
         }
     }
@@ -235,6 +261,7 @@ private struct PackingDashboardView: View {
                     .background(MeasureStyle.panel, in: RoundedRectangle(cornerRadius: 18))
             }.accessibilityLabel("Enter dimensions manually")
         }.padding(.horizontal, 20).padding(.vertical, 8).background(MeasureStyle.background)
+            .disabled(appModel.inventoryLoadFailed)
     }
 
     private var allowancePercent: Int {
@@ -444,6 +471,7 @@ private struct ItemPackingEditorView: View {
     @State private var isStackable: Bool
     @State private var maxLayers: Int
     @State private var mayRotate: Bool
+    @State private var saveError: String?
 
     init(item: MeasuredItem) {
         self.item = item
@@ -492,7 +520,7 @@ private struct ItemPackingEditorView: View {
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
                 Button("Save") {
-                    appModel.updateItem(
+                    if appModel.updateItem(
                         id: item.id,
                         name: name,
                         quantity: quantity,
@@ -500,11 +528,21 @@ private struct ItemPackingEditorView: View {
                             ? .stackable(maxLayers: maxLayers)
                             : .notStackable,
                         orientationPolicy: mayRotate ? .mayRotate : .keepUpright
-                    )
-                    dismiss()
+                    ) {
+                        dismiss()
+                    } else {
+                        saveError = appModel.bannerMessage ?? InventoryPersistenceError.saveFailed.localizedDescription
+                        appModel.bannerMessage = nil
+                    }
                 }
                 .fontWeight(.semibold)
             }
         }
+        .alert("Inventory not saved", isPresented: Binding(
+            get: { saveError != nil },
+            set: { if !$0 { saveError = nil } }
+        )) {
+            Button("OK", role: .cancel) { saveError = nil }
+        } message: { Text(saveError ?? "") }
     }
 }

@@ -6,6 +6,147 @@ import Testing
 @MainActor
 struct AppModelInventoryTests {
     @Test
+    func failedLoadCannotReplaceSavedInventory() throws {
+        let harness = try InventoryHarness()
+        let original = Data("{ unreadable inventory".utf8)
+        try original.write(to: harness.url, options: .atomic)
+        let model = AppModel(store: harness.store)
+        model.loadIfNeeded()
+        #expect(model.bannerMessage != nil)
+
+        model.addItem(name: "New box", estimate: recoveryEstimate, quantity: 1)
+        model.deleteItems(at: [])
+
+        #expect(model.items.isEmpty)
+        #expect(try Data(contentsOf: harness.url) == original)
+    }
+
+    @Test
+    func addingBeforeInitialLoadPreservesExistingItems() throws {
+        let harness = try InventoryHarness()
+        let saved = recoveryItem
+        try harness.store.save([saved])
+        let model = AppModel(store: harness.store)
+
+        model.addItem(name: "New box", estimate: recoveryEstimate, quantity: 1)
+
+        #expect(model.items.count == 2)
+        #expect(model.items.first == saved)
+        let reloaded = try harness.store.load()
+        #expect(reloaded.map(\.id) == model.items.map(\.id))
+        #expect(reloaded.first == saved)
+        #expect(reloaded.last?.name == "New box")
+        #expect(reloaded.last?.lengthMeters == recoveryEstimate.lengthMeters)
+    }
+
+    @Test
+    func failedLoadCanRetryWithoutRestarting() throws {
+        let harness = try InventoryHarness()
+        try Data("unreadable".utf8).write(to: harness.url)
+        let model = AppModel(store: harness.store)
+        model.loadIfNeeded()
+        #expect(model.bannerMessage != nil)
+        let saved = recoveryItem
+        try harness.store.save([saved])
+
+        model.loadIfNeeded()
+
+        #expect(model.items == [saved])
+        #expect(model.bannerMessage == nil)
+    }
+
+    @Test
+    func readFailureBlocksEveryMutationEvenAfterDismissingTheMessage() {
+        let store = RecoveryTestStore()
+        store.failReads = true
+        let model = AppModel(store: store)
+        #expect(!model.loadIfNeeded())
+        model.bannerMessage = nil
+
+        #expect(!model.addItem(name: "New box", estimate: recoveryEstimate, quantity: 1))
+        #expect(!model.updateItem(id: recoveryItem.id, name: "Changed", quantity: 2,
+                                 stackability: .notStackable, orientationPolicy: .keepUpright))
+        #expect(!model.deleteItems(at: [0]))
+        #expect(store.saveCalls == 0)
+        #expect(model.inventoryLoadFailed)
+    }
+
+    @Test
+    func failedSavesKeepTheCommittedInventoryAndCanBeRetried() throws {
+        let store = RecoveryTestStore()
+        let saved = recoveryItem
+        store.items = [saved]
+        let model = AppModel(store: store)
+        #expect(model.loadIfNeeded())
+        store.failWrites = true
+
+        #expect(!model.addItem(name: "New box", estimate: recoveryEstimate, quantity: 1))
+        #expect(model.items == [saved])
+        #expect(!model.updateItem(id: saved.id, name: "Changed", quantity: 2,
+                                 stackability: .stackable(maxLayers: 2), orientationPolicy: .mayRotate))
+        #expect(model.items == [saved])
+        #expect(!model.deleteItems(at: [0]))
+        #expect(model.items == [saved])
+        #expect(store.items == [saved])
+        #expect(model.bannerMessage == InventoryPersistenceError.saveFailed.localizedDescription)
+
+        store.failWrites = false
+        #expect(model.addItem(name: "New box", estimate: recoveryEstimate, quantity: 1))
+        #expect(model.items.count == 2)
+        #expect(store.items == model.items)
+        #expect(model.bannerMessage == nil)
+    }
+
+    @Test
+    func manualEntryReportsPersistenceFailureInsteadOfSuccess() throws {
+        let store = RecoveryTestStore()
+        store.failWrites = true
+        let model = AppModel(store: store)
+        var draft = ManualEntryDraft()
+        draft.name = "Unsaved box"
+        draft.lengthInches = "24"
+        draft.widthInches = "12"
+        draft.heightInches = "18"
+
+        #expect(throws: InventoryPersistenceError.self) { try draft.save(to: model) }
+        #expect(model.items.isEmpty)
+        #expect(store.items.isEmpty)
+        #expect(draft.name == "Unsaved box")
+        store.failWrites = false
+        try draft.save(to: model)
+        #expect(model.items.first?.name == "Unsaved box")
+    }
+
+    @Test
+    func updateAndDeleteLoadExistingInventoryBeforeChangingIt() throws {
+        let harness = try InventoryHarness()
+        let first = recoveryItem
+        let second = recoveryItem
+        try harness.store.save([first, second])
+        let model = AppModel(store: harness.store)
+        #expect(model.updateItem(id: first.id, name: "Changed", quantity: 2,
+                                stackability: .notStackable, orientationPolicy: .keepUpright))
+        #expect(model.items.count == 2)
+        #expect(model.items.first?.name == "Changed")
+
+        let reloaded = AppModel(store: harness.store)
+        #expect(reloaded.deleteItems(at: [0]))
+        #expect(reloaded.items == [second])
+        #expect(try harness.store.load() == [second])
+    }
+
+    private var recoveryEstimate: MeasurementEstimate {
+        .init(lengthMeters: 0.6, widthMeters: 0.4, heightMeters: 0.3,
+              confidence: .medium, sampleCount: 10, frameCount: 1)
+    }
+
+    private var recoveryItem: MeasuredItem {
+        .init(name: "Previously saved box", lengthMeters: 0.6,
+              widthMeters: 0.4, heightMeters: 0.3, confidence: .medium,
+              capturedAt: Date(timeIntervalSince1970: 1_790_000_000))
+    }
+
+    @Test
     func stackabilityReducesRequiredFloorAndSurvivesReload() throws {
         let harness = try InventoryHarness()
         let model = AppModel(store: harness.store)
@@ -274,6 +415,24 @@ struct AppModelInventoryTests {
 
     private func meters(fromInches inches: Double) -> Double {
         inches / 39.370_078_740_157_48
+    }
+}
+
+private final class RecoveryTestStore: InventoryStoring {
+    var items: [MeasuredItem] = []
+    var failReads = false
+    var failWrites = false
+    private(set) var saveCalls = 0
+
+    func load() throws -> [MeasuredItem] {
+        if failReads { throw CocoaError(.fileReadNoPermission) }
+        return items
+    }
+
+    func save(_ items: [MeasuredItem]) throws {
+        saveCalls += 1
+        if failWrites { throw CocoaError(.fileWriteOutOfSpace) }
+        self.items = items
     }
 }
 

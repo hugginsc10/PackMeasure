@@ -1,40 +1,63 @@
 import Foundation
 import Observation
 
+enum InventoryPersistenceError: Error, LocalizedError {
+    case loadUnavailable, saveFailed
+
+    var errorDescription: String? {
+        switch self {
+        case .loadUnavailable:
+            "Could not read saved inventory. Your saved file has been kept. Try reading it again before changing items."
+        case .saveFailed:
+            "Could not save inventory. Your changes have not been saved. Please try again."
+        }
+    }
+}
+
 @MainActor
 @Observable
 final class AppModel {
     private(set) var items: [MeasuredItem] = []
     var showingScanner = false
     var bannerMessage: String?
+    private(set) var inventoryLoadFailed = false
     private(set) var loadMix: PackingLoadMix = .mixedHousehold
 
-    @ObservationIgnored private let store: InventoryStore
+    @ObservationIgnored private let store: any InventoryStoring
     @ObservationIgnored private var hasLoaded = false
 
-    init(store: InventoryStore = InventoryStore()) {
+    init(store: any InventoryStoring = InventoryStore()) {
         self.store = store
     }
 
-    func loadIfNeeded() {
-        guard !hasLoaded else { return }
-        hasLoaded = true
+    @discardableResult
+    func loadIfNeeded() -> Bool {
+        guard !hasLoaded else { return true }
 
         do {
             items = try store.load()
+            hasLoaded = true
+            inventoryLoadFailed = false
+            bannerMessage = nil
+            return true
         } catch {
-            bannerMessage = "Could not load saved inventory."
+            inventoryLoadFailed = true
+            bannerMessage = InventoryPersistenceError.loadUnavailable.localizedDescription
+            return false
         }
     }
 
+    @discardableResult
     func addItem(
         name: String,
         estimate: MeasurementEstimate,
         quantity: Int,
         stackability: ItemStackability = .notStackable,
         orientationPolicy: ItemOrientationPolicy = .keepUpright
-    ) {
-        items.append(
+    ) -> Bool {
+        guard loadIfNeeded() else { return false }
+        var next = items
+        next.append(
             MeasuredItem(
                 name: normalizedName(name),
                 lengthMeters: estimate.lengthMeters,
@@ -48,34 +71,40 @@ final class AppModel {
                 orientationPolicy: orientationPolicy
             )
         )
-        persist()
+        return persist(next)
     }
 
+    @discardableResult
     func updateItem(
         id: UUID,
         name: String,
         quantity: Int,
         stackability: ItemStackability,
         orientationPolicy: ItemOrientationPolicy
-    ) {
+    ) -> Bool {
+        guard loadIfNeeded() else { return false }
         guard let index = items.firstIndex(where: { $0.id == id }) else {
-            return
+            return false
         }
 
-        items[index].name = normalizedName(name)
-        items[index].quantity = max(1, quantity)
-        items[index].stackability = stackability
-        items[index].orientationPolicy = orientationPolicy
-        persist()
+        var next = items
+        next[index].name = normalizedName(name)
+        next[index].quantity = max(1, quantity)
+        next[index].stackability = stackability
+        next[index].orientationPolicy = orientationPolicy
+        return persist(next)
     }
 
     func setLoadMix(_ loadMix: PackingLoadMix) {
         self.loadMix = loadMix
     }
 
-    func deleteItems(at offsets: IndexSet) {
-        items.remove(atOffsets: offsets)
-        persist()
+    @discardableResult
+    func deleteItems(at offsets: IndexSet) -> Bool {
+        guard loadIfNeeded(), offsets.allSatisfy({ items.indices.contains($0) }) else { return false }
+        var next = items
+        next.remove(atOffsets: offsets)
+        return persist(next)
     }
 
     var packingItems: [PackingItem] {
@@ -106,12 +135,15 @@ final class AppModel {
         items.count - packingItems.count
     }
 
-    private func persist() {
+    private func persist(_ next: [MeasuredItem]) -> Bool {
         do {
-            try store.save(items)
+            try store.save(next)
+            items = next
             bannerMessage = nil
+            return true
         } catch {
-            bannerMessage = "Could not save inventory."
+            bannerMessage = InventoryPersistenceError.saveFailed.localizedDescription
+            return false
         }
     }
 

@@ -1230,6 +1230,7 @@ struct ScannerSheetView: View {
     @State private var isStackable = false
     @State private var maxStackLayers = 2
     @State private var mayRotate = false
+    @State private var inventorySaveError: String?
 
     var body: some View {
         NavigationStack {
@@ -1394,6 +1395,12 @@ struct ScannerSheetView: View {
                 }
             }
         }
+        .alert("Inventory not saved", isPresented: Binding(
+            get: { inventorySaveError != nil },
+            set: { if !$0 { inventorySaveError = nil } }
+        )) {
+            Button("OK", role: .cancel) { inventorySaveError = nil }
+        } message: { Text(inventorySaveError ?? "") }
         .diagnosticSupport()
     }
 
@@ -1801,7 +1808,7 @@ struct ScannerSheetView: View {
 
     private func saveItem(_ estimate: MeasurementEstimate) {
         guard reviewState.canSave else { return }
-        appModel.addItem(
+        guard appModel.addItem(
             name: draftName,
             estimate: estimate,
             quantity: quantity,
@@ -1809,7 +1816,11 @@ struct ScannerSheetView: View {
                 ? .stackable(maxLayers: maxStackLayers)
                 : .notStackable,
             orientationPolicy: mayRotate ? .mayRotate : .keepUpright
-        )
+        ) else {
+            inventorySaveError = appModel.bannerMessage ?? InventoryPersistenceError.saveFailed.localizedDescription
+            appModel.bannerMessage = nil
+            return
+        }
         closeScanner()
     }
 
