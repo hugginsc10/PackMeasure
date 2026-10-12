@@ -52,7 +52,9 @@ import simd
     var body: some Scene {
         WindowGroup {
             Group {
-                if args.contains("interior-verification") {
+                if args.contains("inventory-recovery") || args.contains("inventory-write-failure") {
+                    InventoryRecoveryFixture(failWrites: args.contains("inventory-write-failure"))
+                } else if args.contains("interior-verification") {
                     InteriorVerificationFixture()
                 } else if args.contains("diagnostics-lifecycle") {
                     DiagnosticLifecycleFixture().diagnosticSupport()

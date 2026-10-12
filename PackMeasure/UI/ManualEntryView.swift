@@ -167,7 +167,7 @@ struct ManualEntryDraft {
     @MainActor
     func save(to appModel: AppModel) throws {
         let submission = try validatedSubmission()
-        appModel.addItem(
+        guard appModel.addItem(
             name: submission.name,
             estimate: MeasurementEstimate(
                 lengthMeters: submission.dimensions.lengthInches / 39.370_078_740_157_48,
@@ -180,7 +180,10 @@ struct ManualEntryDraft {
             quantity: submission.quantity,
             stackability: submission.stackability,
             orientationPolicy: submission.orientationPolicy
-        )
+        ) else {
+            throw appModel.inventoryLoadFailed
+                ? InventoryPersistenceError.loadUnavailable : InventoryPersistenceError.saveFailed
+        }
     }
 
     private func parseDimension(_ text: String) -> Double? {
@@ -297,12 +300,6 @@ struct ManualEntryView: View {
                     Text("Leave this off for liquids, plants, appliances, and fragile or upright-only furniture.")
                 }
 
-                if let saveError {
-                    Section {
-                        Label(saveError, systemImage: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.orange)
-                    }
-                }
                 }.listRowBackground(MeasureStyle.panel)
             }
             .measureScreen()
@@ -329,6 +326,12 @@ struct ManualEntryView: View {
                 }
             }
         }
+        .alert("Inventory not saved", isPresented: Binding(
+            get: { saveError != nil },
+            set: { if !$0 { saveError = nil } }
+        )) {
+            Button("OK", role: .cancel) { saveError = nil }
+        } message: { Text(saveError ?? "") }
         .onAppear {
             guard !appliedPreferredInputUnit else { return }
             draft.changeInputUnit(to: preferences.units.inputUnit)
@@ -349,6 +352,7 @@ struct ManualEntryView: View {
                     .focused($focusedField, equals: field)
                     .frame(minWidth: 80)
                     .accessibilityLabel("\(title) in \(draft.inputUnit.title.lowercased())")
+                    .accessibilityIdentifier("manual-\(title.lowercased())")
                 Text(draft.inputUnit.symbol)
                     .foregroundStyle(.secondary)
             }
@@ -361,6 +365,7 @@ struct ManualEntryView: View {
             dismiss()
         } catch {
             saveError = draft.validationMessage ?? error.localizedDescription
+            appModel.bannerMessage = nil
         }
     }
 }
