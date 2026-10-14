@@ -135,4 +135,60 @@ struct InteriorRectangleFitTests {
         let decoded = try JSONDecoder().decode(InteriorSweepSnapshot.self,from:JSONEncoder().encode(capture))
         #expect(try InteriorSweep(snapshot:decoded).reconstruct()==capture.reconstruction)
     }
+
+    @Test func openFrontCornerErosionDoesNotPullRectangularFrontInward() throws {
+        var observed = InteriorSweep(seed:[0.1,0,0.1])
+        var rectangular = InteriorSweep(seed:[0.1,0,0.1],footprintModel:.rectangular)
+        for i in 0..<4 {
+            var frame = helper.observation(i,loops:[helper.rectangle],open:true)
+            frame.front = frame.front.map { [$0.x, $0.x > 0.32 ? 0.015 : 0.006] }
+            frame.floor.removeAll { $0.x > 0.32 && $0.y < 0.015 }
+            _ = observed.add(frame)
+            _ = rectangular.add(frame)
+        }
+        let obsLoop = try #require(observed.reconstruct().loops.first)
+        let rectLoop = try #require(rectangular.reconstruct().loops.first)
+        let obsDepths = [simd_distance(obsLoop[1],obsLoop[2]), simd_distance(obsLoop[3],obsLoop[0])]
+        let rectDepth = rectLoop.map(\.z).max()! - rectLoop.map(\.z).min()!
+        #expect(rectDepth > obsDepths.min()! + 0.002)
+        #expect(abs(rectDepth - 0.297) < 0.002)
+    }
+
+    @Test func symmetricallyTiltedOpenFrontDoesNotShiftOutward() throws {
+        var frames = (0..<4).map { helper.observation($0,loops:[helper.rectangle],open:true) }
+        for i in frames.indices {
+            frames[i].front = frames[i].front.map { [$0.x, 0.009 + 0.005 * (($0.x - 0.2) / 0.2)] }
+            frames[i].floor.removeAll { $0.y < 0.009 }
+        }
+        let map = try InteriorSweep(snapshot:.init(seed:[0.1,0,0.1],observations:frames,rejectedViews:0,footprintModel:.rectangular))
+        let tilted: [SIMD2<Float>] = [[0,0.004],[0.4,0.014],[0.4,0.3],[0,0.3]]
+        let polygon = tilted.map { SIMD3<Float>($0.x,0,$0.y) }
+        let lines = tilted.indices.map { i -> InteriorSweep.Line in
+            let a = tilted[i], b = tilted[(i+1)%4], t = simd_normalize(b-a), n = SIMD2(-t.y,t.x)
+            return .init(normal:n,offset:simd_dot(n,a),low:min(simd_dot(t,a),simd_dot(t,b)),high:max(simd_dot(t,a),simd_dot(t,b)),isFront:i==0)
+        }
+        let fitted = try #require(map.rectangularOutline(polygon,lines:lines))
+        let fittedDepth = fitted.outline.map(\.z).max()! - fitted.outline.map(\.z).min()!
+        #expect(abs(fittedDepth - 0.291) < 0.0005)
+    }
+
+    @Test func asymmetricHalfCoverageOpenFrontDoesNotShiftOutward() throws {
+        for cutoff: Float in [0.18, 0.25] {
+            var frames = (0..<4).map { helper.observation($0,loops:[helper.rectangle],open:true) }
+            for i in frames.indices {
+                frames[i].front = frames[i].front.map { [$0.x, 0.012] }
+                frames[i].floor.removeAll { $0.x < cutoff }
+            }
+            let map = try InteriorSweep(snapshot:.init(seed:[0.1,0,0.1],observations:frames,rejectedViews:0,footprintModel:.rectangular))
+            let recessed: [SIMD2<Float>] = [[0,0.012],[0.4,0.012],[0.4,0.3],[0,0.3]]
+            let polygon = recessed.map { SIMD3<Float>($0.x,0,$0.y) }
+            let lines = recessed.indices.map { i -> InteriorSweep.Line in
+                let a = recessed[i], b = recessed[(i+1)%4], t = simd_normalize(b-a), n = SIMD2(-t.y,t.x)
+                return .init(normal:n,offset:simd_dot(n,a),low:min(simd_dot(t,a),simd_dot(t,b)),high:max(simd_dot(t,a),simd_dot(t,b)),isFront:i==0)
+            }
+            let fitted = try #require(map.rectangularOutline(polygon,lines:lines))
+            let fittedDepth = fitted.outline.map(\.z).max()! - fitted.outline.map(\.z).min()!
+            #expect(abs(fittedDepth - 0.288) < 0.0005)
+        }
+    }
 }

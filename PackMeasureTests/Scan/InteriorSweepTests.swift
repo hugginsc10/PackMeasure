@@ -509,8 +509,10 @@ struct InteriorSweepTests {
         var r=run([rectangle],overhead:0.35); r.views=3; r.revision=3
         state.receiveSweep(r,generation:state.generation)
         #expect(!state.canReviewSweep)
+        #expect(state.prompt.contains("move slightly"))
         r.views=4; r.revision=4; state.receiveSweep(r,generation:state.generation)
         #expect(state.canReviewSweep)
+        #expect(state.prompt == r.hint)
         state.useSweepOutline()
         let value=try #require(state.result)
         #expect(value.heightSource == .lidar && abs(value.heightMM-350)<0.01)
@@ -613,5 +615,31 @@ struct InteriorSweepTests {
             #expect(abs(loop.map(\.x).max()!-loop.map(\.x).min()!-0.4)<0.008)
             #expect(abs(loop.map(\.z).max()!-loop.map(\.z).min()!-0.3)<0.008)
         }
+    }
+    @Test func openEdgeHandlesOnePixelDepthBlurTransitionAndCreaseNormals() {
+        let width=80, height=80
+        var ds=[Float](repeating:1,count:width*height), cs=[UInt8](repeating:2,count:ds.count), ls=[Float](repeating:0.5,count:ds.count)
+        for y in 0..<height {
+            for x in 0..<14 { ds[y*width+x]=1.15; ls[y*width+x]=0.15 }
+            ds[y*width+14]=1.018; ls[y*width+14]=0.32
+        }
+        var pose=simd_float4x4(simd_quatf(angle:-.pi/2,axis:[1,0,0])); pose.columns.3=[0,1,0,1]
+        let f=InteriorSweepFrame(width:width,height:height,depths:ds,confidence:cs,luminance:ls,
+                                 intrinsics:simd_float3x3(columns:([100,0,0],[0,100,0],[40,40,1])),transform:pose,timestamp:1)
+        let obs=f.observation(seed:.zero)
+        #expect(!obs.front.isEmpty)
+        let pts=f.points()
+        #expect(f.normal(15,40,pts).map { abs($0.y) > 0.95 } == true)
+
+        var closeDs=[Float](repeating:0.30,count:width*height)
+        for y in 0..<height {
+            closeDs[y*width+14]=0.296
+            closeDs[y*width+13]=0.292
+        }
+        var closePose=pose; closePose.columns.3=[0,0.30,0,1]
+        let closeFrame=InteriorSweepFrame(width:width,height:height,depths:closeDs,confidence:cs,luminance:ls,
+                                          intrinsics:simd_float3x3(columns:([100,0,0],[0,100,0],[40,40,1])),transform:closePose,timestamp:2)
+        let closePts=closeFrame.points()
+        #expect(closeFrame.normal(15,40,closePts).map { abs($0.y) > 0.95 } == true)
     }
 }

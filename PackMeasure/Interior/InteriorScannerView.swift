@@ -244,7 +244,7 @@ struct InteriorHeightEntry: View {
         NavigationStack {
             Form {
                 Section("Available space above the base") {
-                    Picker("Units", selection: Binding(get: { preferences.units }, set: changeUnits)) {
+                    Picker("Units", selection: Binding(get: { preferences.units }, set: { changeUnits($0) })) {
                         ForEach(MeasurementUnits.allCases, id: \.self) { Text($0.title).tag($0) }
                     }.pickerStyle(.segmented)
                     TextField("Height in \(draft.inputUnit.title.lowercased())", text: $draft.text)

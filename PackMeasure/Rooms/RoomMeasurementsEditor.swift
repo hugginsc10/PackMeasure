@@ -182,7 +182,7 @@ struct ShelfMeasurementEditor: View {
                     Text("Auto chooses a solid-surface or wire-compatible method from the initial tap. Use Method in the scanner to override it. Hidden edges still need a clearer view.").font(.footnote).foregroundStyle(.secondary)
                 }
                 Section("Measurements") {
-                    Picker("Input units", selection: Binding(get: { units }, set: changeUnits)) {
+                    Picker("Input units", selection: Binding(get: { units }, set: { changeUnits($0) })) {
                         ForEach(RoomEntryUnits.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                     }
                     Toggle("Calculate depth by subtraction", isOn: Binding(get: { subtractDistances }, set: { subtractDistances = $0; unchangedCapture = false }))

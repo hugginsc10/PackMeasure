@@ -182,7 +182,7 @@ private struct InteriorVerificationEditor: View {
         NavigationStack {
             Form {
                 Section {
-                    Picker("Input units", selection: Binding(get: { unit }, set: changeUnit)) {
+                    Picker("Input units", selection: Binding(get: { unit }, set: { changeUnit($0) })) {
                         ForEach(InteriorUnit.allCases, id: \.self) { Text($0.title).tag($0) }
                     }
                     .pickerStyle(.segmented)
@@ -220,7 +220,7 @@ private struct InteriorVerificationEditor: View {
                     Button("Cancel") { dismiss() }.accessibilityIdentifier("cancel-interior-verification")
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Apply", action: apply).disabled(!valid).accessibilityIdentifier("apply-interior-verification")
+                    Button("Apply") { apply() }.disabled(!valid).accessibilityIdentifier("apply-interior-verification")
                 }
                 ToolbarItemGroup(placement: .keyboard) {
                     Spacer()

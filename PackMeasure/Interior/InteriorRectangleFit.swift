@@ -44,8 +44,60 @@ extension InteriorSweep {
     }
 
     private static func median(_ values: [Float]) -> Float {
+        guard !values.isEmpty else { return 0 }
         let values = values.sorted(), i = values.count/2
         return values.count%2 == 0 ? (values[i-1]+values[i])/2 : values[i]
+    }
+
+    /// Under the rectangular prior, an open front has zero slope along `t`. A single corner
+    /// bin eroded by depth blur tilts the free-polygon front and drags its midpoint inward
+    /// through multi-view observed floor; recover the corroborated zero-slope floor reach.
+    func refinedFrontOffset(a: SIMD2<Float>, b: SIMD2<Float>, t: SIMD2<Float>, n: SIMD2<Float>) -> Float {
+        let mid = (a+b)/2, midOffset = simd_dot(n,mid), outward = -n, baseOutward = -midOffset
+        let low = min(simd_dot(t,a),simd_dot(t,b)), high = max(simd_dot(t,a),simd_dot(t,b))
+        let halfSpan = 0.5 * (high - low), midT = 0.5 * (low + high)
+        struct BinSample { var dq: Float; var tq: Float }
+        var leftBins: [Int:[Int:BinSample]] = [:], rightBins: [Int:[Int:BinSample]] = [:]
+        for (view, frame) in observations.enumerated() {
+            for q in frame.floor {
+                let tq = simd_dot(t,q), dq = simd_dot(outward,q)-baseOutward
+                guard tq >= low, tq <= high, dq > -Self.edgeReach, dq <= Self.edgeReach else { continue }
+                if tq < midT {
+                    let bin = Int(floor((tq - low) / Self.frontBin))
+                    if dq > (leftBins[bin]?[view]?.dq ?? -.infinity) {
+                        leftBins[bin, default: [:]][view] = BinSample(dq: dq, tq: tq)
+                    }
+                } else {
+                    let bin = Int(floor((tq - midT) / Self.frontBin))
+                    if dq > (rightBins[bin]?[view]?.dq ?? -.infinity) {
+                        rightBins[bin, default: [:]][view] = BinSample(dq: dq, tq: tq)
+                    }
+                }
+            }
+        }
+        func halfCoverage(_ bins: [Int:[Int:BinSample]]) -> (reaches: [Float], width: Float, span: Float) {
+            var reaches: [Float] = [], positions: [Float] = [], width: Float = 0
+            for (bin, views) in bins {
+                let samples = views.values.sorted { $0.dq > $1.dq }
+                guard samples.count >= 2 else { continue }
+                let binLow = Float(bin) * Self.frontBin, binHigh = min(halfSpan, Float(bin + 1) * Self.frontBin)
+                guard binHigh > binLow else { continue }
+                reaches.append(samples[1].dq)
+                positions.append(Self.median(samples.map(\.tq)))
+                width += binHigh - binLow
+            }
+            let span = (positions.max() ?? 0) - (positions.min() ?? 0)
+            return (reaches, width, span)
+        }
+        let left = halfCoverage(leftBins), right = halfCoverage(rightBins)
+        guard left.reaches.count >= 2, right.reaches.count >= 2,
+              left.width >= 0.5 * halfSpan, right.width >= 0.5 * halfSpan,
+              left.span >= 0.35 * halfSpan, right.span >= 0.35 * halfSpan else {
+            return midOffset
+        }
+        let binShift = min(Self.median(left.reaches), Self.median(right.reaches))
+        guard binShift > 0 else { return midOffset }
+        return midOffset - min(Self.edgeReach, binShift)
     }
 
     /// Explicit rectangle prior: four supported sides must already exist. Joint
@@ -111,7 +163,9 @@ extension InteriorSweep {
                 }
                 return Self.median(view.points.map {simd_dot(n,$0)})
             }
-            var offset = supports[i].isFront || protected[i] || votes.count < 2 ? simd_dot(n,mid) : Self.median(votes)
+            var offset = supports[i].isFront
+                ? (protected[i] ? simd_dot(n,mid) : refinedFrontOffset(a:p[i],b:p[(i+1)%4],t:t,n:n))
+                : (protected[i] || votes.count < 2 ? simd_dot(n,mid) : Self.median(votes))
             if protected[i] { offset = max(offset,simd_dot(n,p[i]),simd_dot(n,p[(i+1)%4])) }
             offsets.append(offset)
         }
