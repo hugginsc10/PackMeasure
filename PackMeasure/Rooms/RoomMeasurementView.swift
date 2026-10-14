@@ -6,6 +6,7 @@ struct RoomMeasurementView: View {
     @Environment(AppPreferences.self) private var preferences
     @State private var rooms: [MeasuredRoom] = []
     @State private var scanning = false
+    @State private var deletingRoom: MeasuredRoom?
     @State private var errorMessage: String?
     private let store: RoomScanStore
 
@@ -67,6 +68,11 @@ struct RoomMeasurementView: View {
                             Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                         }.measurePanel()
                     }.buttonStyle(.plain).accessibilityIdentifier("saved-room-\(room.id)")
+                        .contextMenu {
+                            Button("Delete room", systemImage: "trash", role: .destructive) {
+                                deletingRoom = room
+                            }
+                        }
                 }
             }.padding(20)
         }
@@ -75,6 +81,17 @@ struct RoomMeasurementView: View {
         .onAppear { reload() }
         .fullScreenCover(isPresented: $scanning, onDismiss: reload) {
             RoomScanSheet(store: store, guidance: preferences.roomGuidance)
+        }
+        .confirmationDialog("Delete saved room?", isPresented: Binding(
+            get: { deletingRoom != nil }, set: { if !$0 { deletingRoom = nil } }
+        ), titleVisibility: .visible, presenting: deletingRoom) { room in
+            Button("Delete \"\(room.name)\"", role: .destructive) {
+                delete(room)
+                deletingRoom = nil
+            }
+            Button("Cancel", role: .cancel) { deletingRoom = nil }
+        } message: { room in
+            Text("This permanently removes \"\(room.name)\" and any shelves saved with it.")
         }
         .alert("Couldn’t load room scans", isPresented: Binding(
             get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } }
@@ -86,6 +103,15 @@ struct RoomMeasurementView: View {
     private func reload() {
         do { rooms = try store.load() }
         catch { errorMessage = error.localizedDescription }
+    }
+
+    private func delete(_ room: MeasuredRoom) {
+        do {
+            try store.delete(room)
+            reload()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 }
 

@@ -49,7 +49,7 @@ final class WireShelfScanState {
         photoRequest = nil; self.photo = photo; cursor = nil
     }
     func confirmPoint() {
-        guard ready, let photo, photo.generation == generation, let cursor else { return }
+        guard let photo, photo.generation == generation, let cursor else { return }
         do {
             let ray = try photo.ray(at: cursor)
             if let firstPhoto, let firstPoint {
@@ -60,7 +60,15 @@ final class WireShelfScanState {
                 firstPhoto = photo; firstPoint = cursor
             }
             self.photo = nil; self.cursor = nil; error = nil
-        } catch { self.error = error.localizedDescription }
+        } catch {
+            if case WireShelfError.moveSideways = error, let firstPhoto {
+                let delta = photo.transform.columns.3 - firstPhoto.transform.columns.3
+                if simd_length(SIMD3<Float>(delta.x, delta.y, delta.z)) < 0.15 {
+                    self.photo = nil; self.cursor = nil
+                }
+            }
+            self.error = error.localizedDescription
+        }
     }
     func retakePhoto() { photo = nil; cursor = nil; photoRequest = nil; error = nil }
     func restartPoint() {
@@ -70,6 +78,11 @@ final class WireShelfScanState {
     func skipClearance() {
         do { try sequence.skipClearance(); restartPoint() }
         catch { self.error = error.localizedDescription }
+    }
+    func reset() {
+        sequence = WireShelfSequence()
+        invalidate("")
+        error = nil
     }
     func invalidate(_ reason: String) {
         guard sequence.result == nil else { return }
@@ -202,7 +215,7 @@ struct WireShelfScannerView: View {
                             }
                         }.accessibilityIdentifier("use-wire-shelf")
                         DiagnosticButton(title: "Shelf diagnostics", kind: .wireShelf, report: state.diagnostics)
-                        Button("Scan again") { state = WireShelfScanState(); cameraID = UUID() }
+                        Button("Scan again") { state.reset(); cameraID = UUID() }
                     }
                 } else if !ARWorldTrackingConfiguration.isSupported {
                     ContentUnavailableView("Camera tracking unavailable", systemImage: "viewfinder",
@@ -255,7 +268,7 @@ struct WireShelfScannerView: View {
                         Button("Retake view", action: state.retakePhoto)
                         Spacer()
                         Button("Use this point", action: state.confirmPoint).buttonStyle(.borderedProminent)
-                            .disabled(state.cursor == nil || !state.ready).accessibilityIdentifier("confirm-wire-point")
+                            .disabled(state.cursor == nil).accessibilityIdentifier("confirm-wire-point")
                     }
                 } else {
                     Button(state.photoRequest != nil ? "Capturing…" : state.firstPhoto == nil ? "Freeze view 1" : "Freeze view 2", action: state.requestPhoto)

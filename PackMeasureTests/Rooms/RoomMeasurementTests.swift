@@ -75,6 +75,8 @@ final class RoomMeasurementTests: XCTestCase {
         XCTAssertEqual(loaded.map(\.id), [second.id, first.id])
         XCTAssertEqual(loaded.map(\.name), ["Office", "Bedroom"])
         XCTAssertEqual(loaded[1].spanWidth, 3, accuracy: 0.001)
+        try store.delete(first)
+        XCTAssertEqual(try store.load().map(\.id), [second.id])
     }
 
     func testCorruptRoomFileSurfacesAnError() throws {

@@ -62,7 +62,9 @@ struct ShelfPhotoPointPicker: UIViewRepresentable {
         }
         override func layoutSubviews() {
             super.layoutSubviews()
-            guard let image = photoView.image, bounds.width > 0, bounds.height > 0 else { return }
+            guard let image = photoView.image,
+                  image.size.width > 0, image.size.height > 0,
+                  bounds.width > 0, bounds.height > 0 else { return }
             if fittedSize != bounds.size {
                 fittedSize = bounds.size
                 let fit = min(bounds.width / image.size.width, bounds.height / image.size.height)
@@ -128,7 +130,9 @@ struct ShelfReferencePhoto: View {
     let point: CGPoint
     var body: some View {
         GeometryReader { proxy in
-            let scale = min(proxy.size.width / image.size.width, proxy.size.height / image.size.height)
+            let scale = image.size.width > 0 && image.size.height > 0 && proxy.size.width > 0 && proxy.size.height > 0
+                ? min(proxy.size.width / image.size.width, proxy.size.height / image.size.height)
+                : 0
             let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
             ZStack {
                 Image(uiImage: image).resizable().scaledToFit()

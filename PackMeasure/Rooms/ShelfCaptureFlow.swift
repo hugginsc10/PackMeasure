@@ -32,7 +32,7 @@ struct ShelfCaptureFlow: View {
         }
         .confirmationDialog("Measurement method", isPresented: $choosingMethod, titleVisibility: .visible) {
             ForEach(ShelfCaptureMethod.allCases, id: \.self) { next in
-                Button(next.rawValue) { method = next; usesMatchedViews = false; solidState = ShelfScanState(); captureID = UUID() }
+                Button(next.rawValue) { method = next; usesMatchedViews = false; solidState.reset(); captureID = UUID() }
             }
             Button("Cancel", role: .cancel) {}
         } message: {
