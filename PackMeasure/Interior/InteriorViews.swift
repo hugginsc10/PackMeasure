@@ -152,7 +152,15 @@ struct InteriorReviewView: View {
                     .accessibilityIdentifier("interior-top-clearance")
                 Text("Side clearance is applied at every wall and around obstacles. A rectangular insert loses twice this amount per horizontal dimension. Top clearance is subtracted once from usable height.")
                     .font(.caption).foregroundStyle(.secondary)
-                if case .success = output {
+                if case .success(let insetLoops) = output {
+                    if let outer = insetLoops.first,
+                       let minX = outer.map(\.x).min(), let maxX = outer.map(\.x).max(),
+                       let minY = outer.map(\.y).min(), let maxY = outer.map(\.y).max() {
+                        LabeledContent("Insert span along first edge", value: preferences.units.preciseLength(millimeters: maxX - minX))
+                            .accessibilityIdentifier("interior-insert-span-along")
+                        LabeledContent("Insert span across first edge", value: preferences.units.preciseLength(millimeters: maxY - minY))
+                            .accessibilityIdentifier("interior-insert-span-across")
+                    }
                     LabeledContent("Draft extrusion height", value: preferences.units.preciseLength(millimeters: record.heightMM - record.topClearanceMM))
                 } else if case .failure(let error) = output {
                     Text(error.localizedDescription).foregroundStyle(.orange)
@@ -239,16 +247,20 @@ struct InteriorOutlineView: View {
     var body: some View {
         Canvas { context, size in
             let all = contours.flatMap { $0 }
-            guard let minX = all.map(\.x).min(), let maxX = all.map(\.x).max(),
+            let pad: Double = 16
+            guard size.width > pad * 2, size.height > pad * 2,
+                  let minX = all.map(\.x).min(), let maxX = all.map(\.x).max(),
                   let minY = all.map(\.y).min(), let maxY = all.map(\.y).max(),
                   maxX > minX, maxY > minY else { return }
-            let scale = min((size.width - 24) / (maxX - minX), (size.height - 24) / (maxY - minY))
+            let scale = min((size.width - pad * 2) / (maxX - minX), (size.height - pad * 2) / (maxY - minY))
+            func point(_ p: InteriorPoint) -> CGPoint {
+                CGPoint(x: pad + (p.x - minX) * scale, y: pad + (p.y - minY) * scale)
+            }
             func path(_ loops: [[InteriorPoint]]) -> Path {
                 Path { path in
                     for loop in loops {
                         for (i, p) in loop.enumerated() {
-                            let point = CGPoint(x: 12 + (p.x - minX) * scale, y: 12 + (p.y - minY) * scale)
-                            if i == 0 { path.move(to: point) } else { path.addLine(to: point) }
+                            if i == 0 { path.move(to: point(p)) } else { path.addLine(to: point(p)) }
                         }
                         path.closeSubpath()
                     }
@@ -256,6 +268,19 @@ struct InteriorOutlineView: View {
             }
             context.stroke(path(contours), with: .color(.gray), lineWidth: 2)
             if let inset { context.fill(path(inset), with: .color(.teal.opacity(0.35)), style: FillStyle(eoFill: true)) }
+            if let outer = contours.first {
+                let stride = outer.count <= 12 ? 1 : max(2, outer.count / 8)
+                for (i, p) in outer.enumerated() where i <= 1 || i % stride == 0 {
+                    let center = point(p)
+                    let badge = CGRect(x: center.x - 8, y: center.y - 8, width: 16, height: 16)
+                    context.fill(Path(ellipseIn: badge), with: .color(i == 0 ? .orange : .secondary))
+                    context.draw(
+                        Text("\(i + 1)").font(.caption2.weight(.bold)).foregroundStyle(.white),
+                        at: center,
+                        anchor: .center
+                    )
+                }
+            }
         }
         .accessibilityLabel("Interior outline with \(max(0, contours.count - 1)) obstacle cutouts")
     }

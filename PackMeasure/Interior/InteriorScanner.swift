@@ -21,6 +21,7 @@ final class InteriorScanState {
     var previewTimestamp: TimeInterval = 0
     var stablePreviewFrames = 0
     var pinned = false
+    private var pinnedBeforeObstacle = false
     var selectedCorner: (loop: Int, point: Int)?
     var takingHeight = false
     var requestID = 0
@@ -99,7 +100,7 @@ final class InteriorScanState {
     func chooseAnotherBase() {
         generation=UUID(); requestID += 1; isCapturingPoint=false
         sweepEnabled=true; sweepSeed=nil; sweepResult=InteriorSweepResult(); stableSweepPreviews=0
-        sweepDiagnostics=nil; loops=[[]]; preview=[]; pinned=false; automatic=false
+        sweepDiagnostics=nil; loops=[[]]; preview=[]; pinned=false; pinnedBeforeObstacle=false; automatic=false
         manualPlacement=false; selectedCorner=nil; takingHeight=false; resumeCamera(); error=nil
     }
 
@@ -146,8 +147,11 @@ final class InteriorScanState {
     func editOutline() { guard !isCapturingPoint else { return }; takingHeight = false; error = nil }
     func enterHeight(_ millimeters: Double) {
         guard takingHeight, !isCapturingPoint else { return }
-        do { result = withSweepEvidence(try InteriorGeometry.project(loops, enteredHeightMM: millimeters)); error = nil }
-        catch { self.error = error.localizedDescription }
+        do {
+            result = withSweepEvidence(try InteriorGeometry.project(loops, enteredHeightMM: millimeters))
+            error = nil
+            if !sweepResult.loops.isEmpty { Task { await prepareDiagnostics() } }
+        } catch { self.error = error.localizedDescription }
     }
     private func withSweepEvidence(_ measurement: InteriorMeasurement) -> InteriorMeasurement {
         var measurement = measurement
@@ -164,7 +168,7 @@ final class InteriorScanState {
     }
     func findCorners() {
         guard !isCapturingPoint, result == nil else { return }
-        sweepEnabled=false
+        sweepEnabled=false; sweepSeed=nil; sweepResult=InteriorSweepResult(); stableSweepPreviews=0
         resumeCamera(); manualPlacement = false
         automatic = true
         automaticSeed = nil
@@ -173,6 +177,7 @@ final class InteriorScanState {
         stablePreviewFrames = 0
         loops = [[]]
         pinned = false
+        pinnedBeforeObstacle = false
         selectedCorner = nil
         takingHeight = false
         error = nil
@@ -200,7 +205,11 @@ final class InteriorScanState {
     }
     func useManual() {
         guard !isCapturingPoint else { return }
-        if isSweeping && canReviewSweep { loops=sweepResult.loops; pinned=true }
+        if isSweeping && canReviewSweep {
+            loops=sweepResult.loops; pinned=true
+        } else if isSweeping {
+            sweepSeed=nil; sweepResult=InteriorSweepResult(); stableSweepPreviews=0
+        }
         sweepEnabled=false
         automatic = false; automaticSeed = nil; preview = []; stablePreviewFrames = 0
         manualPlacement = true; error = nil
@@ -216,6 +225,7 @@ final class InteriorScanState {
         do {
             if takingHeight {
                 result = withSweepEvidence(try InteriorGeometry.project(loops, heightPoint: point))
+                if !sweepResult.loops.isEmpty { Task { await prepareDiagnostics() } }
             } else if let selectedCorner {
                 guard let origin = loops.first?.first, abs(point.y - origin.y) <= 0.008 else {
                     throw InteriorGeometryError.nonPlanar
@@ -242,6 +252,7 @@ final class InteriorScanState {
             _ = try InteriorGeometry.project(loops, heightPoint: origin + SIMD3<Float>(0, 0.1, 0))
             if addObstacle {
                 guard loops.count < 20 else { throw InteriorGeometryError.invalidOutline }
+                if loops.count == 1 { pinnedBeforeObstacle = pinned }
                 loops.append([]); pinned = false; manualPlacement = true; selectedCorner = nil
             } else {
                 takingHeight = true; selectedCorner = nil; resumeCamera()
@@ -255,7 +266,10 @@ final class InteriorScanState {
         if takingHeight { takingHeight = false }
         else if pinned { selectedCorner = nil }
         else if selectedCorner != nil { selectedCorner = nil }
-        else if loops.last!.isEmpty && loops.count > 1 { loops.removeLast() }
+        else if loops.last!.isEmpty && loops.count > 1 {
+            loops.removeLast()
+            if loops.count == 1 { pinned = pinnedBeforeObstacle }
+        }
         else if !loops.last!.isEmpty { loops[loops.count - 1].removeLast() }
     }
     func invalidate(_ message: String) {
@@ -272,6 +286,7 @@ final class InteriorScanState {
         previewTimestamp = 0
         stablePreviewFrames = 0
         pinned = false
+        pinnedBeforeObstacle = false
         selectedCorner = nil
         takingHeight = false
         sweepSeed=nil; sweepResult=InteriorSweepResult(); stableSweepPreviews=0; sweepEnabled=true
@@ -328,7 +343,7 @@ struct InteriorCamera: UIViewRepresentable {
                 state.requestPoint(at:[Float(p.x/view.bounds.width),Float(p.y/view.bounds.height)])
                 return
             }
-            if !state.takingHeight {
+            if !state.takingHeight && state.selectedCorner == nil {
                 for hit in view.hitTest(gesture.location(in: view), options: nil) {
                     guard let parts = hit.node.name?.split(separator: ":"), parts.count == 2,
                           let loop = Int(parts[0]), let point = Int(parts[1]) else { continue }
@@ -424,10 +439,14 @@ struct InteriorCamera: UIViewRepresentable {
             let map = depth.depthMap, w = CVPixelBufferGetWidth(map), h = CVPixelBufferGetHeight(map)
             guard CVPixelBufferGetPixelFormatType(map) == kCVPixelFormatType_DepthFloat32,
                   CVPixelBufferGetPixelFormatType(confidence) == kCVPixelFormatType_OneComponent8,
-                  CVPixelBufferGetWidth(confidence) == w, CVPixelBufferGetHeight(confidence) == h else { return }
+                  CVPixelBufferGetWidth(confidence) == w, CVPixelBufferGetHeight(confidence) == h else {
+                state.photoRequested = false; state.error = "Couldn’t freeze this view. Try again."; return
+            }
             CVPixelBufferLockBaseAddress(map, .readOnly); CVPixelBufferLockBaseAddress(confidence, .readOnly)
             defer { CVPixelBufferUnlockBaseAddress(map, .readOnly); CVPixelBufferUnlockBaseAddress(confidence, .readOnly) }
-            guard let base = CVPixelBufferGetBaseAddress(map), let cbase = CVPixelBufferGetBaseAddress(confidence) else { return }
+            guard let base = CVPixelBufferGetBaseAddress(map), let cbase = CVPixelBufferGetBaseAddress(confidence) else {
+                state.photoRequested = false; state.error = "Couldn’t freeze this view. Try again."; return
+            }
             var values = [Float](), confidences = [UInt8]()
             for y in 0..<h {
                 let row = base.advanced(by: y * CVPixelBufferGetBytesPerRow(map)).assumingMemoryBound(to: Float.self)

@@ -121,4 +121,17 @@ struct InteriorExperienceTests {
         other.placePhotoPoint(CGPoint(x:0.5,y:0.5)); other.invalidate("Background")
         #expect(other.photo == nil && !other.photoRequested && other.loops == [[]])
     }
+    @Test func obstacleUndoRestoresPinnedStateOnlyWhenOuterPerimeterWasPinned() {
+        let pinnedState = InteriorScanState(); pinnedState.loops = world; pinnedState.pinned = true
+        pinnedState.finishLoop(addObstacle: true)
+        #expect(pinnedState.loops.count == 2 && !pinnedState.pinned)
+        pinnedState.undo()
+        #expect(pinnedState.loops == world && pinnedState.pinned)
+
+        let manualState = InteriorScanState(); manualState.useManual(); manualState.loops = world
+        manualState.finishLoop(addObstacle: true)
+        #expect(manualState.loops.count == 2 && !manualState.pinned)
+        manualState.undo()
+        #expect(manualState.loops == world && !manualState.pinned)
+    }
 }

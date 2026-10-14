@@ -154,11 +154,20 @@ struct InteriorGeometryTests {
         #expect(state.loops.count == 2)
         state.undo()
         #expect(state.loops.count == 1)
+        #expect(!state.pinned)
         state.finishLoop(addObstacle: false)
         state.receive(.init(1,0.1,-1))
         let result = try #require(state.result)
         #expect(result.contours[0].count == 4)
         state.invalidate("Background during review")
         #expect(state.result == result)
+    }
+    @Test func zeroLengthSegmentDistanceAndLongEdgeHairpinValidationRemainStable() {
+        let d = InteriorGeometry.distance(.init(x: 3, y: 4), .init(x: 0, y: 0), .init(x: 0, y: 0))
+        #expect(d.isFinite && abs(d - 5) < 0.0001)
+        // A 200 mm edge doubling back with a 0.01 mm lateral jitter has |cross| = 2.0 mm^2,
+        // which must still be rejected by normalized angular validation.
+        let hairpin = loop([(0, 0), (200, 0), (0, 0.01), (0, 150)])
+        #expect(throws: InteriorGeometryError.self) { try InteriorGeometry.validate([hairpin]) }
     }
 }
