@@ -54,12 +54,11 @@ extension InteriorSweep {
     func refinedFrontOffset(a: SIMD2<Float>, b: SIMD2<Float>, t: SIMD2<Float>, n: SIMD2<Float>) -> Float {
         let mid = (a+b)/2, midOffset = simd_dot(n,mid), outward = -n, baseOutward = -midOffset
         let low = min(simd_dot(t,a),simd_dot(t,b)), high = max(simd_dot(t,a),simd_dot(t,b))
-        var reach: [Int:[Int:Float]] = [:], viewMax: [Int:Float] = [:]
+        var reach: [Int:[Int:Float]] = [:]
         for (view, frame) in observations.enumerated() {
             for q in frame.floor {
                 let tq = simd_dot(t,q), dq = simd_dot(outward,q)-baseOutward
                 guard tq >= low, tq <= high, dq > -Self.edgeReach, dq <= Self.edgeReach else { continue }
-                viewMax[view] = max(viewMax[view] ?? -.infinity,dq)
                 for dt: Float in [-Self.cell, 0, Self.cell] {
                     let tb = tq + dt
                     guard tb >= low, tb <= high else { continue }
@@ -67,25 +66,25 @@ extension InteriorSweep {
                     reach[bin,default:[:]][view] = max(reach[bin]?[view] ?? -.infinity,dq)
                 }
             }
-            for q in frame.front {
-                let tq = simd_dot(t,q), dq = simd_dot(outward,q)-baseOutward
-                guard tq >= low, tq <= high, dq > -Self.edgeReach, dq <= Self.edgeReach else { continue }
-                viewMax[view] = max(viewMax[view] ?? -.infinity,dq)
-            }
         }
-        let binReaches = reach.values.compactMap { views -> Float? in
+        let binCount = max(1,Int(ceil((high-low)/Self.frontBin)))
+        var leftReaches: [Float] = [], rightReaches: [Float] = []
+        for (bin, views) in reach {
             let extents = views.values.sorted(by:>)
-            return extents.count >= 2 ? extents[1] : nil
-        }.sorted()
-        let viewExtents = viewMax.values.sorted(by:>)
-        let cornerOutward = max(0,simd_dot(outward,a)-baseOutward,simd_dot(outward,b)-baseOutward)
-        let cornerShift = viewExtents.count >= 2 ? min(cornerOutward,max(0,viewExtents[1])) : 0
-        guard binReaches.count >= 3, Float(binReaches.count)*Self.frontBin >= 0.5*(high-low) else {
-            return midOffset - min(Self.edgeReach,cornerShift)
+            guard extents.count >= 2 else { continue }
+            if bin < binCount/2 { leftReaches.append(extents[1]) }
+            else { rightReaches.append(extents[1]) }
+        }
+        let binReaches = (leftReaches + rightReaches).sorted()
+        guard binReaches.count >= 3, Float(binReaches.count)*Self.frontBin >= 0.5*(high-low),
+              !leftReaches.isEmpty, !rightReaches.isEmpty,
+              Self.median(leftReaches) > 0, Self.median(rightReaches) > 0,
+              Self.median(binReaches) > 0 else {
+            return midOffset
         }
         let topBins = binReaches.suffix(3)
         let binShift = max(0,topBins.reduce(0,+)/Float(topBins.count))
-        return midOffset - min(Self.edgeReach,max(binShift,cornerShift))
+        return midOffset - min(Self.edgeReach,binShift)
     }
 
     /// Explicit rectangle prior: four supported sides must already exist. Joint
