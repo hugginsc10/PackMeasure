@@ -67,9 +67,6 @@ enum InteriorCornerDetector {
             loop.map { .init(x: Double($0.x) * 1000, y: Double($0.z) * 1000) }
         }
         loops.sort { abs(InteriorGeometry.area(points($0))) > abs(InteriorGeometry.area(points($1))) }
-        loops = loops.enumerated().filter {
-            $0.offset == 0 || ($0.element.count >= 3 && abs(InteriorGeometry.area(points($0.element))) >= 400)
-        }.map(\.element)
         try InteriorGeometry.validate(loops.map(points))
         guard let outer = loops.first, outer.count >= 3 else { throw Failure.small }
         return loops

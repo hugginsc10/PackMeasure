@@ -631,18 +631,4 @@ struct InteriorSweepTests {
         let pts=f.points()
         #expect(f.normal(15,40,pts).map { abs($0.y) > 0.95 } == true)
     }
-    @Test func singlePixelNoiseSpeckInsideFloorDoesNotInvalidateCornerDetector() throws {
-        let w=40, h=40
-        var surface=[SIMD3<Float>?](repeating:nil,count:w*h)
-        for y in 2..<(h-2) { for x in 2..<(w-2) {
-            let isWall = x==2 || x==w-3 || y==2 || y==h-3
-            let isSpeck = x==20 && y==20
-            surface[y*w+x] = [Float(x)*0.008, (isWall || isSpeck) ? 0.04 : 0, Float(y)*0.008]
-        } }
-        let loops = try InteriorCornerDetector.detect(width:w,height:h,surface:surface,seed:15*w+15) { x,y in
-            [x*0.008, 0, y*0.008]
-        }
-        #expect(loops.count == 1)
-        #expect(loops[0].count == 4)
-    }
 }
