@@ -630,5 +630,16 @@ struct InteriorSweepTests {
         #expect(!obs.front.isEmpty)
         let pts=f.points()
         #expect(f.normal(15,40,pts).map { abs($0.y) > 0.95 } == true)
+
+        var closeDs=[Float](repeating:0.30,count:width*height)
+        for y in 0..<height {
+            closeDs[y*width+14]=0.296
+            closeDs[y*width+13]=0.292
+        }
+        var closePose=pose; closePose.columns.3=[0,0.30,0,1]
+        let closeFrame=InteriorSweepFrame(width:width,height:height,depths:closeDs,confidence:cs,luminance:ls,
+                                          intrinsics:simd_float3x3(columns:([100,0,0],[0,100,0],[40,40,1])),transform:closePose,timestamp:2)
+        let closePts=closeFrame.points()
+        #expect(closeFrame.normal(15,40,closePts).map { abs($0.y) > 0.95 } == true)
     }
 }

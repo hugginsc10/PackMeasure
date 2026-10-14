@@ -75,14 +75,21 @@ struct InteriorSweepFrame: Sendable {
             let u1 = a.flatMap { let v = p-$0; return simd_length(v)<0.045 ? v : nil }
             let u2 = b.flatMap { let v = $0-p; return simd_length(v)<0.045 ? v : nil }
             if let u1, let u2 {
-                if simd_length(u2-u1) >= 0.008 {
-                    let err1 = (a2 != nil && a != nil) ? simd_length(u1 - (a! - a2!)) : .infinity
-                    let err2 = (b != nil && b2 != nil) ? simd_length((b2! - b!) - u2) : .infinity
-                    if err1 < 0.008 && err1 + 0.002 < err2 { return u1 }
-                    if err2 < 0.008 && err2 + 0.002 < err1 { return u2 }
-                    if err1 < 0.008 && err2 < 0.008 {
-                        if abs(u1.y) + 0.004 < abs(u2.y) { return u1 }
-                        if abs(u2.y) + 0.004 < abs(u1.y) { return u2 }
+                let l1 = simd_length(u1), l2 = simd_length(u2)
+                guard l1 > 0.0001, l2 > 0.0001 else { return nil }
+                let d1 = u1 / l1, d2 = u2 / l2
+                if simd_dot(d1, d2) < 0.96 || max(l1, l2) > 1.6 * min(l1, l2) {
+                    func stepError(_ v: SIMD3<Float>?, _ u: SIMD3<Float>, _ lu: Float) -> Float {
+                        guard let v, simd_length(v) > 0.0001, simd_length(v) < 0.045 else { return .infinity }
+                        return simd_length(u - v) / max(lu, simd_length(v))
+                    }
+                    let err1 = stepError(a != nil && a2 != nil ? a! - a2! : nil, u1, l1)
+                    let err2 = stepError(b != nil && b2 != nil ? b2! - b! : nil, u2, l2)
+                    if err1 < 0.25 && err1 + 0.08 < err2 { return u1 }
+                    if err2 < 0.25 && err2 + 0.08 < err1 { return u2 }
+                    if err1 < 0.25 && err2 < 0.25 {
+                        if abs(d1.y) + 0.2 < abs(d2.y) { return u1 }
+                        if abs(d2.y) + 0.2 < abs(d1.y) { return u2 }
                     }
                 }
                 return simd_length(u1+u2) < 0.08 ? u1+u2 : nil
