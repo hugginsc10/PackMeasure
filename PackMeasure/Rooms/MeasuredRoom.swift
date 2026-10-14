@@ -179,6 +179,16 @@ struct RoomScanStore {
         try data.write(to: directory.appendingPathComponent("\(room.id).json"), options: .atomic)
     }
 
+    func delete(_ room: MeasuredRoom) throws {
+        try delete(id: room.id)
+    }
+
+    func delete(id: UUID) throws {
+        let url = directory.appendingPathComponent("\(id).json")
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        try FileManager.default.removeItem(at: url)
+    }
+
     func load() throws -> [MeasuredRoom] {
         guard FileManager.default.fileExists(atPath: directory.path) else { return [] }
         return try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)

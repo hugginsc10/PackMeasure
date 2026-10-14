@@ -67,6 +67,11 @@ struct RoomMeasurementView: View {
                             Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                         }.measurePanel()
                     }.buttonStyle(.plain).accessibilityIdentifier("saved-room-\(room.id)")
+                        .contextMenu {
+                            Button("Delete room", systemImage: "trash", role: .destructive) {
+                                delete(room)
+                            }
+                        }
                 }
             }.padding(20)
         }
@@ -86,6 +91,15 @@ struct RoomMeasurementView: View {
     private func reload() {
         do { rooms = try store.load() }
         catch { errorMessage = error.localizedDescription }
+    }
+
+    private func delete(_ room: MeasuredRoom) {
+        do {
+            try store.delete(room)
+            reload()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 }
 

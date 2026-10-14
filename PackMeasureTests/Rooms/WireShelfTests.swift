@@ -167,4 +167,22 @@ final class WireShelfGeometryTests: XCTestCase {
         s.request();s.reject("Depth unavailable",request:s.requestID,useMatchedViews:true)
         XCTAssertFalse(s.needsMatchedViews);XCTAssertNotNil(s.selectedTop)
     }
+    func testFrozenPhotoConfirmsDuringTransientTrackingDipAndMoveSidewaysClearsSecondPhoto() throws {
+        let s = WireShelfScanState()
+        s.ready = true; s.requestPhoto()
+        let (first, cursor1) = try photo(s, point: [0.5, 1.2, 0.4], side: -0.2)
+        s.receive(first, request: try XCTUnwrap(s.photoRequest))
+        s.cursor = cursor1
+        s.ready = false
+        s.confirmPoint()
+        XCTAssertNotNil(s.firstPhoto)
+        s.ready = true; s.requestPhoto()
+        let (tooClose, cursorTooClose) = try photo(s, point: [0.5, 1.2, 0.4], side: -0.15)
+        s.receive(tooClose, request: try XCTUnwrap(s.photoRequest))
+        s.cursor = cursorTooClose
+        s.confirmPoint()
+        XCTAssertNotNil(s.firstPhoto)
+        XCTAssertNil(s.photo)
+        XCTAssertEqual(s.error, WireShelfError.moveSideways.localizedDescription)
+    }
 }

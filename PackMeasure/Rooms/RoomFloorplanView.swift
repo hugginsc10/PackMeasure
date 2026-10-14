@@ -278,12 +278,14 @@ struct FloorplanScrollView: UIViewRepresentable {
         if view.zoomRequest != zoomRequest {
             let factor: CGFloat = zoomRequest > view.zoomRequest ? 2 : 0.5
             view.zoomRequest = zoomRequest
-            let scale = min(8, max(1, view.zoomScale * factor))
-            let center = CGPoint(x: (view.contentOffset.x + view.bounds.width / 2) / view.zoomScale,
-                                 y: (view.contentOffset.y + view.bounds.height / 2) / view.zoomScale)
-            let size = CGSize(width: view.bounds.width / scale, height: view.bounds.height / scale)
-            view.zoom(to: CGRect(x: center.x - size.width / 2, y: center.y - size.height / 2,
-                                 width: size.width, height: size.height), animated: true)
+            if view.bounds.width > 0, view.bounds.height > 0, view.zoomScale > 0 {
+                let scale = min(8, max(1, view.zoomScale * factor))
+                let center = CGPoint(x: (view.contentOffset.x + view.bounds.width / 2) / view.zoomScale,
+                                     y: (view.contentOffset.y + view.bounds.height / 2) / view.zoomScale)
+                let size = CGSize(width: view.bounds.width / scale, height: view.bounds.height / scale)
+                view.zoom(to: CGRect(x: center.x - size.width / 2, y: center.y - size.height / 2,
+                                     width: size.width, height: size.height), animated: true)
+            }
         }
         view.drawing.setNeedsDisplay()
     }
@@ -308,10 +310,11 @@ struct FloorplanScrollView: UIViewRepresentable {
                 ?? geometry.nearestWall(to: point, tolerance: 22)
         }
         @objc func doubleTap(_ gesture: UITapGestureRecognizer) {
-            guard let view = gesture.view as? FloorplanScrollContainer else { return }
+            guard let view = gesture.view as? FloorplanScrollContainer,
+                  view.bounds.width > 0, view.bounds.height > 0 else { return }
             if view.zoomScale > 3 { view.setZoomScale(1, animated: true); return }
             let point = gesture.location(in: view.plane)
-            let scale = min(8, view.zoomScale * 2)
+            let scale = min(8, max(1, view.zoomScale * 2))
             let size = CGSize(width: view.bounds.width / scale, height: view.bounds.height / scale)
             view.zoom(to: CGRect(x: point.x - size.width / 2, y: point.y - size.height / 2,
                                  width: size.width, height: size.height), animated: true)

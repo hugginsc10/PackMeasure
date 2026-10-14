@@ -185,4 +185,36 @@ final class RoomShelfMeasurementTests: XCTestCase {
         state.skipClearance(); XCTAssertNotNil(state.result); XCTAssertNil(state.result?.clearance)
         state.invalidate("Background"); XCTAssertNotNil(state.result)
     }
+    func testFloorAboveShelfAndUnbracketedBackEdgeFailAtCurrentStepInsteadOfStepFour() {
+        let state = ShelfScanState()
+        capture(state, [0.5, 1.2, 0.2])
+        capture(state, [0.5, 1.3, 0.2])
+        XCTAssertTrue(state.points.isEmpty)
+        XCTAssertNotNil(state.error)
+        capture(state, [0.5, 0, 0.4])
+        XCTAssertEqual(state.points.count, 1)
+        capture(state, [0.6, 1.2, 0])
+        XCTAssertEqual(state.points.count, 2)
+        // Back-right point does not bracket selectedTop.x = 0.5 (both back points at x >= 0.6).
+        capture(state, [1.0, 1.2, 0])
+        XCTAssertEqual(state.points.count, 2)
+        XCTAssertEqual(state.error, RoomDimensionError.outsideSelection.localizedDescription)
+        // Back-right point with > 3 cm height difference from back-left (within +-2 cm of selectedTop individually).
+        state.undo()
+        capture(state, [0, 1.18, 0])
+        capture(state, [1.0, 1.22, 0])
+        XCTAssertEqual(state.points.count, 2)
+        XCTAssertEqual(state.error, RoomDimensionError.unevenShelf.localizedDescription)
+    }
+    func testResetClearsFinishedShelfScanInPlace() {
+        let state = ShelfScanState()
+        capture(state, [0.5, 1.2, 0.2]); capture(state, [0, 0, 0]); capture(state, [0, 1.2, 0]); capture(state, [1, 1.2, 0]); capture(state, [0.5, 1.2, 0.4])
+        state.skipClearance()
+        XCTAssertNotNil(state.result)
+        state.reset()
+        XCTAssertNil(state.result)
+        XCTAssertNil(state.selectedTop)
+        XCTAssertTrue(state.points.isEmpty)
+        XCTAssertNil(state.error)
+    }
 }

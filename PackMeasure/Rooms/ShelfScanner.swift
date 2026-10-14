@@ -70,9 +70,21 @@ final class ShelfScanState {
         }
         var next = points; next.append(average)
         do {
+            if next.count == 1 {
+                guard average.y <= selectedTop.y, selectedTop.y - average.y <= 5 else {
+                    throw RoomDimensionError.invalidShelf
+                }
+            }
             if next.count == 3 {
-                let delta = SIMD2<Float>(next[2].x - next[1].x, next[2].z - next[1].z)
-                guard simd_length(delta) >= 0.2 else { throw RoomDimensionError.wallReference }
+                let a = next[1], b = next[2]
+                let delta = SIMD2<Float>(b.x - a.x, b.z - a.z)
+                let len = simd_length(delta)
+                guard len.isFinite, len >= 0.2 else { throw RoomDimensionError.wallReference }
+                guard abs(a.y - b.y) <= 0.03 else { throw RoomDimensionError.unevenShelf }
+                let along = simd_dot(SIMD2<Float>(selectedTop.x - a.x, selectedTop.z - a.z), delta / len)
+                guard along.isFinite, along >= -0.03, along <= len + 0.03 else {
+                    throw RoomDimensionError.outsideSelection
+                }
             }
             if next.count >= 4 {
                 let geometry = try ShelfGeometry(points: next, selectedTop: selectedTop)
@@ -89,6 +101,11 @@ final class ShelfScanState {
     func undo() {
         requestID += 1; isCapturing = false; samples = []; result = nil; error = nil
         if points.isEmpty { selectedTop = nil } else { points.removeLast() }
+    }
+    func reset() {
+        result = nil
+        invalidate("")
+        error = nil
     }
     func invalidate(_ message: String) {
         guard result == nil else { return }
@@ -266,7 +283,7 @@ struct ShelfScannerView: View {
                             if let selected = state.selectedTop { onMeasured(result, state.points, selected); dismiss() }
                         }.accessibilityIdentifier("use-shelf-scan")
                         DiagnosticButton(title: "Shelf diagnostics", kind: .shelf, report: state.diagnosticSummary)
-                        Button("Scan again") { state = ShelfScanState(); cameraID = UUID() }
+                        Button("Scan again") { state.reset(); cameraID = UUID() }
                     }
                 } else if !ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
                     ContentUnavailableView("LiDAR unavailable", systemImage: "viewfinder",
