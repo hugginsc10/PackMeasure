@@ -171,4 +171,22 @@ struct InteriorRectangleFitTests {
         let fittedDepth = fitted.outline.map(\.z).max()! - fitted.outline.map(\.z).min()!
         #expect(abs(fittedDepth - 0.291) < 0.0005)
     }
+
+    @Test func asymmetricHalfCoverageOpenFrontDoesNotShiftOutward() throws {
+        var frames = (0..<4).map { helper.observation($0,loops:[helper.rectangle],open:true) }
+        for i in frames.indices {
+            frames[i].front = frames[i].front.map { [$0.x, 0.012] }
+            frames[i].floor.removeAll { $0.x < 0.18 && $0.y < 0.012 }
+        }
+        let map = try InteriorSweep(snapshot:.init(seed:[0.1,0,0.1],observations:frames,rejectedViews:0,footprintModel:.rectangular))
+        let recessed: [SIMD2<Float>] = [[0,0.012],[0.4,0.012],[0.4,0.3],[0,0.3]]
+        let polygon = recessed.map { SIMD3<Float>($0.x,0,$0.y) }
+        let lines = recessed.indices.map { i -> InteriorSweep.Line in
+            let a = recessed[i], b = recessed[(i+1)%4], t = simd_normalize(b-a), n = SIMD2(-t.y,t.x)
+            return .init(normal:n,offset:simd_dot(n,a),low:min(simd_dot(t,a),simd_dot(t,b)),high:max(simd_dot(t,a),simd_dot(t,b)),isFront:i==0)
+        }
+        let fitted = try #require(map.rectangularOutline(polygon,lines:lines))
+        let fittedDepth = fitted.outline.map(\.z).max()! - fitted.outline.map(\.z).min()!
+        #expect(abs(fittedDepth - 0.288) < 0.0005)
+    }
 }

@@ -67,24 +67,23 @@ extension InteriorSweep {
                 }
             }
         }
-        let binCount = max(1,Int(ceil((high-low)/Self.frontBin)))
+        let halfSpan = 0.5 * (high - low), midT = 0.5 * (low + high)
         var leftReaches: [Float] = [], rightReaches: [Float] = []
         for (bin, views) in reach {
             let extents = views.values.sorted(by:>)
             guard extents.count >= 2 else { continue }
-            if bin < binCount/2 { leftReaches.append(extents[1]) }
+            let center = low + (Float(bin) + 0.5) * Self.frontBin
+            if center < midT { leftReaches.append(extents[1]) }
             else { rightReaches.append(extents[1]) }
         }
-        let binReaches = (leftReaches + rightReaches).sorted()
-        guard binReaches.count >= 3, Float(binReaches.count)*Self.frontBin >= 0.5*(high-low),
-              !leftReaches.isEmpty, !rightReaches.isEmpty,
-              Self.median(leftReaches) > 0, Self.median(rightReaches) > 0,
-              Self.median(binReaches) > 0 else {
+        let binShift = min(Self.median(leftReaches), Self.median(rightReaches))
+        guard leftReaches.count >= 2, rightReaches.count >= 2,
+              Float(leftReaches.count) * Self.frontBin >= 0.5 * halfSpan,
+              Float(rightReaches.count) * Self.frontBin >= 0.5 * halfSpan,
+              binShift > 0 else {
             return midOffset
         }
-        let topBins = binReaches.suffix(3)
-        let binShift = max(0,topBins.reduce(0,+)/Float(topBins.count))
-        return midOffset - min(Self.edgeReach,binShift)
+        return midOffset - min(Self.edgeReach, binShift)
     }
 
     /// Explicit rectangle prior: four supported sides must already exist. Joint
