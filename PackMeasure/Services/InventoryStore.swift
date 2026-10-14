@@ -4,12 +4,12 @@ protocol InventoryStoring {
     func load() throws -> [MeasuredItem]
     func save(_ items: [MeasuredItem]) throws
     func loadLoadMix() -> PackingLoadMix
-    func saveLoadMix(_ loadMix: PackingLoadMix)
+    func saveLoadMix(_ loadMix: PackingLoadMix) throws
 }
 
 extension InventoryStoring {
     func loadLoadMix() -> PackingLoadMix { .mixedHousehold }
-    func saveLoadMix(_ loadMix: PackingLoadMix) {}
+    func saveLoadMix(_ loadMix: PackingLoadMix) throws {}
 }
 
 struct InventoryStore: InventoryStoring {
@@ -75,12 +75,12 @@ struct InventoryStore: InventoryStoring {
         return loadMix
     }
 
-    func saveLoadMix(_ loadMix: PackingLoadMix) {
-        guard let url = try? loadMixURL() else { return }
+    func saveLoadMix(_ loadMix: PackingLoadMix) throws {
+        let url = try loadMixURL()
         let directory = url.deletingLastPathComponent()
-        try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-        guard let data = try? encoder.encode(loadMix) else { return }
-        try? data.write(to: url, options: .atomic)
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        let data = try encoder.encode(loadMix)
+        try data.write(to: url, options: .atomic)
     }
 
     func storageURL() throws -> URL {

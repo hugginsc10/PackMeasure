@@ -338,6 +338,13 @@ struct AppModelInventoryTests {
         reloaded.loadIfNeeded()
         #expect(reloaded.loadMix == .boxes)
         #expect(reloaded.vehicleRecommendation.vehicle?.usableVolumeFraction == PackingLoadMix.boxes.usableVolumeFraction)
+
+        let failingStore = RecoveryTestStore()
+        let failingModel = AppModel(store: failingStore)
+        failingStore.failWrites = true
+        #expect(!failingModel.setLoadMix(.bulkyFurniture))
+        #expect(failingModel.loadMix == .mixedHousehold)
+        #expect(failingModel.bannerMessage == InventoryPersistenceError.saveFailed.localizedDescription)
     }
 
     @Test
@@ -449,6 +456,7 @@ struct AppModelInventoryTests {
 
 private final class RecoveryTestStore: InventoryStoring {
     var items: [MeasuredItem] = []
+    var loadMix: PackingLoadMix = .mixedHousehold
     var failReads = false
     var failWrites = false
     private(set) var saveCalls = 0
@@ -462,6 +470,16 @@ private final class RecoveryTestStore: InventoryStoring {
         saveCalls += 1
         if failWrites { throw CocoaError(.fileWriteOutOfSpace) }
         self.items = items
+    }
+
+    func loadLoadMix() -> PackingLoadMix {
+        loadMix
+    }
+
+    func saveLoadMix(_ loadMix: PackingLoadMix) throws {
+        saveCalls += 1
+        if failWrites { throw CocoaError(.fileWriteOutOfSpace) }
+        self.loadMix = loadMix
     }
 }
 

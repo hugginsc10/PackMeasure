@@ -97,10 +97,18 @@ final class AppModel {
         return persist(next)
     }
 
-    func setLoadMix(_ loadMix: PackingLoadMix) {
-        self.loadMix = loadMix
-        guard !inventoryLoadFailed else { return }
-        store.saveLoadMix(loadMix)
+    @discardableResult
+    func setLoadMix(_ loadMix: PackingLoadMix) -> Bool {
+        guard loadIfNeeded() else { return false }
+        do {
+            try store.saveLoadMix(loadMix)
+            self.loadMix = loadMix
+            bannerMessage = nil
+            return true
+        } catch {
+            bannerMessage = InventoryPersistenceError.saveFailed.localizedDescription
+            return false
+        }
     }
 
     @discardableResult
