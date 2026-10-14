@@ -44,6 +44,7 @@ extension InteriorSweep {
     }
 
     private static func median(_ values: [Float]) -> Float {
+        guard !values.isEmpty else { return 0 }
         let values = values.sorted(), i = values.count/2
         return values.count%2 == 0 ? (values[i-1]+values[i])/2 : values[i]
     }
@@ -76,13 +77,13 @@ extension InteriorSweep {
             if center < midT { leftReaches.append(extents[1]) }
             else { rightReaches.append(extents[1]) }
         }
-        let binShift = min(Self.median(leftReaches), Self.median(rightReaches))
         guard leftReaches.count >= 2, rightReaches.count >= 2,
               Float(leftReaches.count) * Self.frontBin >= 0.5 * halfSpan,
-              Float(rightReaches.count) * Self.frontBin >= 0.5 * halfSpan,
-              binShift > 0 else {
+              Float(rightReaches.count) * Self.frontBin >= 0.5 * halfSpan else {
             return midOffset
         }
+        let binShift = min(Self.median(leftReaches), Self.median(rightReaches))
+        guard binShift > 0 else { return midOffset }
         return midOffset - min(Self.edgeReach, binShift)
     }
 
