@@ -55,34 +55,47 @@ extension InteriorSweep {
     func refinedFrontOffset(a: SIMD2<Float>, b: SIMD2<Float>, t: SIMD2<Float>, n: SIMD2<Float>) -> Float {
         let mid = (a+b)/2, midOffset = simd_dot(n,mid), outward = -n, baseOutward = -midOffset
         let low = min(simd_dot(t,a),simd_dot(t,b)), high = max(simd_dot(t,a),simd_dot(t,b))
-        var reach: [Int:[Int:Float]] = [:]
+        let halfSpan = 0.5 * (high - low), midT = 0.5 * (low + high)
+        struct BinSample { var dq: Float; var tq: Float }
+        var leftBins: [Int:[Int:BinSample]] = [:], rightBins: [Int:[Int:BinSample]] = [:]
         for (view, frame) in observations.enumerated() {
             for q in frame.floor {
                 let tq = simd_dot(t,q), dq = simd_dot(outward,q)-baseOutward
                 guard tq >= low, tq <= high, dq > -Self.edgeReach, dq <= Self.edgeReach else { continue }
-                for dt: Float in [-Self.cell, 0, Self.cell] {
-                    let tb = tq + dt
-                    guard tb >= low, tb <= high else { continue }
-                    let bin = Int(floor((tb-low)/Self.frontBin))
-                    reach[bin,default:[:]][view] = max(reach[bin]?[view] ?? -.infinity,dq)
+                if tq < midT {
+                    let bin = Int(floor((tq - low) / Self.frontBin))
+                    if dq > (leftBins[bin]?[view]?.dq ?? -.infinity) {
+                        leftBins[bin, default: [:]][view] = BinSample(dq: dq, tq: tq)
+                    }
+                } else {
+                    let bin = Int(floor((tq - midT) / Self.frontBin))
+                    if dq > (rightBins[bin]?[view]?.dq ?? -.infinity) {
+                        rightBins[bin, default: [:]][view] = BinSample(dq: dq, tq: tq)
+                    }
                 }
             }
         }
-        let halfSpan = 0.5 * (high - low), midT = 0.5 * (low + high)
-        var leftReaches: [Float] = [], rightReaches: [Float] = []
-        for (bin, views) in reach {
-            let extents = views.values.sorted(by:>)
-            guard extents.count >= 2 else { continue }
-            let center = low + (Float(bin) + 0.5) * Self.frontBin
-            if center < midT { leftReaches.append(extents[1]) }
-            else { rightReaches.append(extents[1]) }
+        func halfCoverage(_ bins: [Int:[Int:BinSample]]) -> (reaches: [Float], width: Float, span: Float) {
+            var reaches: [Float] = [], positions: [Float] = [], width: Float = 0
+            for (bin, views) in bins {
+                let samples = views.values.sorted { $0.dq > $1.dq }
+                guard samples.count >= 2 else { continue }
+                let binLow = Float(bin) * Self.frontBin, binHigh = min(halfSpan, Float(bin + 1) * Self.frontBin)
+                guard binHigh > binLow else { continue }
+                reaches.append(samples[1].dq)
+                positions.append(Self.median(samples.map(\.tq)))
+                width += binHigh - binLow
+            }
+            let span = (positions.max() ?? 0) - (positions.min() ?? 0)
+            return (reaches, width, span)
         }
-        guard leftReaches.count >= 2, rightReaches.count >= 2,
-              Float(leftReaches.count) * Self.frontBin >= 0.5 * halfSpan,
-              Float(rightReaches.count) * Self.frontBin >= 0.5 * halfSpan else {
+        let left = halfCoverage(leftBins), right = halfCoverage(rightBins)
+        guard left.reaches.count >= 2, right.reaches.count >= 2,
+              left.width >= 0.5 * halfSpan, right.width >= 0.5 * halfSpan,
+              left.span >= 0.35 * halfSpan, right.span >= 0.35 * halfSpan else {
             return midOffset
         }
-        let binShift = min(Self.median(leftReaches), Self.median(rightReaches))
+        let binShift = min(Self.median(left.reaches), Self.median(right.reaches))
         guard binShift > 0 else { return midOffset }
         return midOffset - min(Self.edgeReach, binShift)
     }
