@@ -120,7 +120,9 @@ enum InteriorGeometry {
     }
     static func distance(_ p: InteriorPoint, _ a: InteriorPoint, _ b: InteriorPoint) -> Double {
         let d = b - a, v = p - a
-        let t = max(0, min(1, (v.x * d.x + v.y * d.y) / (d.x * d.x + d.y * d.y)))
+        let lenSq = d.x * d.x + d.y * d.y
+        guard lenSq > 0 else { return v.length }
+        let t = max(0, min(1, (v.x * d.x + v.y * d.y) / lenSq))
         return (p - (a + d * t)).length
     }
     static func intersects(_ a: InteriorPoint, _ b: InteriorPoint, _ c: InteriorPoint, _ d: InteriorPoint) -> Bool {
@@ -142,11 +144,12 @@ enum InteriorGeometry {
                   abs(area(loop)) > 1 else { throw InteriorGeometryError.invalidOutline }
             let e = edges(loop)
             for i in e.indices {
-                guard (e[i].1 - e[i].0).length >= 1 else { throw InteriorGeometryError.invalidOutline }
-                // Adjacent edges must not double back on one another.
+                // Adjacent edges must be at least 1 mm and must not double back on one another.
                 let previous = loop[(i + loop.count - 1) % loop.count] - loop[i]
                 let next = loop[(i + 1) % loop.count] - loop[i]
-                if abs(cross(previous, next)) < 0.001 && previous.x * next.x + previous.y * next.y > 0 {
+                let prevLen = previous.length, nextLen = next.length
+                guard prevLen >= 1, nextLen >= 1 else { throw InteriorGeometryError.invalidOutline }
+                if abs(cross(previous, next)) < 0.001 * prevLen * nextLen && previous.x * next.x + previous.y * next.y > 0 {
                     throw InteriorGeometryError.invalidOutline
                 }
                 for j in e.indices where j > i + 1 && !(i == 0 && j == e.count - 1) {

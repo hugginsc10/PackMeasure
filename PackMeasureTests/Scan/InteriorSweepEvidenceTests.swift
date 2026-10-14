@@ -75,14 +75,16 @@ struct InteriorSweepEvidenceTests {
     @Test @MainActor func reviewPreservesSweepAgreementAndDoesNotAttachItToCorrectedCorners() throws {
         let state = InteriorScanState(); state.loops = loops; state.takingHeight = true
         let agreement = [InteriorBoundaryAgreement(loop:0,edge:0,views:4,spreadMM:9.6,horizontalCameraSpanMM:75)]
-        state.sweepResult = .init(loops:loops,views:4,boundaryAgreement:agreement)
+        state.sweepResult = .init(loops:loops,views:4,boundaryAgreement:agreement,footprintModel:.rectangular)
         state.enterHeight(123)
         let record = try #require(state.result)
         #expect(record.capturedBoundaryAgreement == agreement)
+        #expect(record.footprintModel == .rectangular)
         let restored = try JSONDecoder().decode(InteriorMeasurement.self,from:JSONEncoder().encode(record))
         #expect(restored == record)
         state.result = nil; state.loops[0][1].x -= 0.01
         state.enterHeight(123)
         #expect(state.result?.capturedBoundaryAgreement == nil)
+        #expect(state.result?.footprintModel == nil)
     }
 }
