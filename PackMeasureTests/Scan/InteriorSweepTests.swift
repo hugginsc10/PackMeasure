@@ -509,8 +509,10 @@ struct InteriorSweepTests {
         var r=run([rectangle],overhead:0.35); r.views=3; r.revision=3
         state.receiveSweep(r,generation:state.generation)
         #expect(!state.canReviewSweep)
+        #expect(state.prompt.contains("move slightly"))
         r.views=4; r.revision=4; state.receiveSweep(r,generation:state.generation)
         #expect(state.canReviewSweep)
+        #expect(state.prompt == r.hint)
         state.useSweepOutline()
         let value=try #require(state.result)
         #expect(value.heightSource == .lidar && abs(value.heightMM-350)<0.01)
@@ -613,5 +615,34 @@ struct InteriorSweepTests {
             #expect(abs(loop.map(\.x).max()!-loop.map(\.x).min()!-0.4)<0.008)
             #expect(abs(loop.map(\.z).max()!-loop.map(\.z).min()!-0.3)<0.008)
         }
+    }
+    @Test func openEdgeHandlesOnePixelDepthBlurTransitionAndCreaseNormals() {
+        let width=80, height=80
+        var ds=[Float](repeating:1,count:width*height), cs=[UInt8](repeating:2,count:ds.count), ls=[Float](repeating:0.5,count:ds.count)
+        for y in 0..<height {
+            for x in 0..<14 { ds[y*width+x]=1.15; ls[y*width+x]=0.15 }
+            ds[y*width+14]=1.018; ls[y*width+14]=0.32
+        }
+        var pose=simd_float4x4(simd_quatf(angle:-.pi/2,axis:[1,0,0])); pose.columns.3=[0,1,0,1]
+        let f=InteriorSweepFrame(width:width,height:height,depths:ds,confidence:cs,luminance:ls,
+                                 intrinsics:simd_float3x3(columns:([100,0,0],[0,100,0],[40,40,1])),transform:pose,timestamp:1)
+        let obs=f.observation(seed:.zero)
+        #expect(!obs.front.isEmpty)
+        let pts=f.points()
+        #expect(f.normal(15,40,pts).map { abs($0.y) > 0.95 } == true)
+    }
+    @Test func singlePixelNoiseSpeckInsideFloorDoesNotInvalidateCornerDetector() throws {
+        let w=40, h=40
+        var surface=[SIMD3<Float>?](repeating:nil,count:w*h)
+        for y in 2..<(h-2) { for x in 2..<(w-2) {
+            let isWall = x==2 || x==w-3 || y==2 || y==h-3
+            let isSpeck = x==20 && y==20
+            surface[y*w+x] = [Float(x)*0.008, (isWall || isSpeck) ? 0.04 : 0, Float(y)*0.008]
+        } }
+        let loops = try InteriorCornerDetector.detect(width:w,height:h,surface:surface,seed:15*w+15) { x,y in
+            [x*0.008, 0, y*0.008]
+        }
+        #expect(loops.count == 1)
+        #expect(loops[0].count == 4)
     }
 }

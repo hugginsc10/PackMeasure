@@ -48,6 +48,46 @@ extension InteriorSweep {
         return values.count%2 == 0 ? (values[i-1]+values[i])/2 : values[i]
     }
 
+    /// Under the rectangular prior, an open front has zero slope along `t`. A single corner
+    /// bin eroded by depth blur tilts the free-polygon front and drags its midpoint inward
+    /// through multi-view observed floor; recover the corroborated zero-slope floor reach.
+    func refinedFrontOffset(a: SIMD2<Float>, b: SIMD2<Float>, t: SIMD2<Float>, n: SIMD2<Float>) -> Float {
+        let mid = (a+b)/2, midOffset = simd_dot(n,mid), outward = -n, baseOutward = -midOffset
+        let low = min(simd_dot(t,a),simd_dot(t,b)), high = max(simd_dot(t,a),simd_dot(t,b))
+        var reach: [Int:[Int:Float]] = [:], viewMax: [Int:Float] = [:]
+        for (view, frame) in observations.enumerated() {
+            for q in frame.floor {
+                let tq = simd_dot(t,q), dq = simd_dot(outward,q)-baseOutward
+                guard tq >= low, tq <= high, dq > -Self.edgeReach, dq <= Self.edgeReach else { continue }
+                viewMax[view] = max(viewMax[view] ?? -.infinity,dq)
+                for dt: Float in [-Self.cell, 0, Self.cell] {
+                    let tb = tq + dt
+                    guard tb >= low, tb <= high else { continue }
+                    let bin = Int(floor((tb-low)/Self.frontBin))
+                    reach[bin,default:[:]][view] = max(reach[bin]?[view] ?? -.infinity,dq)
+                }
+            }
+            for q in frame.front {
+                let tq = simd_dot(t,q), dq = simd_dot(outward,q)-baseOutward
+                guard tq >= low, tq <= high, dq > -Self.edgeReach, dq <= Self.edgeReach else { continue }
+                viewMax[view] = max(viewMax[view] ?? -.infinity,dq)
+            }
+        }
+        let binReaches = reach.values.compactMap { views -> Float? in
+            let extents = views.values.sorted(by:>)
+            return extents.count >= 2 ? extents[1] : nil
+        }.sorted()
+        let viewExtents = viewMax.values.sorted(by:>)
+        let cornerOutward = max(0,simd_dot(outward,a)-baseOutward,simd_dot(outward,b)-baseOutward)
+        let cornerShift = viewExtents.count >= 2 ? min(cornerOutward,max(0,viewExtents[1])) : 0
+        guard binReaches.count >= 3, Float(binReaches.count)*Self.frontBin >= 0.5*(high-low) else {
+            return midOffset - min(Self.edgeReach,cornerShift)
+        }
+        let topBins = binReaches.suffix(3)
+        let binShift = max(0,topBins.reduce(0,+)/Float(topBins.count))
+        return midOffset - min(Self.edgeReach,max(binShift,cornerShift))
+    }
+
     /// Explicit rectangle prior: four supported sides must already exist. Joint
     /// orientation removes their noisy independent tilts. Each wall view contributes
     /// one offset; 3D evidence estimates the base intersection when available.
@@ -111,7 +151,9 @@ extension InteriorSweep {
                 }
                 return Self.median(view.points.map {simd_dot(n,$0)})
             }
-            var offset = supports[i].isFront || protected[i] || votes.count < 2 ? simd_dot(n,mid) : Self.median(votes)
+            var offset = supports[i].isFront
+                ? (protected[i] ? simd_dot(n,mid) : refinedFrontOffset(a:p[i],b:p[(i+1)%4],t:t,n:n))
+                : (protected[i] || votes.count < 2 ? simd_dot(n,mid) : Self.median(votes))
             if protected[i] { offset = max(offset,simd_dot(n,p[i]),simd_dot(n,p[(i+1)%4])) }
             offsets.append(offset)
         }

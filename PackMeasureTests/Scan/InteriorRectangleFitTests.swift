@@ -135,4 +135,22 @@ struct InteriorRectangleFitTests {
         let decoded = try JSONDecoder().decode(InteriorSweepSnapshot.self,from:JSONEncoder().encode(capture))
         #expect(try InteriorSweep(snapshot:decoded).reconstruct()==capture.reconstruction)
     }
+
+    @Test func openFrontCornerErosionDoesNotPullRectangularFrontInward() throws {
+        var observed = InteriorSweep(seed:[0.1,0,0.1])
+        var rectangular = InteriorSweep(seed:[0.1,0,0.1],footprintModel:.rectangular)
+        for i in 0..<4 {
+            var frame = helper.observation(i,loops:[helper.rectangle],open:true)
+            frame.front = frame.front.map { [$0.x, 0.015] }
+            frame.floor.removeAll { $0.x > 0.30 && $0.y < 0.015 }
+            _ = observed.add(frame)
+            _ = rectangular.add(frame)
+        }
+        let obsLoop = try #require(observed.reconstruct().loops.first)
+        let rectLoop = try #require(rectangular.reconstruct().loops.first)
+        let obsDepths = [simd_distance(obsLoop[1],obsLoop[2]), simd_distance(obsLoop[3],obsLoop[0])]
+        let rectDepth = rectLoop.map(\.z).max()! - rectLoop.map(\.z).min()!
+        #expect(rectDepth > obsDepths.min()! + 0.002)
+        #expect(abs(rectDepth - 0.297) < 0.002)
+    }
 }

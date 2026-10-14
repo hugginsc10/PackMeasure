@@ -104,7 +104,11 @@ final class InteriorScanState {
     }
 
     var prompt: String {
-        if isSweeping { return sweepSeed == nil ? "Tap the inside base of one drawer or shelf compartment. Then sweep slowly around it." : sweepResult.hint }
+        if isSweeping {
+            guard sweepSeed != nil else { return "Tap the inside base of one drawer or shelf compartment. Then sweep slowly around it." }
+            if sweepResult.ready && !canReviewSweep { return "Keep the base in view and move slightly to confirm the outline." }
+            return sweepResult.hint
+        }
         if takingHeight { return "Choose a visible top edge above the traced base. Use the lowest height your insert must fit under." }
         if selectedCorner != nil { return photo == nil ? "Aim at the corrected floor corner, or freeze the view to place it precisely." : "Zoom in, then tap the correct location for the selected corner." }
         if automatic { return "Keep the whole base and its edges in view. Hold steady when the outline appears." }

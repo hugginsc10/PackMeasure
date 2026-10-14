@@ -70,11 +70,25 @@ struct InteriorSweepFrame: Sendable {
         }
     }
     func normal(_ x: Int, _ y: Int, _ points: [SIMD3<Float>?]) -> SIMD3<Float>? {
-        guard x>1, y>1, x<width-2, y<height-2,
-              let a=points[y*width+x-1], let b=points[y*width+x+1],
-              let c=points[(y-1)*width+x], let d=points[(y+1)*width+x],
-              simd_distance(a,b)<0.08, simd_distance(c,d)<0.08 else { return nil }
-        let n=simd_cross(b-a,d-c)
+        guard x>1, y>1, x<width-2, y<height-2, let p=points[y*width+x] else { return nil }
+        func tangent(_ a: SIMD3<Float>?, _ b: SIMD3<Float>?) -> SIMD3<Float>? {
+            let u1 = a.flatMap { let v = p-$0; return simd_length(v)<0.045 ? v : nil }
+            let u2 = b.flatMap { let v = $0-p; return simd_length(v)<0.045 ? v : nil }
+            if let u1, let u2 {
+                let l1 = simd_length(u1), l2 = simd_length(u2)
+                if simd_length(u2-u1) >= 0.008 {
+                    if l1 < 0.75*l2 { return u1 }
+                    if l2 < 0.75*l1 { return u2 }
+                }
+                return simd_length(u1+u2) < 0.08 ? u1+u2 : nil
+            }
+            if let u1, simd_length(u1) < 0.04 { return u1 }
+            if let u2, simd_length(u2) < 0.04 { return u2 }
+            return nil
+        }
+        guard let dx=tangent(points[y*width+x-1],points[y*width+x+1]),
+              let dy=tangent(points[(y-1)*width+x],points[(y+1)*width+x]) else { return nil }
+        let n=simd_cross(dx,dy)
         guard simd_length(n)>0.000001 else { return nil }
         return simd_normalize(n)
     }
@@ -111,7 +125,7 @@ struct InteriorSweepFrame: Sendable {
             if abs(dy)<0.01, n.map({ abs($0.y)>0.9 }) ?? false {
                 result.floor.append([p.x,p.z])
             }
-            if (0.015...0.15).contains(dy), let n, abs(n.y)<0.15 {
+            if (0.015...0.15).contains(dy), let n, abs(n.y)<0.20 {
                 result.walls.append([p.x,p.z])
                 result.wallPoints3D?.append(p)
             }
@@ -143,8 +157,20 @@ struct InteriorSweepFrame: Sendable {
             guard abs(dy)<0.01 else { continue }
             for (dx,dyPixel) in [(1,0),(-1,0),(0,1),(0,-1)] {
                 let j=(y+dyPixel)*width+x+dx
-                guard let beyond=points[j], beyond.y<seed.y-0.025,
-                      abs(luminance[i]-luminance[j])>0.035 else { continue }
+                guard let step1=points[j] else { continue }
+                let dropped: Bool
+                if step1.y < seed.y-0.025 {
+                    dropped = abs(luminance[i]-luminance[j])>0.035
+                } else if step1.y < seed.y-0.01,
+                          (0..<width).contains(x+2*dx), (0..<height).contains(y+2*dyPixel) {
+                    let j2=(y+2*dyPixel)*width+x+2*dx
+                    dropped = points[j2].map {
+                        $0.y < seed.y-0.025 && max(abs(luminance[i]-luminance[j]),abs(luminance[i]-luminance[j2]))>0.035
+                    } ?? false
+                } else {
+                    dropped = false
+                }
+                guard dropped else { continue }
                 let r=ray(Float(x)+Float(dx)*0.5,Float(y)+Float(dyPixel)*0.5)
                 guard abs(r.y)>0.2 else { continue }
                 let t=(seed.y-camera.y)/r.y
