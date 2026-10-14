@@ -71,14 +71,19 @@ struct InteriorSweepFrame: Sendable {
     }
     func normal(_ x: Int, _ y: Int, _ points: [SIMD3<Float>?]) -> SIMD3<Float>? {
         guard x>1, y>1, x<width-2, y<height-2, let p=points[y*width+x] else { return nil }
-        func tangent(_ a: SIMD3<Float>?, _ b: SIMD3<Float>?) -> SIMD3<Float>? {
+        func tangent(_ a2: SIMD3<Float>?, _ a: SIMD3<Float>?, _ b: SIMD3<Float>?, _ b2: SIMD3<Float>?) -> SIMD3<Float>? {
             let u1 = a.flatMap { let v = p-$0; return simd_length(v)<0.045 ? v : nil }
             let u2 = b.flatMap { let v = $0-p; return simd_length(v)<0.045 ? v : nil }
             if let u1, let u2 {
-                let l1 = simd_length(u1), l2 = simd_length(u2)
                 if simd_length(u2-u1) >= 0.008 {
-                    if l1 < 0.75*l2 { return u1 }
-                    if l2 < 0.75*l1 { return u2 }
+                    let err1 = (a2 != nil && a != nil) ? simd_length(u1 - (a! - a2!)) : .infinity
+                    let err2 = (b != nil && b2 != nil) ? simd_length((b2! - b!) - u2) : .infinity
+                    if err1 < 0.008 && err1 + 0.002 < err2 { return u1 }
+                    if err2 < 0.008 && err2 + 0.002 < err1 { return u2 }
+                    if err1 < 0.008 && err2 < 0.008 {
+                        if abs(u1.y) + 0.004 < abs(u2.y) { return u1 }
+                        if abs(u2.y) + 0.004 < abs(u1.y) { return u2 }
+                    }
                 }
                 return simd_length(u1+u2) < 0.08 ? u1+u2 : nil
             }
@@ -86,8 +91,8 @@ struct InteriorSweepFrame: Sendable {
             if let u2, simd_length(u2) < 0.04 { return u2 }
             return nil
         }
-        guard let dx=tangent(points[y*width+x-1],points[y*width+x+1]),
-              let dy=tangent(points[(y-1)*width+x],points[(y+1)*width+x]) else { return nil }
+        guard let dx=tangent(points[y*width+x-2],points[y*width+x-1],points[y*width+x+1],points[y*width+x+2]),
+              let dy=tangent(points[(y-2)*width+x],points[(y-1)*width+x],points[(y+1)*width+x],points[(y+2)*width+x]) else { return nil }
         let n=simd_cross(dx,dy)
         guard simd_length(n)>0.000001 else { return nil }
         return simd_normalize(n)
