@@ -3,6 +3,13 @@ import Foundation
 protocol InventoryStoring {
     func load() throws -> [MeasuredItem]
     func save(_ items: [MeasuredItem]) throws
+    func loadLoadMix() -> PackingLoadMix
+    func saveLoadMix(_ loadMix: PackingLoadMix)
+}
+
+extension InventoryStoring {
+    func loadLoadMix() -> PackingLoadMix { .mixedHousehold }
+    func saveLoadMix(_ loadMix: PackingLoadMix) {}
 }
 
 struct InventoryStore: InventoryStoring {
@@ -59,6 +66,23 @@ struct InventoryStore: InventoryStoring {
         try data.write(to: url, options: .atomic)
     }
 
+    func loadLoadMix() -> PackingLoadMix {
+        guard let url = try? loadMixURL(),
+              let data = try? Data(contentsOf: url),
+              let loadMix = try? decoder.decode(PackingLoadMix.self, from: data) else {
+            return .mixedHousehold
+        }
+        return loadMix
+    }
+
+    func saveLoadMix(_ loadMix: PackingLoadMix) {
+        guard let url = try? loadMixURL() else { return }
+        let directory = url.deletingLastPathComponent()
+        try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        guard let data = try? encoder.encode(loadMix) else { return }
+        try? data.write(to: url, options: .atomic)
+    }
+
     func storageURL() throws -> URL {
         if let explicitStorageURL {
             return explicitStorageURL
@@ -73,6 +97,12 @@ struct InventoryStore: InventoryStoring {
         return base
             .appendingPathComponent("PackMeasure", isDirectory: true)
             .appendingPathComponent("inventory.json")
+    }
+
+    private func loadMixURL() throws -> URL {
+        try storageURL()
+            .deletingLastPathComponent()
+            .appendingPathComponent("load-mix.json")
     }
 
     private static func decodeDate(_ string: String) -> Date? {

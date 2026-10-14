@@ -28,6 +28,7 @@ final class AppModel {
 
     init(store: any InventoryStoring = InventoryStore()) {
         self.store = store
+        self.loadMix = store.loadLoadMix()
     }
 
     @discardableResult
@@ -36,6 +37,7 @@ final class AppModel {
 
         do {
             items = try store.load()
+            loadMix = store.loadLoadMix()
             hasLoaded = true
             inventoryLoadFailed = false
             bannerMessage = nil
@@ -97,6 +99,8 @@ final class AppModel {
 
     func setLoadMix(_ loadMix: PackingLoadMix) {
         self.loadMix = loadMix
+        guard !inventoryLoadFailed else { return }
+        store.saveLoadMix(loadMix)
     }
 
     @discardableResult
@@ -123,12 +127,10 @@ final class AppModel {
     }
 
     /// Once a vehicle is selected, its cargo height can reduce the number of
-    /// safe stack layers. This is the floor estimate the home screen should use.
+    /// safe stack layers. When no vehicle fits, the largest measured profile
+    /// keeps stack layers bounded instead of assuming unlimited ceiling height.
     var planningSummary: PackingSummary {
-        let recommendation = vehicleRecommendation
-        return recommendation.vehicle == nil
-            ? packingSummary
-            : recommendation.summary
+        vehicleRecommendation.summary
     }
 
     var ignoredPackingItemCount: Int {

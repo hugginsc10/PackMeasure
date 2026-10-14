@@ -187,7 +187,11 @@ struct ManualEntryDraft {
     }
 
     private func parseDimension(_ text: String) -> Double? {
-        Double(text.trimmingCharacters(in: .whitespacesAndNewlines))
+        guard let value = Double(text.trimmingCharacters(in: .whitespacesAndNewlines)),
+              value.isFinite else {
+            return nil
+        }
+        return value
     }
 
     private func convertedText(_ text: String, from unit: MeasurementInputUnit, to destination: MeasurementInputUnit) -> String {

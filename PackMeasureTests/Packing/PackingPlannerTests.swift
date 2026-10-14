@@ -467,6 +467,42 @@ final class PackingPlannerTests: XCTestCase {
         XCTAssertTrue(result.reason.contains("Largest truck"))
     }
 
+    func testNoSuitableVehicleSummaryKeepsStackHeightBoundedByLargestVehicle() throws {
+        let planner = PackingPlanner(
+            policy: try PackingPolicy(packingAllowanceFraction: 0)
+        )
+        let boxes = try PackingItem(
+            name: "Tall stackable box",
+            dimensions: try ItemDimensions(
+                lengthInches: 24,
+                widthInches: 24,
+                heightInches: 24
+            ),
+            quantity: 6,
+            stackability: .stackable(maxLayers: 20)
+        )
+        let oversized = try PackingItem(
+            name: "Oversized beam",
+            dimensions: try ItemDimensions(
+                lengthInches: 216,
+                widthInches: 12,
+                heightInches: 12
+            )
+        )
+        let vehicle = try makeVehicle(
+            id: "truck",
+            name: "Low-roof truck",
+            interior: (180, 92, 50),
+            door: (87, 48),
+            grossVolume: 500
+        )
+
+        let result = planner.recommendVehicle(for: [boxes, oversized], from: [vehicle])
+
+        XCTAssertNil(result.vehicle)
+        XCTAssertEqual(result.summary.requiredFloorSquareFeet, 30, accuracy: 0.000_001)
+    }
+
     func testEmptyInventoryDoesNotRecommendAVehicle() {
         let result = PackingPlanner().recommendVehicle(
             for: [],

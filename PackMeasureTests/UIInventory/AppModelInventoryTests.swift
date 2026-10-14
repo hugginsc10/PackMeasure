@@ -333,6 +333,11 @@ struct AppModelInventoryTests {
         #expect(model.loadMix == .boxes)
         #expect(model.vehicleRecommendation.vehicle?.usableVolumeFraction == PackingLoadMix.boxes.usableVolumeFraction)
         #expect(model.vehicleRecommendation.vehicle?.id == "cargo-van")
+
+        let reloaded = AppModel(store: harness.store)
+        reloaded.loadIfNeeded()
+        #expect(reloaded.loadMix == .boxes)
+        #expect(reloaded.vehicleRecommendation.vehicle?.usableVolumeFraction == PackingLoadMix.boxes.usableVolumeFraction)
     }
 
     @Test
@@ -364,6 +369,30 @@ struct AppModelInventoryTests {
         #expect(model.vehicleRecommendation.vehicle?.id == "cargo-van")
         #expect(abs(model.packingSummary.requiredFloorSquareFeet - 2.2) < 0.001)
         #expect(abs(model.planningSummary.requiredFloorSquareFeet - 4.4) < 0.001)
+
+        let boxID = try #require(model.items.first?.id)
+        model.updateItem(
+            id: boxID,
+            name: "Tall stackable box",
+            quantity: 8,
+            stackability: .stackable(maxLayers: 20),
+            orientationPolicy: .keepUpright
+        )
+        model.addItem(
+            name: "Oversized beam",
+            estimate: MeasurementEstimate(
+                lengthMeters: meters(fromInches: 400),
+                widthMeters: meters(fromInches: 12),
+                heightMeters: meters(fromInches: 12),
+                confidence: .high,
+                sampleCount: 900,
+                frameCount: 12
+            ),
+            quantity: 1
+        )
+
+        #expect(model.vehicleRecommendation.vehicle == nil)
+        #expect(model.planningSummary.requiredFloorSquareFeet > model.packingSummary.requiredFloorSquareFeet)
     }
 
     @Test func displayPreferencesDoNotRewriteInventoryOrChangePacking() throws {
