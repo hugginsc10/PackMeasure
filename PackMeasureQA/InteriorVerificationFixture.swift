@@ -55,7 +55,9 @@ struct InteriorVerificationFixture: View {
                 }
             } else if let record {
                 NavigationStack {
-                    InteriorReviewView(record: record, onSave: { updated in
+                    InteriorReviewView(record: record, onDiscard: {
+                        saved = true
+                    }, onSave: { updated in
                         try store.save([updated])
                         self.record = updated
                         saved = true

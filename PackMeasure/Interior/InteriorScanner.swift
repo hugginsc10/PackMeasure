@@ -45,15 +45,26 @@ final class InteriorScanState {
     var isSweeping: Bool { sweepEnabled && !manualPlacement && !automatic && !takingHeight && !pinned && result == nil }
     var canReviewSweep: Bool { isSweeping && ready && !trackingInterrupted && sweepResult.ready && stableSweepPreviews >= 2 }
 
+    nonisolated static func loopsMatch(_ oldLoops: [[SIMD3<Float>]], _ newLoops: [[SIMD3<Float>]]) -> Bool {
+        let old = oldLoops.flatMap { $0 }, new = newLoops.flatMap { $0 }
+        return !old.isEmpty && old.count == new.count && newLoops.count == oldLoops.count
+            && old.allSatisfy { a in new.contains { simd_distance(a, $0) < 0.008 } }
+            && new.allSatisfy { a in old.contains { simd_distance(a, $0) < 0.008 } }
+    }
+
     func receiveSweep(_ value: InteriorSweepResult, generation: UUID) {
         guard generation == self.generation, isSweeping, !trackingInterrupted else { return }
-        if value.revision == sweepResult.revision { sweepResult.hint=value.hint; return }
-        let old=sweepResult.loops.flatMap{$0}, new=value.loops.flatMap{$0}
-        let matches = !old.isEmpty && old.count==new.count && value.loops.count==sweepResult.loops.count
-            && old.allSatisfy { a in new.contains { simd_distance(a,$0)<0.008 } }
-            && new.allSatisfy { a in old.contains { simd_distance(a,$0)<0.008 } }
-        stableSweepPreviews = new.isEmpty ? 0 : matches ? stableSweepPreviews+1 : 1
-        sweepResult=value; error=nil
+        if value.revision == sweepResult.revision {
+            if !value.ready || canReviewSweep { sweepResult.hint = value.hint }
+            return
+        }
+        let matches = Self.loopsMatch(sweepResult.loops, value.loops)
+        stableSweepPreviews = value.loops.flatMap { $0 }.isEmpty ? 0 : matches ? stableSweepPreviews + 1 : 1
+        var updated = value
+        if updated.ready && stableSweepPreviews < 2 {
+            updated.hint = "Keep the base in view and move slightly to confirm the outline."
+        }
+        sweepResult = updated; error = nil
     }
     func useSweepOutline() {
         guard canReviewSweep, let seed=sweepSeed else { return }
