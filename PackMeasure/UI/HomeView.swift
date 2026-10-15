@@ -539,51 +539,56 @@ private struct ItemPackingEditorView: View {
 
     var body: some View {
         Form {
-            Section("Item") {
-                TextField("Item name", text: $name)
-                Stepper("Quantity: \(quantity)", value: $quantity, in: 1 ... 999)
-                LabeledContent(
-                    "Measured size",
-                    value: "\(preferences.units.length(meters: item.lengthMeters)) × \(preferences.units.length(meters: item.widthMeters)) × \(preferences.units.length(meters: item.heightMeters))"
-                )
-                if let original = item.originalDimensions {
+            Group {
+                Section("Item") {
+                    TextField("Item name", text: $name)
+                    Stepper("Quantity: \(quantity)", value: $quantity, in: 1 ... 999)
                     LabeledContent(
-                        "Original dimensions",
-                        value: "\(preferences.units.length(meters: original.lengthMeters)) × \(preferences.units.length(meters: original.widthMeters)) × \(preferences.units.length(meters: original.heightMeters))"
+                        "Measured size",
+                        value: "\(preferences.units.length(meters: item.lengthMeters)) × \(preferences.units.length(meters: item.widthMeters)) × \(preferences.units.length(meters: item.heightMeters))"
                     )
-                    Button("Restore original dimensions") {
-                        let unit = activeInputUnit
-                        editingInputUnit = unit
-                        lengthText = formattedValue(original.lengthMeters, unit: unit)
-                        widthText = formattedValue(original.widthMeters, unit: unit)
-                        heightText = formattedValue(original.heightMeters, unit: unit)
-                        restoringOriginalDimensions = true
+                    .monospacedDigit()
+                    if let original = item.originalDimensions {
+                        LabeledContent(
+                            "Original dimensions",
+                            value: "\(preferences.units.length(meters: original.lengthMeters)) × \(preferences.units.length(meters: original.widthMeters)) × \(preferences.units.length(meters: original.heightMeters))"
+                        )
+                        .monospacedDigit()
+                        Button("Restore original dimensions") {
+                            let unit = activeInputUnit
+                            editingInputUnit = unit
+                            lengthText = formattedValue(original.lengthMeters, unit: unit)
+                            widthText = formattedValue(original.widthMeters, unit: unit)
+                            heightText = formattedValue(original.heightMeters, unit: unit)
+                            restoringOriginalDimensions = true
+                        }
+                        .accessibilityIdentifier("item-restore-original-dimensions")
                     }
-                    .accessibilityIdentifier("item-restore-original-dimensions")
+                    Toggle("Edit dimensions", isOn: $editingDimensions)
+                        .accessibilityIdentifier("item-edit-dimensions")
+                    if editingDimensions {
+                        dimensionField("Length", text: $lengthText, identifier: "item-length")
+                        dimensionField("Width", text: $widthText, identifier: "item-width")
+                        dimensionField("Height", text: $heightText, identifier: "item-height")
+                    }
                 }
-                Toggle("Edit dimensions", isOn: $editingDimensions)
-                    .accessibilityIdentifier("item-edit-dimensions")
-                if editingDimensions {
-                    dimensionField("Length", text: $lengthText, identifier: "item-length")
-                    dimensionField("Width", text: $widthText, identifier: "item-width")
-                    dimensionField("Height", text: $heightText, identifier: "item-height")
-                }
-            }
 
-            Section {
-                Toggle("Safe to stack", isOn: $isStackable)
-                if isStackable {
-                    Stepper("Maximum layers: \(maxLayers)", value: $maxLayers, in: 2 ... 20)
+                Section {
+                    Toggle("Safe to stack", isOn: $isStackable)
+                    if isStackable {
+                        Stepper("Maximum layers: \(maxLayers)", value: $maxLayers, in: 2 ... 20)
+                    }
+                } footer: {
+                    Text("Only enable stacking when the item can safely carry the weight above it.")
                 }
-            } footer: {
-                Text("Only enable stacking when the item can safely carry the weight above it.")
-            }
 
-            Section {
-                Toggle("Safe to turn on its side", isOn: $mayRotate)
-            } footer: {
-                Text("Leave this off for liquids, plants, appliances, and fragile or upright-only furniture.")
+                Section {
+                    Toggle("Safe to turn on its side", isOn: $mayRotate)
+                } footer: {
+                    Text("Leave this off for liquids, plants, appliances, and fragile or upright-only furniture.")
+                }
             }
+            .listRowBackground(MeasureStyle.panel)
         }
         .measureScreen()
         .navigationTitle("Packing details")

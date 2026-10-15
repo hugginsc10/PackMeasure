@@ -221,14 +221,19 @@ struct InteriorScannerView: View {
     private var help: some View {
         NavigationStack {
             List {
-                Label("Empty and steady the drawer or cabinet compartment.", systemImage: "1.circle")
-                Label("Tap a visible patch on the inside base to select one compartment. Keep it still while you move the phone.", systemImage: "2.circle")
-                Label("Sweep slowly across the base, sides and front edge. The highlighted patches show what has been captured; follow the prompt for missing areas.", systemImage: "3.circle")
-                Label("Tilt up to capture the underside of the shelf above. Review becomes available when the inside edges agree across views. Height can also be entered from a measurement.", systemImage: "4.circle")
-                Label("Inspect the outline before saving. Use Place corners myself in Scan options for corrections, notches or areas the sweep cannot capture. Account for drawer closure, hinges and overhangs.", systemImage: "5.circle")
-                Text("This captures a level footprint and usable height. Check dimensions before making an insert.").font(.footnote)
-            }.navigationTitle("Scan an interior").navigationBarTitleDisplayMode(.inline)
-                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showingHelp = false } } }
+                Group {
+                    Label("Empty and steady the drawer or cabinet compartment.", systemImage: "1.circle")
+                    Label("Tap a visible patch on the inside base to select one compartment. Keep it still while you move the phone.", systemImage: "2.circle")
+                    Label("Sweep slowly across the base, sides and front edge. The highlighted patches show what has been captured; follow the prompt for missing areas.", systemImage: "3.circle")
+                    Label("Tilt up to capture the underside of the shelf above. Review becomes available when the inside edges agree across views. Height can also be entered from a measurement.", systemImage: "4.circle")
+                    Label("Inspect the outline before saving. Use Place corners myself in Scan options for corrections, notches or areas the sweep cannot capture. Account for drawer closure, hinges and overhangs.", systemImage: "5.circle")
+                    Text("This captures a level footprint and usable height. Check dimensions before making an insert.").font(.footnote)
+                }
+                .listRowBackground(MeasureStyle.panel)
+            }
+            .measureScreen()
+            .navigationTitle("Scan an interior").navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showingHelp = false } } }
         }.tint(MeasureStyle.accent)
     }
     private func reset() { state = InteriorScanState(); cameraID = UUID() }
@@ -248,13 +253,18 @@ struct InteriorHeightEntry: View {
                         ForEach(MeasurementUnits.allCases, id: \.self) { Text($0.title).tag($0) }
                     }.pickerStyle(.segmented)
                     TextField("Height in \(draft.inputUnit.title.lowercased())", text: $draft.text)
-                        .keyboardType(.decimalPad).accessibilityIdentifier("interior-height-value")
+                        .keyboardType(.decimalPad)
+                        .monospacedDigit()
+                        .accessibilityIdentifier("interior-height-value")
                     Text("Enter a measured height that clears the drawer opening, shelf or lowest overhead obstruction.").font(.footnote)
                     Text("Supported height: about \(preferences.units.preciseLength(millimeters: 10)) to \(preferences.units.preciseLength(millimeters: 3000)).")
                         .font(.caption).foregroundStyle(.secondary)
                     if let error { Text(error).foregroundStyle(.orange) }
                 }
-            }.navigationTitle("Enter height").navigationBarTitleDisplayMode(.inline)
+                .listRowBackground(MeasureStyle.panel)
+            }
+            .measureScreen()
+            .navigationTitle("Enter height").navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                     ToolbarItem(placement: .confirmationAction) { Button("Use height") {
