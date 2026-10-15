@@ -632,9 +632,12 @@ private struct ItemPackingEditorView: View {
             let trimmedL = lengthText.trimmingCharacters(in: .whitespacesAndNewlines)
             let trimmedW = widthText.trimmingCharacters(in: .whitespacesAndNewlines)
             let trimmedH = heightText.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard let l = Double(trimmedL),
-                  let w = Double(trimmedW),
-                  let h = Double(trimmedH),
+            func parse(_ text: String) -> Double? {
+                Double(text.replacingOccurrences(of: ",", with: "."))
+            }
+            guard let l = parse(trimmedL),
+                  let w = parse(trimmedW),
+                  let h = parse(trimmedH),
                   l.isFinite, w.isFinite, h.isFinite, l > 0, w > 0, h > 0 else {
                 saveError = "Enter positive length, width, and height in \(activeInputUnit.title.lowercased())."
                 return

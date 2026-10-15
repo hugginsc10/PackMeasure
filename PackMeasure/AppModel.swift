@@ -192,8 +192,10 @@ final class AppModel {
         ]
         if let vehicle = recommendation.vehicle {
             lines.append("Recommended vehicle: \(vehicle.name)")
+        } else if packingItems.isEmpty {
+            lines.append("Recommended vehicle: \(recommendation.reason)")
         } else {
-            lines.append("Recommended vehicle: None of the listed profiles fit")
+            lines.append("Recommended vehicle: \(PackingMeasurementCopy.recommendation(recommendation, units: units))")
         }
         if ignoredPackingItemCount > 0 {
             let count = ignoredPackingItemCount

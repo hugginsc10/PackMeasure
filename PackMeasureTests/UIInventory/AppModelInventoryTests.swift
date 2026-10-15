@@ -537,6 +537,13 @@ struct AppModelInventoryTests {
         let shareWithExcluded = model.shareText(units: .centimeters)
         #expect(shareWithExcluded.contains("Warning: 1 saved item could not be included in totals because its dimensions are invalid."))
         #expect(shareWithExcluded.contains("[excluded from totals: invalid dimensions]"))
+
+        // When only invalid items remain, shareText preserves the planner's no-usable-items reason
+        // instead of claiming that none of the listed vehicle profiles fit.
+        model.deleteItems(at: IndexSet(integer: 0))
+        let onlyInvalidShare = model.shareText(units: .centimeters)
+        #expect(onlyInvalidShare.contains("Recommended vehicle: \(model.vehicleRecommendation.reason)"))
+        #expect(!onlyInvalidShare.contains("No listed vehicle is suitable"))
     }
 
     private func meters(fromInches inches: Double) -> Double {
