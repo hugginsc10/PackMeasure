@@ -10,15 +10,17 @@ struct InteriorScannerView: View {
     @State private var enteringHeight = false
     @State private var showingHelp = false
     @State private var confirmingReset = false
+    @State private var confirmingClose = false
     @State private var showingDiagnostics = false
     var onSave: (InteriorMeasurement) throws -> Void
 
     private var supported: Bool { ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) }
+    private var hasInProgressCapture: Bool { state.result != nil || state.hasOutline || state.sweepSeed != nil }
     var body: some View {
         NavigationStack {
             Group {
                 if let result = state.result {
-                    InteriorReviewView(record: result, onSave: { record in try onSave(record); dismiss() })
+                    InteriorReviewView(record: result, showsUnsavedBackGuard: false, onSave: { record in try onSave(record); dismiss() })
 
                 } else if !supported && state.photo == nil && !state.hasOutline && state.sweepSeed == nil {
                     ContentUnavailableView("LiDAR needed for interiors", systemImage: "viewfinder",
@@ -53,7 +55,12 @@ struct InteriorScannerView: View {
             }
             .measureScreen().navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } }
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") {
+                        if hasInProgressCapture { confirmingClose = true } else { dismiss() }
+                    }
+                    .accessibilityIdentifier("close-interior-scanner")
+                }
                 ToolbarItem(placement: .primaryAction) {
                         Menu {
                             Button("How to scan", systemImage: "questionmark.circle") { showingHelp = true }
@@ -73,6 +80,19 @@ struct InteriorScannerView: View {
             .confirmationDialog("Start this scan over?", isPresented: $confirmingReset, titleVisibility: .visible) {
                 Button("Start over", role: .destructive) { reset() }
             } message: { Text("This clears the unfinished outline and its points.") }
+            .confirmationDialog(
+                state.result != nil ? "Close without saving this interior?" : "Close and discard this scan?",
+                isPresented: $confirmingClose,
+                titleVisibility: .visible
+            ) {
+                Button("Discard scan", role: .destructive) { dismiss() }
+                    .accessibilityIdentifier("discard-interior-scan")
+                Button("Keep editing", role: .cancel) {}
+            } message: {
+                Text(state.result != nil
+                     ? "Save this interior first if you want to keep its outline and settings."
+                     : "Closing now clears the current outline and points.")
+            }
             .sheet(isPresented: $enteringHeight) {
                 InteriorHeightEntry { millimeters in state.enterHeight(millimeters) }
             }
@@ -90,7 +110,9 @@ struct InteriorScannerView: View {
                 }
                 .diagnosticSupport()
             }
-        }.diagnosticSupport().tint(MeasureStyle.accent)
+        }
+        .interactiveDismissDisabled(hasInProgressCapture)
+        .diagnosticSupport().tint(MeasureStyle.accent)
         .onChange(of: scenePhase) { _, phase in
             if phase == .background && state.result == nil { state.invalidate("The camera session ended. Start a fresh outline after returning."); restartOnForeground = true }
             else if phase == .active && state.result == nil && restartOnForeground {
@@ -111,11 +133,11 @@ struct InteriorScannerView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
-                    Text(state.isSweeping ? (state.sweepSeed == nil ? "Choose one compartment" : state.canReviewSweep ? "Outline captured" : "Sweep this compartment") : state.takingHeight ? "Set the usable height" : state.automatic ? "Finding the inside edges" : state.selectedCorner != nil ? "Move selected corner" : state.pinned ? "Outline captured" : state.loops.count > 1 ? "Trace obstacle \(state.loops.count - 1)" : "Capture the inside outline")
+                    Text(state.isSweeping ? (state.sweepSeed == nil ? "Choose one compartment" : state.canReviewSweep ? "Outline captured" : state.sweepResult.ready ? "Confirming outline" : "Sweep this compartment") : state.takingHeight ? "Set the usable height" : state.automatic ? "Finding the inside edges" : state.selectedCorner != nil ? "Move selected corner" : state.pinned ? "Outline captured" : state.loops.count > 1 ? "Trace obstacle \(state.loops.count - 1)" : "Capture the inside outline")
                         .font(.headline)
                     Spacer()
                     if state.isSweeping, state.sweepSeed != nil {
-                        Label(state.canReviewSweep ? "Captured" : "Collecting", systemImage:state.canReviewSweep ? "checkmark.circle.fill" : "viewfinder")
+                        Label(state.canReviewSweep ? "Captured" : state.sweepResult.ready ? "Confirming" : "Collecting", systemImage:state.canReviewSweep ? "checkmark.circle.fill" : "viewfinder")
                             .font(.caption).foregroundStyle(MeasureStyle.accent).accessibilityIdentifier("sweep-status")
                     } else if !state.takingHeight {
                         Text("\((state.automatic ? state.preview : state.loops).flatMap { $0 }.count) corners")
@@ -138,7 +160,7 @@ struct InteriorScannerView: View {
                             .accessibilityIdentifier("sweep-select-base")
                         Button("Place corners myself") { state.useManual() }.font(.subheadline).accessibilityIdentifier("manual-interior")
                     } else {
-                        Button(state.canReviewSweep ? (state.sweepResult.height == nil ? "Use outline · set height" : "Review dimensions") : "Collecting inside edges…") { state.useSweepOutline() }
+                        Button(state.canReviewSweep ? (state.sweepResult.height == nil ? "Use outline · set height" : "Review dimensions") : state.sweepResult.ready ? "Confirming outline…" : "Collecting inside edges…") { state.useSweepOutline() }
                             .buttonStyle(.borderedProminent).disabled(!state.canReviewSweep)
                             .accessibilityIdentifier("sweep-review")
                         Button("Choose another base") { state.chooseAnotherBase() }.font(.subheadline).accessibilityIdentifier("sweep-reselect")

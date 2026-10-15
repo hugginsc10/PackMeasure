@@ -316,9 +316,17 @@ private struct InteriorVerificationEditor: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Apply") { apply() }.disabled(!valid).accessibilityIdentifier("apply-interior-verification")
                 }
-                ToolbarItemGroup(placement: .keyboard) {
-                    Spacer()
-                    Button("Done") { focusedField = nil }
+            }
+            .safeAreaInset(edge: .bottom) {
+                if focusedField != nil {
+                    HStack {
+                        Spacer()
+                        Button("Done") { focusedField = nil }
+                            .font(.subheadline.weight(.semibold))
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(.bar)
                 }
             }
         }

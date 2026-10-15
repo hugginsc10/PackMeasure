@@ -510,12 +510,38 @@ struct InteriorSweepTests {
         state.receiveSweep(r,generation:state.generation)
         #expect(!state.canReviewSweep)
         #expect(state.prompt.contains("move slightly"))
+        #expect(state.sweepResult.hint == state.prompt)
         r.views=4; r.revision=4; state.receiveSweep(r,generation:state.generation)
         #expect(state.canReviewSweep)
         #expect(state.prompt == r.hint)
         state.useSweepOutline()
         let value=try #require(state.result)
         #expect(value.heightSource == .lidar && abs(value.heightMM-350)<0.01)
+    }
+    @Test @MainActor func stationaryFrameConfirmsReadyOutlineWithoutExtraCameraTravel() async {
+        let state=InteriorScanState(); state.ready=true; state.sweepSeed=[0.2,0,0.15]
+        let f0 = cabinetFrame(0, fascia: false)
+        let partialDepths = f0.depths.enumerated().map { idx, d in (idx % f0.width) > 110 ? Float.nan : d }
+        let partial0 = InteriorSweepFrame(width: f0.width, height: f0.height, depths: partialDepths,
+                                          confidence: f0.confidence, luminance: f0.luminance,
+                                          intrinsics: f0.intrinsics, transform: f0.transform, timestamp: f0.timestamp)
+        _ = await state.sweepWorker.process(partial0, seed: [0.2,0,0.15], generation: state.generation)
+        var lastFrame = f0
+        for i in 1..<7 {
+            let frame = cabinetFrame(i, fascia: false)
+            lastFrame = frame
+            let result = await state.sweepWorker.process(frame, seed: [0.2,0,0.15], generation: state.generation)
+            state.receiveSweep(result, generation: state.generation)
+            if result.ready { break }
+        }
+        #expect(state.sweepResult.ready && !state.canReviewSweep)
+        let stationary = InteriorSweepFrame(width: lastFrame.width, height: lastFrame.height, depths: lastFrame.depths,
+                                            confidence: lastFrame.confidence, luminance: lastFrame.luminance,
+                                            intrinsics: lastFrame.intrinsics, transform: lastFrame.transform,
+                                            timestamp: lastFrame.timestamp + 0.4)
+        let confirmed = await state.sweepWorker.process(stationary, seed: [0.2,0,0.15], generation: state.generation)
+        state.receiveSweep(confirmed, generation: state.generation)
+        #expect(state.canReviewSweep)
     }
     @Test @MainActor func incompleteHeightGoesToHeightWithoutRetracingAndManualKeepsOutline() {
         for manual in [false,true] {

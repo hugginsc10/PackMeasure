@@ -136,10 +136,18 @@ struct DiagnosticSupportView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } }
-                ToolbarItemGroup(placement: .keyboard) {
-                    Spacer()
-                    Button("Done") { noteFocused = false }
-                        .accessibilityIdentifier("diagnostic-note-done")
+            }
+            .safeAreaInset(edge: .bottom) {
+                if noteFocused {
+                    HStack {
+                        Spacer()
+                        Button("Done") { noteFocused = false }
+                            .font(.subheadline.weight(.semibold))
+                            .accessibilityIdentifier("diagnostic-note-done")
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(.bar)
                 }
             }
             .sheet(isPresented: $composing) {

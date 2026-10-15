@@ -181,31 +181,58 @@ struct InteriorSVGTransfer: Transferable {
 }
 
 struct InteriorReviewView: View {
+    @Environment(\.dismiss) private var dismiss
     @State var record: InteriorMeasurement
+    @State private var savedRecord: InteriorMeasurement
+    var showsUnsavedBackGuard: Bool = true
+    var onDiscard: (() -> Void)? = nil
     var onSave: (InteriorMeasurement) throws -> Void
     @State private var exporting = false
     @State private var document = InteriorSVGDocument(text: "")
     @State private var message: String?
+    @State private var confirmingDiscard = false
     @Environment(AppPreferences.self) private var preferences
     @State private var editingUnit: InteriorUnit?
     @State private var millimeterCorrections = false
 
-    init(record: InteriorMeasurement, onSave: @escaping (InteriorMeasurement) throws -> Void) {
+    init(
+        record: InteriorMeasurement,
+        showsUnsavedBackGuard: Bool = true,
+        onDiscard: (() -> Void)? = nil,
+        onSave: @escaping (InteriorMeasurement) throws -> Void
+    ) {
         var preserved = record
         // Old saves may already contain corrections. Preserve what was saved without
         // claiming it is the original scan, before any controls can change it.
         preserved.preserveOriginalGeometry(source: .savedGeometry)
         _record = State(initialValue: preserved)
+        _savedRecord = State(initialValue: preserved)
+        self.showsUnsavedBackGuard = showsUnsavedBackGuard
+        self.onDiscard = onDiscard
         self.onSave = onSave
     }
     /// The numeric field being edited. Its uncommitted text would be read in the new unit,
     /// so units cannot change until editing ends.
     @FocusState private var editing: Field?
     private enum Field: Hashable { case height, point(loop: Int, index: Int, axis: Int) }
+    private var hasUnsavedChanges: Bool { record != savedRecord }
     private var unit: InteriorUnit {
         editingUnit ?? (millimeterCorrections ? .millimeters : preferences.units.inputUnit == .inches ? .inches : .centimeters)
     }
     private var output: Result<[[InteriorPoint]], Error> { Result { try record.insertContours() } }
+    @discardableResult
+    private func saveRecord() -> Bool {
+        editing = nil
+        do {
+            try onSave(record)
+            savedRecord = record
+            message = "Interior saved."
+            return true
+        } catch {
+            message = error.localizedDescription
+            return false
+        }
+    }
     /// Edits a stored millimeter value in the chosen unit.
     private func length(_ millimeters: Binding<Double>) -> Binding<Double> {
         Binding(get: { unit.value(fromMillimeters: millimeters.wrappedValue) },
@@ -322,8 +349,14 @@ struct InteriorReviewView: View {
                     Text("Export the SVG at 1:1 millimeter scale, check one known dimension in CAD, then extrude to the draft height. Print a thin test outline before a full insert.")
                 }
                 Section {
+                    if hasUnsavedChanges {
+                        Label("Unsaved changes in this review", systemImage: "exclamationmark.circle")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(.orange)
+                            .accessibilityIdentifier("interior-unsaved-changes")
+                    }
                     Button("Save interior") {
-                        do { try onSave(record); message = "Interior saved." } catch { message = error.localizedDescription }
+                        saveRecord()
                     }
                     .disabled((try? output.get()) == nil)
                     Button("Export insert SVG") {
@@ -347,21 +380,61 @@ struct InteriorReviewView: View {
         .measureScreen()
         .navigationTitle("Review interior")
         .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(showsUnsavedBackGuard && hasUnsavedChanges)
         .onChange(of: editing) { _, next in
             if next != nil, editingUnit == nil { editingUnit = unit }
             else if next == nil { editingUnit = nil }
         }
         .toolbar {
+            if showsUnsavedBackGuard && hasUnsavedChanges {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button {
+                        editing = nil
+                        confirmingDiscard = true
+                    } label: {
+                        Label("Back", systemImage: "chevron.backward")
+                    }
+                    .accessibilityIdentifier("interior-review-back")
+                }
+            }
             ToolbarItem(placement: .confirmationAction) {
                 Button("Save") {
-                    do { try onSave(record); message = "Interior saved." } catch { message = error.localizedDescription }
+                    saveRecord()
                 }.disabled((try? output.get()) == nil).accessibilityIdentifier("save-interior-review")
             }
-            // Decimal pads have no return key; this commits the value being edited.
-            ToolbarItemGroup(placement: .keyboard) {
-                Spacer()
-                Button("Done") { editing = nil }
+        }
+        .safeAreaInset(edge: .bottom) {
+            if editing != nil {
+                HStack {
+                    Spacer()
+                    Button("Done") { editing = nil }
+                        .font(.subheadline.weight(.semibold))
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(.bar)
             }
+        }
+        .alert("Unsaved interior changes", isPresented: $confirmingDiscard) {
+            if (try? output.get()) != nil {
+                Button("Save changes") {
+                    if saveRecord() {
+                        onDiscard?()
+                        dismiss()
+                    }
+                }
+                .accessibilityIdentifier("save-and-leave-interior-review")
+            }
+            Button("Discard changes", role: .destructive) {
+                record = savedRecord
+                onDiscard?()
+                dismiss()
+            }
+            .accessibilityIdentifier("discard-interior-review-changes")
+            Button("Keep editing", role: .cancel) {}
+                .accessibilityIdentifier("keep-editing-interior-review")
+        } message: {
+            Text("Save this interior to keep applied verification notes, physical fit results, and geometry edits.")
         }
         .fileExporter(isPresented: $exporting, document: document, contentType: .svg, defaultFilename: record.exportBasename) { result in
             switch result {
