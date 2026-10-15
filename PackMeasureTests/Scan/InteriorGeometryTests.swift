@@ -181,5 +181,7 @@ struct InteriorGeometryTests {
         #expect(record.exportBasename == "top-desk-drawer-1-clr2p5mm-h78mm")
         let blankName = InteriorMeasurement(name: "   ", contours: [rectangle], heightMM: 50, sideClearanceMM: 2, topClearanceMM: 2)
         #expect(blankName.exportBasename == "interior-insert-clr2mm-h48mm")
+        let extreme = InteriorMeasurement(name: "Extreme", contours: [rectangle], heightMM: 1e19, sideClearanceMM: 1e19, topClearanceMM: 2)
+        #expect(extreme.exportBasename == "extreme-clr0mm-h0mm")
     }
 }

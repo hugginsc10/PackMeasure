@@ -195,6 +195,14 @@ final class AppModel {
         } else {
             lines.append("Recommended vehicle: None of the listed profiles fit")
         }
+        if ignoredPackingItemCount > 0 {
+            let count = ignoredPackingItemCount
+            lines.append(
+                count == 1
+                    ? "Warning: 1 saved item could not be included in totals because its dimensions are invalid."
+                    : "Warning: \(count) saved items could not be included in totals because their dimensions are invalid."
+            )
+        }
         if !items.isEmpty {
             lines.append("")
             lines.append("Items:")
@@ -207,7 +215,8 @@ final class AppModel {
                 case let .stackable(maxLayers): "stack \(maxLayers) high"
                 }
                 let orientText = item.orientationPolicy == .keepUpright ? "upright" : "can rotate"
-                lines.append("- \(item.name) ×\(item.quantity): \(dims) (\(stackText), \(orientText))")
+                let excludedSuffix = item.packingItem == nil ? " [excluded from totals: invalid dimensions]" : ""
+                lines.append("- \(item.name) ×\(item.quantity): \(dims) (\(stackText), \(orientText))\(excludedSuffix)")
             }
         }
         return lines.joined(separator: "\n")

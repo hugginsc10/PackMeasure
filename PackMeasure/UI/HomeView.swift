@@ -474,7 +474,7 @@ enum PackingMeasurementCopy {
 enum SavedMeasurementCopy {
     static func qualitySummary(for item: MeasuredItem) -> String {
         if item.originalDimensions != nil {
-            return "Dimensions edited manually · original scan preserved"
+            return "Dimensions edited manually · original dimensions preserved"
         }
         guard let angleCount = item.comparisonAngleCount,
               let agreementCount = item.comparisonAgreementCount,
@@ -547,7 +547,7 @@ private struct ItemPackingEditorView: View {
                 )
                 if let original = item.originalDimensions {
                     LabeledContent(
-                        "Original scan",
+                        "Original dimensions",
                         value: "\(preferences.units.length(meters: original.lengthMeters)) × \(preferences.units.length(meters: original.widthMeters)) × \(preferences.units.length(meters: original.heightMeters))"
                     )
                 }

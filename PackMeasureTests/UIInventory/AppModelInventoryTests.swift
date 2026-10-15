@@ -482,7 +482,7 @@ struct AppModelInventoryTests {
         let firstEdit = try #require(model.items.first)
         #expect(firstEdit.lengthMeters == 1.25)
         #expect(firstEdit.originalDimensions == OriginalItemDimensions(lengthMeters: 1.2, widthMeters: 0.5, heightMeters: 0.9))
-        #expect(SavedMeasurementCopy.qualitySummary(for: firstEdit) == "Dimensions edited manually · original scan preserved")
+        #expect(SavedMeasurementCopy.qualitySummary(for: firstEdit) == "Dimensions edited manually · original dimensions preserved")
 
         // A second edit keeps the original scan dimensions rather than overwriting them with the first edit.
         #expect(model.updateItem(
@@ -526,6 +526,17 @@ struct AppModelInventoryTests {
         #expect(metricShare.contains("Saved pieces: 3 (1 entry)"))
         #expect(metricShare.contains("Recommended vehicle: U-Haul cargo van"))
         #expect(metricShare.contains("- Moving box ×3: 60.0 cm × 40.0 cm × 40.0 cm (stack 3 high, can rotate)"))
+
+        // When a saved item has invalid dimensions and is excluded from planningSummary,
+        // shareText explicitly warns the recipient and tags the excluded item.
+        model.addItem(
+            name: "Zero-height corrupt item",
+            estimate: .init(lengthMeters: 0.5, widthMeters: 0.5, heightMeters: 0, confidence: .low, sampleCount: 0, frameCount: 0),
+            quantity: 1
+        )
+        let shareWithExcluded = model.shareText(units: .centimeters)
+        #expect(shareWithExcluded.contains("Warning: 1 saved item could not be included in totals because its dimensions are invalid."))
+        #expect(shareWithExcluded.contains("[excluded from totals: invalid dimensions]"))
     }
 
     private func meters(fromInches inches: Double) -> Double {

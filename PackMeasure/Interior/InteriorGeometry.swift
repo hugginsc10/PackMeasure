@@ -101,10 +101,10 @@ struct InteriorMeasurement: Identifiable, Codable, Equatable, Sendable {
             .joined(separator: "-")
         let base = slug.isEmpty ? "interior-insert" : slug
         func mmTag(_ n: Double) -> String {
-            guard n.isFinite else { return "0" }
+            guard n.isFinite, n >= 0, n <= 1_000_000 else { return "0" }
             let rounded = (n * 10).rounded() / 10
             if abs(rounded.rounded() - rounded) < 0.001 {
-                return "\(Int(rounded.rounded()))"
+                return String(format: "%.0f", locale: Locale(identifier: "en_US_POSIX"), rounded.rounded())
             }
             return String(format: "%.1f", locale: Locale(identifier: "en_US_POSIX"), rounded)
                 .replacingOccurrences(of: ".", with: "p")
