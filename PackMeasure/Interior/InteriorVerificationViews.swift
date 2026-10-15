@@ -131,8 +131,8 @@ struct InteriorVerificationCard: View {
                 Text(record.fitIsStale ? "Previous fit: \(fit.status.title) · needs recheck" : "Physical fit: \(fit.status.title)")
                     .font(.subheadline.weight(.semibold))
                     .accessibilityIdentifier("verification-fit-state")
-                if let date = fit.testedAt {
-                    Text(fitDateSummary(date))
+                if let summary = fitDateOrHistorySummary(fit.testedAt) {
+                    Text(summary)
                         .font(.caption).foregroundStyle(.secondary)
                         .accessibilityIdentifier("verification-fit-history")
                 }
@@ -144,18 +144,32 @@ struct InteriorVerificationCard: View {
             } else {
                 Text("Physical fit: Not tested").font(.subheadline.weight(.semibold))
                     .accessibilityIdentifier("verification-fit-state")
+                if let summary = fitDateOrHistorySummary(nil) {
+                    Text(summary)
+                        .font(.caption).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("verification-fit-history")
+                }
             }
             Text("A recorded fit applies only to the version you physically tested; it does not verify LiDAR accuracy.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
 
-    private func fitDateSummary(_ date: Date) -> String {
-        let base = date.formatted(date: .abbreviated, time: .omitted)
+    private func fitDateOrHistorySummary(_ date: Date?) -> String? {
         let historyCount = record.verification?.fitHistory.count ?? 0
-        guard historyCount > 0 else { return base }
-        let noun = historyCount == 1 ? "test" : "tests"
-        return "\(base) · \(historyCount) earlier \(noun)"
+        let historyLabel: String? = historyCount > 0
+            ? "\(historyCount) earlier \(historyCount == 1 ? "test" : "tests")"
+            : nil
+        switch (date.map { $0.formatted(date: .abbreviated, time: .omitted) }, historyLabel) {
+        case let (dateText?, historyText?):
+            return "\(dateText) · \(historyText)"
+        case let (dateText?, nil):
+            return dateText
+        case let (nil, historyText?):
+            return historyText
+        case (nil, nil):
+            return nil
+        }
     }
 }
 

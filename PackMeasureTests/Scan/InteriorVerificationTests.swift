@@ -242,10 +242,14 @@ struct InteriorVerificationTests {
         fit.removeValue(forKey: "testedAt")
         verification["fit"] = fit
         object["verification"] = verification
-        let restored = try decode(object)
+        var restored = try decode(object)
         #expect(restored.verification?.fit?.status == .fits)
         #expect(restored.verification?.fit?.snapshot != nil)
         #expect(restored.fitIsStale && restored.currentFitStatus == .notTested)
+        restored.recordFit(status: .fits, note: "Retested current version", at: date.addingTimeInterval(60))
+        #expect(restored.verification?.fitHistory.count == 1)
+        #expect(restored.verification?.fitHistory.first?.note == "Historical fit")
+        #expect(restored.verification?.fit?.note == "Retested current version")
     }
 
     @Test func multiAttemptFitHistoryPreservesSupersededTestsAndUpdatesSameTestNoteInPlace() throws {
