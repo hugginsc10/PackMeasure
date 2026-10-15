@@ -272,7 +272,16 @@ struct InteriorVerificationTests {
         #expect(value.verification?.fitHistory.count == 1)
         #expect(value.verification?.fit?.status == .fits)
 
+        // Clearing the current fit to .notTested archives Coupon 2 in fitHistory rather than discarding it.
+        value.recordFit(status: .notTested, note: "Reset current claim", at: date.addingTimeInterval(180))
+        let historyAfterClear = try #require(value.verification?.fitHistory)
+        #expect(historyAfterClear.count == 2)
+        #expect(historyAfterClear[0].status == .tooTight)
+        #expect(historyAfterClear[1].status == .fits)
+        #expect(historyAfterClear[1].snapshot?.sideClearanceMM == 3.0)
+        #expect(value.verification?.fit?.status == .notTested)
+
         let restored = try JSONDecoder().decode(InteriorMeasurement.self, from: JSONEncoder().encode(value))
-        #expect(restored.verification?.fitHistory == history)
+        #expect(restored.verification?.fitHistory == historyAfterClear)
     }
 }

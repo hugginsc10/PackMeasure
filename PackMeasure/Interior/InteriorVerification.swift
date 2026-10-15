@@ -294,7 +294,6 @@ extension InteriorMeasurement {
         let currentSnapshot = status == .notTested ? nil : fitSnapshot
         if let previous = values.fit,
            previous.status != .notTested,
-           status != .notTested,
            previous.snapshot != currentSnapshot || previous.status != status {
             values.fitHistory.append(previous)
             if values.fitHistory.count > 10 {
