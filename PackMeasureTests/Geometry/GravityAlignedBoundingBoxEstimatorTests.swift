@@ -477,6 +477,26 @@ final class GravityAlignedBoundingBoxEstimatorTests: XCTestCase {
         }
     }
 
+    func testFiltersOutExtremeFiniteCoordinatesWithoutTrappingVoxelIndexing() throws {
+        var points = cuboidSurfacePoints(
+            length: 1.20,
+            width: 0.60,
+            height: 0.80,
+            yaw: 0,
+            center: SIMD3<Float>(0.30, 0.70, -0.20)
+        )
+        points.append(contentsOf: [
+            SIMD3<Float>(.greatestFiniteMagnitude, 0, 0),
+            SIMD3<Float>(0, -.greatestFiniteMagnitude, 0),
+            SIMD3<Float>(0, 0, 10_000),
+        ])
+
+        let estimate = try estimator.estimate(points: points)
+
+        assertDimensions(estimate.dimensions, 1.20, 0.60, 0.80, accuracy: 0.006)
+        XCTAssertEqual(estimate.diagnostics.filteredNonFinitePointCount, 3)
+    }
+
     func testRejectsCollinearOrFlatPointCloudAsDegenerate() {
         let points = (0..<30).map { index in
             SIMD3<Float>(Float(index) * 0.02, 0, 0)

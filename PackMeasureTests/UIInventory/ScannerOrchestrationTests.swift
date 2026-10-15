@@ -1030,6 +1030,15 @@ struct ScannerOrchestrationTests {
         #expect(state.guidedBack())
         #expect(state.guidedCaptureFeedback == nil)
 
+        #expect(state.requestGuidedPointCapture())
+        #expect(state.guidedCapturePreparationFailed(.trackingTimeout))
+        #expect(state.guidedCaptureSession?.pendingRequest == nil)
+        #expect(
+            state.guidedCaptureFeedback
+                == .error(GuidedBoxCaptureFailure.trackingTimeout.actionMessage)
+        )
+        #expect(state.canRequestGuidedPointCapture)
+
         state.clearGuidedCapture(for: .sessionReset)
         #expect(state.guidedCaptureFeedback == nil)
     }

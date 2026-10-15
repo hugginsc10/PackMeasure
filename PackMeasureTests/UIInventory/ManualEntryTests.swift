@@ -63,6 +63,13 @@ struct ManualEntryTests {
         #expect(validationError(for: draft) == .missingDimensions)
 
         draft = validDraft
+        draft.lengthText = "nan"
+        #expect(validationError(for: draft) == .missingDimensions)
+
+        draft.lengthText = "inf"
+        #expect(validationError(for: draft) == .missingDimensions)
+
+        draft = validDraft
         draft.heightInches = "0"
         #expect(validationError(for: draft) == .nonPositiveDimensions)
 

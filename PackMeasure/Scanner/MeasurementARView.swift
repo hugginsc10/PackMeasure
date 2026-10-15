@@ -1325,15 +1325,20 @@ struct MeasurementARView: UIViewRepresentable {
         @MainActor
         private func beginGuidedCaptureFromCurrentPose() {
             guard let state = scannerState,
-                  state.measurementMode == .guidedCorners,
-                  let frame = arView?.session.currentFrame,
+                  state.measurementMode == .guidedCorners else {
+                return
+            }
+            guard let frame = arView?.session.currentFrame,
                   case .normal = frame.camera.trackingState,
                   let pose = guidedFrameSampler.capturePose(
                       from: frame.camera.transform
-                  ),
-                  let request = state.beginGuidedCapture(
-                      requestedPose: pose
                   ) else {
+                _ = state.guidedCapturePreparationFailed(.trackingTimeout)
+                return
+            }
+            guard let request = state.beginGuidedCapture(
+                requestedPose: pose
+            ) else {
                 return
             }
 

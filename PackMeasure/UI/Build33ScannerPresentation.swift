@@ -391,7 +391,9 @@ struct ScannerNormalizedPreviewPoint: Equatable, Sendable {
     }
 
     func point(in size: CGSize) -> CGPoint {
-        CGPoint(x: size.width * x, y: size.height * y)
+        let width = size.width.isFinite && size.width > 0 ? size.width : 0
+        let height = size.height.isFinite && size.height > 0 ? size.height : 0
+        return CGPoint(x: width * x, y: height * y)
     }
 }
 
@@ -677,37 +679,40 @@ struct GuidedBoxProjectedOverlayView: View {
 
     var body: some View {
         GeometryReader { proxy in
-            ZStack {
-                ForEach(overlay.referenceLines) { line in
-                    Path { path in
-                        path.move(to: line.reference.position.point(in: proxy.size))
-                        path.addLine(to: line.endpoint.position.point(in: proxy.size))
+            if proxy.size.width.isFinite, proxy.size.height.isFinite,
+               proxy.size.width > 0, proxy.size.height > 0 {
+                ZStack {
+                    ForEach(overlay.referenceLines) { line in
+                        Path { path in
+                            path.move(to: line.reference.position.point(in: proxy.size))
+                            path.addLine(to: line.endpoint.position.point(in: proxy.size))
+                        }
+                        .stroke(.cyan, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                        .accessibilityHidden(true)
                     }
-                    .stroke(.cyan, style: StrokeStyle(lineWidth: 3, lineCap: .round))
-                    .accessibilityHidden(true)
-                }
 
-                ForEach(overlay.markers) { marker in
-                    ZStack {
-                        Circle()
-                            .fill(.cyan)
-                        Circle()
-                            .stroke(.black.opacity(0.75), lineWidth: 2)
-                        Text("\(marker.number)")
-                            .font(.caption.weight(.bold))
-                            .foregroundStyle(.black)
-                    }
-                    .frame(width: 32, height: 32)
-                    .position(marker.position.point(in: proxy.size))
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel(
-                        "Guided point \(marker.number), \(marker.point.rawValue)"
-                    )
-                    .accessibilityIdentifier(
-                        ScannerBuild33AccessibilityID.guidedMarker(
-                            number: marker.number
+                    ForEach(overlay.markers) { marker in
+                        ZStack {
+                            Circle()
+                                .fill(.cyan)
+                            Circle()
+                                .stroke(.black.opacity(0.75), lineWidth: 2)
+                            Text("\(marker.number)")
+                                .font(.caption.weight(.bold))
+                                .foregroundStyle(.black)
+                        }
+                        .frame(width: 32, height: 32)
+                        .position(marker.position.point(in: proxy.size))
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(
+                            "Guided point \(marker.number), \(marker.point.rawValue)"
                         )
-                    )
+                        .accessibilityIdentifier(
+                            ScannerBuild33AccessibilityID.guidedMarker(
+                                number: marker.number
+                            )
+                        )
+                    }
                 }
             }
         }

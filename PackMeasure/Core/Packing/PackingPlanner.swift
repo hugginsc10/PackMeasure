@@ -91,11 +91,14 @@ struct PackingPlanner: Sendable {
             )
         }
 
+        let fallbackSummary = orderedProfiles.last(where: { $0.interiorDimensions != nil })
+            .map { summary(for: items, in: $0) }
+            ?? baseSummary
         let finalFailure = rejections.last?.reason
             ?? "Every listed profile failed at least one hard packing constraint."
         return PackingVehicleRecommendation(
             vehicle: nil,
-            summary: baseSummary,
+            summary: fallbackSummary,
             reason: "No listed vehicle is suitable. \(finalFailure)",
             rejections: rejections
         )
@@ -161,7 +164,7 @@ struct PackingPlanner: Sendable {
                     height: item.dimensions.heightInches
                 ),
                 stackability: item.stackability,
-                vehicleHeight: nil
+                vehicleHeight: interior.heightInches
             )
         }
 

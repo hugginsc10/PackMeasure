@@ -24,7 +24,10 @@ struct GravityAlignedBoundingBoxEstimator: Sendable {
     func estimate(points: [SIMD3<Float>]) throws -> GravityAlignedBoundingBoxEstimate {
         try validateConfiguration()
 
-        let finitePoints = points.filter(\.allComponentsAreFinite)
+        let finitePoints = points.filter { point in
+            point.allComponentsAreFinite
+                && VoxelKey(point: point, voxelSizeMeters: configuration.voxelSizeMeters) != nil
+        }
         guard finitePoints.count >= configuration.minimumPointCount else {
             throw BoundingBoxEstimationError.insufficientFinitePoints(
                 actual: finitePoints.count,
@@ -511,11 +514,8 @@ struct GravityAlignedBoundingBoxEstimator: Sendable {
         keys.reserveCapacity(points.count)
 
         for (index, point) in points.enumerated() {
-            let key = VoxelKey(
-                x: Int64(floor(Double(point.x) / maximumDistance)),
-                y: Int64(floor(Double(point.y) / maximumDistance)),
-                z: Int64(floor(Double(point.z) / maximumDistance))
-            )
+            let key = VoxelKey(point: point, voxelSizeMeters: maximumDistance)
+                ?? VoxelKey(x: 0, y: 0, z: 0)
             keys.append(key)
             buckets[key, default: []].append(index)
         }
@@ -677,11 +677,9 @@ struct GravityAlignedBoundingBoxEstimator: Sendable {
         voxels.reserveCapacity(points.count)
 
         for point in points {
-            let key = VoxelKey(
-                x: Int64(floor(Double(point.x) / voxelSizeMeters)),
-                y: Int64(floor(Double(point.y) / voxelSizeMeters)),
-                z: Int64(floor(Double(point.z) / voxelSizeMeters))
-            )
+            guard let key = VoxelKey(point: point, voxelSizeMeters: voxelSizeMeters) else {
+                continue
+            }
             voxels[key, default: VoxelAccumulator()].add(point)
         }
 
@@ -809,6 +807,38 @@ private struct VoxelKey: Hashable, Comparable {
     let x: Int64
     let y: Int64
     let z: Int64
+
+    init(x: Int64, y: Int64, z: Int64) {
+        self.x = x
+        self.y = y
+        self.z = z
+    }
+
+    init?(point: SIMD3<Float>, voxelSizeMeters: Double) {
+        guard voxelSizeMeters.isFinite, voxelSizeMeters > 0,
+              let x = Self.voxelIndex(for: point.x, voxelSizeMeters: voxelSizeMeters),
+              let y = Self.voxelIndex(for: point.y, voxelSizeMeters: voxelSizeMeters),
+              let z = Self.voxelIndex(for: point.z, voxelSizeMeters: voxelSizeMeters) else {
+            return nil
+        }
+        self.x = x
+        self.y = y
+        self.z = z
+    }
+
+    private static func voxelIndex(
+        for coordinate: Float,
+        voxelSizeMeters: Double
+    ) -> Int64? {
+        guard coordinate.isFinite, abs(coordinate) <= 1_000 else { return nil }
+        let scaled = floor(Double(coordinate) / voxelSizeMeters)
+        guard scaled.isFinite,
+              scaled >= Double(Int64.min),
+              scaled < Double(Int64.max) else {
+            return nil
+        }
+        return Int64(scaled)
+    }
 
     static func < (lhs: VoxelKey, rhs: VoxelKey) -> Bool {
         if lhs.x != rhs.x { return lhs.x < rhs.x }

@@ -1064,6 +1064,21 @@ struct ScannerSheetView: View {
         }
 
         @discardableResult
+        func guidedCapturePreparationFailed(
+            _ failure: GuidedBoxCaptureFailure
+        ) -> Bool {
+            guard measurementMode == .guidedCorners,
+                  let session = guidedCaptureSession,
+                  session.isActive,
+                  session.pendingRequest == nil,
+                  session.step.point != nil else {
+                return false
+            }
+            guidedCaptureFeedback = .error(failure.actionMessage)
+            return true
+        }
+
+        @discardableResult
         func guidedBack() -> Bool {
             guard measurementMode == .guidedCorners,
                   var session = guidedCaptureSession else {
@@ -1299,7 +1314,7 @@ struct ScannerSheetView: View {
                         if reviewState.canSave {
                             Section("Save Item") {
                                 TextField("Item name", text: $draftName)
-                                Stepper("Quantity: \(quantity)", value: $quantity, in: 1...99)
+                                Stepper("Quantity: \(quantity)", value: $quantity, in: 1...999)
                                 Toggle("Safe to stack", isOn: $isStackable)
                                 if isStackable {
                                     Stepper(
@@ -2012,12 +2027,14 @@ private struct CameraZoomStatusBadge: View {
 private struct CameraObjectFrame: View {
     var body: some View {
         GeometryReader { proxy in
+            let width = proxy.size.width.isFinite && proxy.size.width > 0 ? proxy.size.width : 0
+            let height = proxy.size.height.isFinite && proxy.size.height > 0 ? proxy.size.height : 0
             Rectangle()
                 .strokeBorder(.white.opacity(0.78), lineWidth: 2)
-                .padding(.horizontal, proxy.size.width * CGFloat(
+                .padding(.horizontal, width * CGFloat(
                     ScannerPreviewFramingPolicy.protectedInsetFraction
                 ))
-                .padding(.vertical, proxy.size.height * CGFloat(
+                .padding(.vertical, height * CGFloat(
                     ScannerPreviewFramingPolicy.protectedInsetFraction
                 ))
                 .shadow(color: .black.opacity(0.45), radius: 2)

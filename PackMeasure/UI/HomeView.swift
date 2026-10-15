@@ -1,12 +1,20 @@
 import SwiftUI
 
 struct HomeView: View {
+    private enum Tab: Hashable {
+        case measure
+        case rooms
+        case load
+        case settings
+    }
+
     @Environment(AppModel.self) private var appModel
     @Environment(AppPreferences.self) private var preferences
+    @State private var selectedTab: Tab = .measure
     @State private var manualEntryPresented = false
 
     var body: some View {
-        TabView {
+        TabView(selection: $selectedTab) {
             NavigationStack {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 14) {
@@ -40,8 +48,8 @@ struct HomeView: View {
                             .disabled(appModel.inventoryLoadFailed)
                             .accessibilityIdentifier("home-manual-entry")
                         Divider().padding(.vertical, 6)
-                        NavigationLink {
-                            PackingDashboardView(manualEntryPresented: $manualEntryPresented)
+                        Button {
+                            selectedTab = .load
                         } label: {
                             HStack {
                                 Label("Your moving load", systemImage: "truck.box")
@@ -50,19 +58,24 @@ struct HomeView: View {
                                 Text(appModel.inventoryLoadFailed ? "Unavailable" : "\(appModel.planningSummary.pieceCount) pieces")
                                     .font(.system(.subheadline, design: .monospaced)).foregroundStyle(.secondary)
                                 Image(systemName: "arrow.right")
-                            }.frame(minHeight: 48)
+                            }.frame(minHeight: 48).contentShape(Rectangle())
                         }.buttonStyle(.plain)
                     }.padding(20)
                 }
                 .measureScreen()
                 .navigationTitle("PackMeasure").navigationBarTitleDisplayMode(.inline)
-            }.tabItem { Label("Measure", systemImage: "viewfinder") }
+            }
+            .tabItem { Label("Measure", systemImage: "viewfinder") }
+            .tag(Tab.measure)
             NavigationStack { RoomMeasurementView() }
                 .tabItem { Label("Rooms", systemImage: "square.split.2x2") }
+                .tag(Tab.rooms)
             NavigationStack { PackingDashboardView(manualEntryPresented: $manualEntryPresented) }
                 .tabItem { Label("Load", systemImage: "shippingbox") }
+                .tag(Tab.load)
             NavigationStack { SettingsView() }
                 .tabItem { Label("Settings", systemImage: "gearshape") }
+                .tag(Tab.settings)
         }
         .tint(MeasureStyle.accent)
         .toolbarBackground(MeasureStyle.background, for: .tabBar)
@@ -209,8 +222,11 @@ private struct PackingDashboardView: View {
             }
 
             if appModel.ignoredPackingItemCount > 0 {
+                let count = appModel.ignoredPackingItemCount
                 Label(
-                    "\(appModel.ignoredPackingItemCount) saved item could not be included because its dimensions are invalid.",
+                    count == 1
+                        ? "1 saved item could not be included because its dimensions are invalid."
+                        : "\(count) saved items could not be included because their dimensions are invalid.",
                     systemImage: "exclamationmark.triangle"
                 )
                 .font(.footnote)
