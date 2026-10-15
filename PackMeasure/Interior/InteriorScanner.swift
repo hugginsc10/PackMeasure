@@ -405,6 +405,7 @@ struct InteriorCamera: UIViewRepresentable {
             guard active, state.result == nil else { return }
             guard case .normal = frame.camera.trackingState else {
                 state.ready = false
+                state.photoRequested = false
                 state.cameraStatus = "Move slowly while tracking settles"
                 if case .limited(.relocalizing) = frame.camera.trackingState {
                     state.invalidate("Tracking restarted. Capture the outline again.")

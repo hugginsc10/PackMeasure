@@ -69,8 +69,7 @@ struct FloorplanGeometry {
             if b == selected { return false }
             return a < b
         }
-        var result: [(index: Int, rect: CGRect)] = []
-        for index in order {
+        func candidateRect(for index: Int, sign: CGFloat) -> CGRect {
             let line = segments[index]
             let size = sizes.flatMap { $0.indices.contains(index) ? $0[index] : nil }
                 ?? CGSize(width: String(index + 1).count * 9 + 14, height: 24)
@@ -78,11 +77,38 @@ struct FloorplanGeometry {
             let dx = line.end.x - line.start.x, dy = line.end.y - line.start.y
             let length = max(0.001, hypot(dx, dy))
             let offset = max(26 / zoom, abs(dy) / length * width / 2 + abs(dx) / length * height / 2 + 8 / zoom)
-            let rect = CGRect(x: (line.start.x + line.end.x) / 2 - dy / length * offset - width / 2,
-                              y: (line.start.y + line.end.y) / 2 + dx / length * offset - height / 2,
-                              width: width, height: height)
-            if !result.contains(where: { $0.rect.insetBy(dx: -4 / zoom, dy: -4 / zoom).intersects(rect) }) {
-                result.append((index, rect))
+            return CGRect(x: (line.start.x + line.end.x) / 2 - dy / length * offset * sign - width / 2,
+                          y: (line.start.y + line.end.y) / 2 + dx / length * offset * sign - height / 2,
+                          width: width, height: height)
+        }
+        func overlaps(_ a: CGRect, _ b: CGRect) -> Bool {
+            a.insetBy(dx: -4 / zoom, dy: -4 / zoom).intersects(b)
+        }
+        var result: [(index: Int, rect: CGRect)] = []
+        for index in order {
+            var placed = false
+            for sign: CGFloat in [1, -1] {
+                let rect = candidateRect(for: index, sign: sign)
+                if !result.contains(where: { overlaps($0.rect, rect) }) {
+                    result.append((index, rect))
+                    placed = true
+                    break
+                }
+            }
+            if !placed {
+                let primary = candidateRect(for: index, sign: 1)
+                let colliding = result.indices.filter { overlaps(result[$0].rect, primary) }
+                if colliding.count == 1,
+                   let blockerPos = colliding.first,
+                   result[blockerPos].index != selected {
+                    let blockerIndex = result[blockerPos].index
+                    let flipped = candidateRect(for: blockerIndex, sign: -1)
+                    if !overlaps(flipped, primary),
+                       !result.indices.contains(where: { $0 != blockerPos && overlaps(result[$0].rect, flipped) }) {
+                        result[blockerPos] = (blockerIndex, flipped)
+                        result.append((index, primary))
+                    }
+                }
             }
         }
         return result

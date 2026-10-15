@@ -131,9 +131,10 @@ struct InteriorVerificationCard: View {
                 Text(record.fitIsStale ? "Previous fit: \(fit.status.title) · needs recheck" : "Physical fit: \(fit.status.title)")
                     .font(.subheadline.weight(.semibold))
                     .accessibilityIdentifier("verification-fit-state")
-                if let date = fit.testedAt {
-                    Text(date.formatted(date: .abbreviated, time: .omitted))
+                if let summary = fitDateOrHistorySummary(fit.testedAt) {
+                    Text(summary)
                         .font(.caption).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("verification-fit-history")
                 }
                 if let note = fit.note, !note.isEmpty { Text(note).font(.caption) }
                 if record.fitIsStale {
@@ -143,9 +144,31 @@ struct InteriorVerificationCard: View {
             } else {
                 Text("Physical fit: Not tested").font(.subheadline.weight(.semibold))
                     .accessibilityIdentifier("verification-fit-state")
+                if let summary = fitDateOrHistorySummary(nil) {
+                    Text(summary)
+                        .font(.caption).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("verification-fit-history")
+                }
             }
             Text("A recorded fit applies only to the version you physically tested; it does not verify LiDAR accuracy.")
                 .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private func fitDateOrHistorySummary(_ date: Date?) -> String? {
+        let historyCount = record.verification?.fitHistory.count ?? 0
+        let historyLabel: String? = historyCount > 0
+            ? "\(historyCount) earlier \(historyCount == 1 ? "test" : "tests")"
+            : nil
+        switch (date.map { $0.formatted(date: .abbreviated, time: .omitted) }, historyLabel) {
+        case let (dateText?, historyText?):
+            return "\(dateText) · \(historyText)"
+        case let (dateText?, nil):
+            return dateText
+        case let (nil, historyText?):
+            return historyText
+        case (nil, nil):
+            return nil
         }
     }
 }
@@ -273,7 +296,9 @@ private struct InteriorPhysicalFitEditor: View {
     @State private var note: String
     @State private var testedAt: Date = .now
     let wasStale: Bool
+    let fitHistory: [InteriorFitResult]
     @Environment(\.dismiss) private var dismiss
+    @Environment(AppPreferences.self) private var preferences
 
     init(record: InteriorMeasurement, onApply: @escaping (InteriorFitStatus, String?, Date) -> Void) {
         self.onApply = onApply
@@ -282,6 +307,7 @@ private struct InteriorPhysicalFitEditor: View {
         _note = State(initialValue: record.fitIsStale ? "" : record.verification?.fit?.note ?? "")
         _testedAt = State(initialValue: record.fitIsStale ? .now : record.verification?.fit?.testedAt ?? .now)
         wasStale = record.fitIsStale
+        fitHistory = record.verification?.fitHistory ?? []
     }
 
     var body: some View {
@@ -304,6 +330,13 @@ private struct InteriorPhysicalFitEditor: View {
                             .font(.caption).foregroundStyle(.orange)
                     }
                 }
+                if !fitHistory.isEmpty {
+                    Section("Earlier fit tests") {
+                        ForEach(fitHistory.indices, id: \.self) { index in
+                            priorFitRow(fitHistory[fitHistory.count - 1 - index])
+                        }
+                    }
+                }
             }
             .accessibilityIdentifier("verification-fit-editor")
             .navigationTitle("Physical fit")
@@ -318,6 +351,29 @@ private struct InteriorPhysicalFitEditor: View {
                         dismiss()
                     }.accessibilityIdentifier("apply-interior-fit")
                 }
+            }
+        }
+    }
+
+    private func priorFitRow(_ prior: InteriorFitResult) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(prior.status.title)
+                .font(.subheadline.weight(.semibold))
+            if let snapshot = prior.snapshot {
+                let side = preferences.units.preciseLength(millimeters: snapshot.sideClearanceMM)
+                let top = preferences.units.preciseLength(millimeters: snapshot.topClearanceMM)
+                let height = preferences.units.preciseLength(millimeters: snapshot.heightMM)
+                Text("\(side) side · \(top) top · \(height) height")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            if let note = prior.note, !note.isEmpty {
+                Text(note).font(.caption)
+            }
+            if let date = prior.testedAt {
+                Text(date.formatted(date: .abbreviated, time: .omitted))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
             }
         }
     }

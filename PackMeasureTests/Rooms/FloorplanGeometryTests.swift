@@ -90,4 +90,24 @@ final class FloorplanGeometryTests: XCTestCase {
         XCTAssertNil(geometry.nearestWall(to: .zero, tolerance: 22))
         XCTAssertTrue(geometry.labels(zoom: 1, selected: nil).isEmpty)
     }
+
+    func testBuild70ConcaveCornerPlacesCollidingBadgeOnOppositeSide() {
+        let walls = [
+            wall([0.17630762, 1.0466212], [-1.6339724, -0.23508886]),
+            wall([1.2344079, -0.44783348], [0.17630762, 1.0466211]),
+            wall([-0.045218945, -2.4790347], [1.1891814, -1.6050571]),
+            wall([1.1891813, -1.6050572], [0.6585284, -0.8555662]),
+            wall([0.65852845, -0.85556626], [1.2344078, -0.44783354]),
+            wall([-1.6339723, -0.23508906], [-0.045218945, -2.4790347])
+        ]
+        let geometry = FloorplanGeometry(walls: walls, size: CGSize(width: 350, height: 300))
+        let sizes = walls.map { _ in CGSize(width: 76, height: 24) }
+        let labels = geometry.labels(zoom: 1, selected: nil, sizes: sizes)
+        XCTAssertEqual(labels.count, 6)
+        for (index, label) in labels.enumerated() {
+            for other in labels.dropFirst(index + 1) {
+                XCTAssertFalse(label.rect.intersects(other.rect))
+            }
+        }
+    }
 }

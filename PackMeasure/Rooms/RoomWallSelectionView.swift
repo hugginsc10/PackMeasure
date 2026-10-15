@@ -60,7 +60,13 @@ struct RoomScanReviewView: View {
                 HStack {
                     Button("Scan again", action: onScanAgain)
                     Spacer()
-                    DiagnosticButton(title: "Diagnostics", kind: .room, report: diagnostics + "\nreview_kept_wall_ids=" + keptIDs.map(\.uuidString).sorted().joined(separator: ","))
+                    DiagnosticButton(
+                        title: "Diagnostics",
+                        kind: .room,
+                        report: diagnostics
+                            + "\nreview_kept_wall_ids=" + keptIDs.map(\.uuidString).sorted().joined(separator: ",")
+                            + (keptRoom.map { "\n" + $0.reviewDiagnosticSummary } ?? "")
+                    )
                 }
             }
         }

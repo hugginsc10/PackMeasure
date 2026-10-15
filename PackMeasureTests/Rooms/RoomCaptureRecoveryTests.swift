@@ -285,4 +285,46 @@ final class RoomCaptureRecoveryTests: XCTestCase {
         XCTAssertNil(old.captureSource)
         XCTAssertNil(old.captureSourceMessage)
     }
+
+    func testBuild70SixWallLRoomPreservesCoverageAndReportsReviewDiagnosticSummary() throws {
+        // Report 1549CA70-A013-495E-8A37-A0680343BD87, captured October 15, 2026 (Build 70).
+        let live = [
+            wall([1.2021801, -1.6195171], [0.6657539, -0.8727324], height: 2.757926,
+                 id: UUID(uuidString: "BFE5B206-6F42-485A-A36E-651A9EE28F72")!, confidence: "medium"),
+            wall([0.66575384, -0.8727323], [1.2593029, -0.42386803], height: 2.757926,
+                 id: UUID(uuidString: "A05CBC90-4800-4410-B6D3-98F7FA6769FC")!),
+            wall([1.2593029, -0.423868], [0.18280387, 1.0428336], height: 2.757926,
+                 id: UUID(uuidString: "E2E59841-0709-41FC-AB1A-C8D49E0F5A2C")!),
+            wall([-0.05294919, -2.471056], [1.2021801, -1.6195172], height: 2.757926,
+                 id: UUID(uuidString: "1CAA4482-A0B6-4AC7-A794-FF150F89A307")!),
+            wall([0.18280375, 1.0428337], [-1.6344972, -0.26930678], height: 2.757926,
+                 id: UUID(uuidString: "9A1A7CC3-7C55-41D1-A43F-A1D7B93827DA")!),
+            wall([-1.6344973, -0.26930678], [-0.05294919, -2.471056], height: 2.757926,
+                 id: UUID(uuidString: "3C3A6F3B-7E27-4ADD-A42E-2B2CD1CDB53C")!)
+        ]
+        let finished = [
+            wall([0.17630762, 1.0466212], [-1.6339724, -0.23508886], height: 2.7599998,
+                 id: UUID(uuidString: "9A1A7CC3-7C55-41D1-A43F-A1D7B93827DA")!),
+            wall([1.2344079, -0.44783348], [0.17630762, 1.0466211], height: 2.7599998,
+                 id: UUID(uuidString: "E2E59841-0709-41FC-AB1A-C8D49E0F5A2C")!),
+            wall([-0.045218945, -2.4790347], [1.1891814, -1.6050571], height: 2.7599998,
+                 id: UUID(uuidString: "1CAA4482-A0B6-4AC7-A794-FF150F89A307")!),
+            wall([1.1891813, -1.6050572], [0.6585284, -0.8555662], height: 2.7599998,
+                 id: UUID(uuidString: "BFE5B206-6F42-485A-A36E-651A9EE28F72")!),
+            wall([0.65852845, -0.85556626], [1.2344078, -0.44783354], height: 2.7599998,
+                 id: UUID(uuidString: "A05CBC90-4800-4410-B6D3-98F7FA6769FC")!),
+            wall([-1.6339723, -0.23508906], [-0.045218945, -2.4790347], height: 2.7599998,
+                 id: UUID(uuidString: "3C3A6F3B-7E27-4ADD-A42E-2B2CD1CDB53C")!)
+        ]
+        let result = try comparison(live: live, processed: finished)
+        XCTAssertFalse(result.needsChoice)
+        XCTAssertTrue(result.diagnosticSummary.contains("comparison_choice_reasons=none"))
+        let processed = try XCTUnwrap(result.processed)
+        XCTAssertEqual(processed.spanLength, 2.749442, accuracy: 0.0001)
+        XCTAssertEqual(processed.spanWidth, 2.2180834, accuracy: 0.0001)
+        XCTAssertEqual(processed.wallHeight, 2.7599998, accuracy: 0.0001)
+        XCTAssertTrue(processed.reviewDiagnosticSummary.contains("review_span_m=SIMD2<Float>(2.7494, 2.2181)"))
+        XCTAssertTrue(processed.reviewDiagnosticSummary.contains("review_wall_height_m=2.7600"))
+        XCTAssertTrue(processed.reviewDiagnosticSummary.contains("review_ceiling_height_m=none review_shelf_count=0"))
+    }
 }
