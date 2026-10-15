@@ -53,8 +53,14 @@ struct InteriorVerificationCard: View {
     var body: some View {
         Section {
             VStack(alignment: .leading, spacing: 5) {
-                Text(baselineTitle).font(.subheadline.weight(.semibold))
-                    .accessibilityIdentifier("verification-original-summary")
+                HStack(spacing: 8) {
+                    Image(systemName: "ruler")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(MeasureStyle.accent)
+                    Text(baselineTitle)
+                        .font(.subheadline.weight(.semibold))
+                        .accessibilityIdentifier("verification-original-summary")
+                }
                 Text(record.originalGeometry?.source == .scanCapture
                      ? "The original geometry is preserved separately from your corrections."
                      : "This older save may contain earlier corrections. Its saved geometry is preserved as the baseline.")
@@ -78,24 +84,33 @@ struct InteriorVerificationCard: View {
                 }
                 if let height = verification.intendedInsertHeightMM {
                     LabeledContent("Intended insert height", value: preferences.units.preciseLength(millimeters: height))
+                        .monospacedDigit()
                         .accessibilityIdentifier("verification-insert-height-reference")
                 }
             }
             Text("Spans are bounding dimensions in the first-edge frame, not the narrowest opening or clearance at insert height. Measured values are notes; they do not reshape the outline or change clearance.")
                 .font(.caption).foregroundStyle(.secondary)
-            Button("Add or edit measured dimensions") { editingMeasurements = true }
-                .accessibilityIdentifier("edit-interior-verification")
-                .sheet(isPresented: $editingMeasurements) {
-                    InteriorVerificationEditor(verification: record.verification) { record.applyVerification($0) }
-                }
+            Button {
+                editingMeasurements = true
+            } label: {
+                Label("Add or edit measured dimensions", systemImage: "ruler")
+            }
+            .accessibilityIdentifier("edit-interior-verification")
+            .sheet(isPresented: $editingMeasurements) {
+                InteriorVerificationEditor(verification: record.verification) { record.applyVerification($0) }
+            }
             fitSummary
-            Button("Record physical fit") { editingFit = true }
-                .accessibilityIdentifier("record-interior-fit")
-                .sheet(isPresented: $editingFit) {
-                    InteriorPhysicalFitEditor(record: record) { status, note, date in
-                        record.recordFit(status: status, note: note, at: date)
-                    }
+            Button {
+                editingFit = true
+            } label: {
+                Label("Record physical fit", systemImage: "checkmark.seal")
+            }
+            .accessibilityIdentifier("record-interior-fit")
+            .sheet(isPresented: $editingFit) {
+                InteriorPhysicalFitEditor(record: record) { status, note, date in
+                    record.recordFit(status: status, note: note, at: date)
                 }
+            }
             Text("Apply updates this review. Save interior to keep your changes.")
                 .font(.caption).foregroundStyle(.secondary)
         } header: {
@@ -106,18 +121,64 @@ struct InteriorVerificationCard: View {
     private func dimensionRow(_ title: String, original: Double?, current: Double?, measured: Double?, identifier: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title).font(.subheadline.weight(.semibold))
-            if let original { Text("Baseline: \(preferences.units.preciseLength(millimeters: original))").font(.caption).foregroundStyle(.secondary) }
-            if let current { Text("Current: \(preferences.units.preciseLength(millimeters: current))").font(.caption).foregroundStyle(.secondary) }
             if let measured {
-                Text("Measured: \(preferences.units.preciseLength(millimeters: measured))")
-                if let original { Text("Measured − baseline: \(signedDifference(measured - original))").font(.caption).foregroundStyle(.secondary) }
-                if let current { Text("Measured − current: \(signedDifference(measured - current))").font(.caption).foregroundStyle(.secondary) }
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .top, spacing: 12) {
+                        if let original {
+                            comparisonColumn(label: "Baseline", value: preferences.units.preciseLength(millimeters: original), emphasized: false)
+                        }
+                        if let current {
+                            comparisonColumn(label: "Current", value: preferences.units.preciseLength(millimeters: current), emphasized: false)
+                        }
+                        comparisonColumn(label: "Measured", value: preferences.units.preciseLength(millimeters: measured), emphasized: true)
+                    }
+                    VStack(alignment: .leading, spacing: 4) {
+                        if let original { Text("Baseline: \(preferences.units.preciseLength(millimeters: original))").font(.caption).foregroundStyle(.secondary).monospacedDigit() }
+                        if let current { Text("Current: \(preferences.units.preciseLength(millimeters: current))").font(.caption).foregroundStyle(.secondary).monospacedDigit() }
+                        Text("Measured: \(preferences.units.preciseLength(millimeters: measured))").font(.subheadline.weight(.medium)).monospacedDigit()
+                    }
+                }
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 8) {
+                        if let original { deltaPill(label: "Measured − baseline", deltaMM: measured - original) }
+                        if let current { deltaPill(label: "Measured − current", deltaMM: measured - current) }
+                    }
+                    VStack(alignment: .leading, spacing: 4) {
+                        if let original { deltaPill(label: "Measured − baseline", deltaMM: measured - original) }
+                        if let current { deltaPill(label: "Measured − current", deltaMM: measured - current) }
+                    }
+                }
             } else {
+                if let original { Text("Baseline: \(preferences.units.preciseLength(millimeters: original))").font(.caption).foregroundStyle(.secondary).monospacedDigit() }
+                if let current { Text("Current: \(preferences.units.preciseLength(millimeters: current))").font(.caption).foregroundStyle(.secondary).monospacedDigit() }
                 Text("No independent measurement").font(.caption).foregroundStyle(.secondary)
             }
         }
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier(identifier)
+    }
+
+    private func comparisonColumn(label: String, value: String, emphasized: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(emphasized ? .subheadline.weight(.semibold) : .caption)
+                .foregroundStyle(emphasized ? MeasureStyle.accent : .primary)
+                .monospacedDigit()
+                .fixedSize(horizontal: true, vertical: false)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func deltaPill(label: String, deltaMM: Double) -> some View {
+        Text("\(label): \(signedDifference(deltaMM))")
+            .font(.caption2.monospacedDigit())
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(MeasureStyle.panel, in: Capsule())
     }
 
     private func signedDifference(_ millimeters: Double) -> String {
@@ -126,11 +187,21 @@ struct InteriorVerificationCard: View {
     }
 
     @ViewBuilder private var fitSummary: some View {
-        VStack(alignment: .leading, spacing: 5) {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                if let fit = record.verification?.fit {
+                    Text(record.fitIsStale ? "Previous fit: \(fit.status.title) · needs recheck" : "Physical fit: \(fit.status.title)")
+                        .font(.subheadline.weight(.semibold))
+                        .accessibilityIdentifier("verification-fit-state")
+                } else {
+                    Text("Physical fit: Not tested").font(.subheadline.weight(.semibold))
+                        .accessibilityIdentifier("verification-fit-state")
+                }
+                Spacer(minLength: 0)
+                InteriorFitStatusPill(record: record)
+                    .accessibilityHidden(true)
+            }
             if let fit = record.verification?.fit {
-                Text(record.fitIsStale ? "Previous fit: \(fit.status.title) · needs recheck" : "Physical fit: \(fit.status.title)")
-                    .font(.subheadline.weight(.semibold))
-                    .accessibilityIdentifier("verification-fit-state")
                 if let summary = fitDateOrHistorySummary(fit.testedAt) {
                     Text(summary)
                         .font(.caption).foregroundStyle(.secondary)
@@ -141,14 +212,10 @@ struct InteriorVerificationCard: View {
                     Text("The outline, usable height, clearance or intended insert height changed, or the saved test details are incomplete. Test the current version again.")
                         .font(.caption).foregroundStyle(.orange)
                 }
-            } else {
-                Text("Physical fit: Not tested").font(.subheadline.weight(.semibold))
-                    .accessibilityIdentifier("verification-fit-state")
-                if let summary = fitDateOrHistorySummary(nil) {
-                    Text(summary)
-                        .font(.caption).foregroundStyle(.secondary)
-                        .accessibilityIdentifier("verification-fit-history")
-                }
+            } else if let summary = fitDateOrHistorySummary(nil) {
+                Text(summary)
+                    .font(.caption).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("verification-fit-history")
             }
             Text("A recorded fit applies only to the version you physically tested; it does not verify LiDAR accuracy.")
                 .font(.caption).foregroundStyle(.secondary)
@@ -204,37 +271,41 @@ private struct InteriorVerificationEditor: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section {
-                    Picker("Input units", selection: Binding(get: { unit }, set: { changeUnit($0) })) {
-                        ForEach(InteriorUnit.allCases, id: \.self) { Text($0.title).tag($0) }
+                Group {
+                    Section {
+                        Picker("Input units", selection: Binding(get: { unit }, set: { changeUnit($0) })) {
+                            ForEach(InteriorUnit.allCases, id: \.self) { Text($0.title).tag($0) }
+                        }
+                        .pickerStyle(.segmented)
+                        .accessibilityIdentifier("verification-unit-picker")
+                        Text("Independent measurements stay separate from the outline and clearance. Leave an optional value blank to remove it.")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
-                    .pickerStyle(.segmented)
-                    .accessibilityIdentifier("verification-unit-picker")
-                    Text("Independent measurements stay separate from the outline and clearance. Leave an optional value blank to remove it.")
-                        .font(.caption).foregroundStyle(.secondary)
+                    Section("Measured interior · optional") {
+                        lengthField("Along first edge", draft: $along, identifier: "verification-along-value")
+                        lengthField("Across first edge", draft: $across, identifier: "verification-across-value")
+                        lengthField("Usable height", draft: $height, identifier: "verification-height-value")
+                        TextField("Measurement source", text: $source)
+                            .focused($focusedField, equals: "source")
+                            .accessibilityIdentifier("verification-source")
+                        DatePicker("Measured on", selection: $measuredAt, displayedComponents: .date)
+                            .accessibilityIdentifier("verification-measured-date")
+                        Text("Measure the overall spans in the scan’s first-edge frame. Also check narrow sections, obstacles and closed-drawer space before printing.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Section("Intended insert · optional") {
+                        lengthField("Insert height", draft: $insertHeight, identifier: "verification-insert-height-value")
+                        Text("Record the height of the insert you plan to test. This does not set usable height, subtract clearance or change the exported extrusion height.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    if !valid {
+                        Section { Text("Use positive, finite dimensions or leave them blank. Enter a measurement source.").font(.footnote).foregroundStyle(.orange) }
+                    }
+                    if let error { Section { Text(error).font(.footnote).foregroundStyle(.orange).accessibilityIdentifier("verification-input-error") } }
                 }
-                Section("Measured interior · optional") {
-                    lengthField("Along first edge", draft: $along, identifier: "verification-along-value")
-                    lengthField("Across first edge", draft: $across, identifier: "verification-across-value")
-                    lengthField("Usable height", draft: $height, identifier: "verification-height-value")
-                    TextField("Measurement source", text: $source)
-                        .focused($focusedField, equals: "source")
-                        .accessibilityIdentifier("verification-source")
-                    DatePicker("Measured on", selection: $measuredAt, displayedComponents: .date)
-                        .accessibilityIdentifier("verification-measured-date")
-                    Text("Measure the overall spans in the scan’s first-edge frame. Also check narrow sections, obstacles and closed-drawer space before printing.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                Section("Intended insert · optional") {
-                    lengthField("Insert height", draft: $insertHeight, identifier: "verification-insert-height-value")
-                    Text("Record the height of the insert you plan to test. This does not set usable height, subtract clearance or change the exported extrusion height.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                if !valid {
-                    Section { Text("Use positive, finite dimensions or leave them blank. Enter a measurement source.").font(.footnote).foregroundStyle(.orange) }
-                }
-                if let error { Section { Text(error).font(.footnote).foregroundStyle(.orange).accessibilityIdentifier("verification-input-error") } }
+                .listRowBackground(MeasureStyle.panel)
             }
+            .measureScreen()
             .accessibilityIdentifier("interior-verification-editor")
             .navigationTitle("Measured dimensions")
             .navigationBarTitleDisplayMode(.inline)
@@ -251,6 +322,7 @@ private struct InteriorVerificationEditor: View {
                 }
             }
         }
+        .tint(MeasureStyle.accent)
     }
 
     private func lengthField(_ title: String, draft: Binding<InteriorVerificationLengthDraft>, identifier: String) -> some View {
@@ -258,6 +330,7 @@ private struct InteriorVerificationEditor: View {
             Text("\(title) (\(unit.symbol))").font(.subheadline)
             TextField("Optional", text: Binding(get: { draft.wrappedValue.text }, set: { draft.wrappedValue.setText($0) }))
                 .keyboardType(.decimalPad)
+                .monospacedDigit()
                 .focused($focusedField, equals: identifier)
                 .accessibilityLabel("\(title) in \(unit.title.lowercased())")
                 .accessibilityIdentifier(identifier)
@@ -313,31 +386,35 @@ private struct InteriorPhysicalFitEditor: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section {
-                    Picker("Physical fit", selection: $status) {
-                        ForEach(InteriorFitStatus.allCases, id: \.self) { Text($0.title).tag($0) }
+                Group {
+                    Section {
+                        Picker("Physical fit", selection: $status) {
+                            ForEach(InteriorFitStatus.allCases, id: \.self) { Text($0.title).tag($0) }
+                        }
+                        .accessibilityIdentifier("verification-fit-status")
+                        TextField("What did you test?", text: $note, axis: .vertical)
+                            .lineLimit(2...5)
+                            .accessibilityIdentifier("verification-fit-note")
+                        DatePicker("Tested on", selection: $testedAt, displayedComponents: .date)
+                            .accessibilityIdentifier("verification-fit-date")
+                        Text("Only record a result after physically checking an insert or test outline made for the current outline, height and clearance settings.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        if wasStale {
+                            Text("The previous result needs a recheck. Apply records a new result for the current version.")
+                                .font(.caption).foregroundStyle(.orange)
+                        }
                     }
-                    .accessibilityIdentifier("verification-fit-status")
-                    TextField("What did you test?", text: $note, axis: .vertical)
-                        .lineLimit(2...5)
-                        .accessibilityIdentifier("verification-fit-note")
-                    DatePicker("Tested on", selection: $testedAt, displayedComponents: .date)
-                        .accessibilityIdentifier("verification-fit-date")
-                    Text("Only record a result after physically checking an insert or test outline made for the current outline, height and clearance settings.")
-                        .font(.caption).foregroundStyle(.secondary)
-                    if wasStale {
-                        Text("The previous result needs a recheck. Apply records a new result for the current version.")
-                            .font(.caption).foregroundStyle(.orange)
-                    }
-                }
-                if !fitHistory.isEmpty {
-                    Section("Earlier fit tests") {
-                        ForEach(fitHistory.indices, id: \.self) { index in
-                            priorFitRow(fitHistory[fitHistory.count - 1 - index])
+                    if !fitHistory.isEmpty {
+                        Section("Earlier fit tests") {
+                            ForEach(fitHistory.indices, id: \.self) { index in
+                                priorFitRow(fitHistory[fitHistory.count - 1 - index])
+                            }
                         }
                     }
                 }
+                .listRowBackground(MeasureStyle.panel)
             }
+            .measureScreen()
             .accessibilityIdentifier("verification-fit-editor")
             .navigationTitle("Physical fit")
             .navigationBarTitleDisplayMode(.inline)
@@ -353,28 +430,35 @@ private struct InteriorPhysicalFitEditor: View {
                 }
             }
         }
+        .tint(MeasureStyle.accent)
     }
 
     private func priorFitRow(_ prior: InteriorFitResult) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(prior.status.title)
-                .font(.subheadline.weight(.semibold))
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(prior.status.title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(prior.status == .fits ? MeasureStyle.accent : prior.status == .notTested ? .secondary : .orange)
+                Spacer(minLength: 0)
+                if let date = prior.testedAt {
+                    Text(date.formatted(date: .abbreviated, time: .omitted))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
             if let snapshot = prior.snapshot {
                 let side = preferences.units.preciseLength(millimeters: snapshot.sideClearanceMM)
                 let top = preferences.units.preciseLength(millimeters: snapshot.topClearanceMM)
                 let height = preferences.units.preciseLength(millimeters: snapshot.heightMM)
                 Text("\(side) side · \(top) top · \(height) height")
-                    .font(.caption)
+                    .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
             if let note = prior.note, !note.isEmpty {
                 Text(note).font(.caption)
             }
-            if let date = prior.testedAt {
-                Text(date.formatted(date: .abbreviated, time: .omitted))
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
         }
+        .padding(.vertical, 2)
     }
 }
+
