@@ -504,6 +504,7 @@ private struct ItemPackingEditorView: View {
     @State private var maxLayers: Int
     @State private var mayRotate: Bool
     @State private var editingDimensions = false
+    @State private var restoringOriginalDimensions = false
     @State private var editingInputUnit: MeasurementInputUnit = .inches
     @State private var lengthText = ""
     @State private var widthText = ""
@@ -533,7 +534,7 @@ private struct ItemPackingEditorView: View {
     }
 
     private func formattedValue(_ meters: Double, unit: MeasurementInputUnit) -> String {
-        String(format: "%.1f", locale: Locale(identifier: "en_US_POSIX"), unit.value(fromMeters: meters))
+        String(format: "%.15g", locale: Locale(identifier: "en_US_POSIX"), unit.value(fromMeters: meters))
     }
 
     var body: some View {
@@ -550,6 +551,15 @@ private struct ItemPackingEditorView: View {
                         "Original dimensions",
                         value: "\(preferences.units.length(meters: original.lengthMeters)) × \(preferences.units.length(meters: original.widthMeters)) × \(preferences.units.length(meters: original.heightMeters))"
                     )
+                    Button("Restore original dimensions") {
+                        let unit = activeInputUnit
+                        editingInputUnit = unit
+                        lengthText = formattedValue(original.lengthMeters, unit: unit)
+                        widthText = formattedValue(original.widthMeters, unit: unit)
+                        heightText = formattedValue(original.heightMeters, unit: unit)
+                        restoringOriginalDimensions = true
+                    }
+                    .accessibilityIdentifier("item-restore-original-dimensions")
                 }
                 Toggle("Edit dimensions", isOn: $editingDimensions)
                     .accessibilityIdentifier("item-edit-dimensions")
@@ -612,12 +622,21 @@ private struct ItemPackingEditorView: View {
     private func dimensionField(_ title: String, text: Binding<String>, identifier: String) -> some View {
         LabeledContent(title) {
             HStack(spacing: 6) {
-                TextField("0", text: text)
-                    .keyboardType(.decimalPad)
-                    .multilineTextAlignment(.trailing)
-                    .frame(minWidth: 80)
-                    .accessibilityLabel("\(title) in \(activeInputUnit.title.lowercased())")
-                    .accessibilityIdentifier(identifier)
+                TextField(
+                    "0",
+                    text: Binding(
+                        get: { text.wrappedValue },
+                        set: {
+                            text.wrappedValue = $0
+                            restoringOriginalDimensions = false
+                        }
+                    )
+                )
+                .keyboardType(.decimalPad)
+                .multilineTextAlignment(.trailing)
+                .frame(minWidth: 80)
+                .accessibilityLabel("\(title) in \(activeInputUnit.title.lowercased())")
+                .accessibilityIdentifier(identifier)
                 Text(activeInputUnit.symbol)
                     .foregroundStyle(.secondary)
             }
@@ -628,7 +647,7 @@ private struct ItemPackingEditorView: View {
         var editedLength: Double?
         var editedWidth: Double?
         var editedHeight: Double?
-        if editingDimensions {
+        if editingDimensions && !restoringOriginalDimensions {
             let trimmedL = lengthText.trimmingCharacters(in: .whitespacesAndNewlines)
             let trimmedW = widthText.trimmingCharacters(in: .whitespacesAndNewlines)
             let trimmedH = heightText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -658,7 +677,8 @@ private struct ItemPackingEditorView: View {
             orientationPolicy: mayRotate ? .mayRotate : .keepUpright,
             lengthMeters: editedLength,
             widthMeters: editedWidth,
-            heightMeters: editedHeight
+            heightMeters: editedHeight,
+            restoreOriginalDimensions: restoringOriginalDimensions
         ) {
             dismiss()
         } else {

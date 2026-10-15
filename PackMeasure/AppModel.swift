@@ -85,7 +85,8 @@ final class AppModel {
         orientationPolicy: ItemOrientationPolicy,
         lengthMeters: Double? = nil,
         widthMeters: Double? = nil,
-        heightMeters: Double? = nil
+        heightMeters: Double? = nil,
+        restoreOriginalDimensions: Bool = false
     ) -> Bool {
         guard loadIfNeeded() else { return false }
         guard let index = items.firstIndex(where: { $0.id == id }) else {
@@ -93,7 +94,12 @@ final class AppModel {
         }
 
         var next = items
-        if lengthMeters != nil || widthMeters != nil || heightMeters != nil {
+        if restoreOriginalDimensions, let original = next[index].originalDimensions {
+            next[index].lengthMeters = original.lengthMeters
+            next[index].widthMeters = original.widthMeters
+            next[index].heightMeters = original.heightMeters
+            next[index].originalDimensions = nil
+        } else if lengthMeters != nil || widthMeters != nil || heightMeters != nil {
             let maxDimensionMeters = ManualEntryDraft.maximumDimensionInches * 0.0254
             guard let lengthMeters, let widthMeters, let heightMeters,
                   lengthMeters.isFinite, widthMeters.isFinite, heightMeters.isFinite,
@@ -112,17 +118,22 @@ final class AppModel {
                    abs(original.lengthMeters - lengthMeters) <= 0.0001,
                    abs(original.widthMeters - widthMeters) <= 0.0001,
                    abs(original.heightMeters - heightMeters) <= 0.0001 {
+                    next[index].lengthMeters = original.lengthMeters
+                    next[index].widthMeters = original.widthMeters
+                    next[index].heightMeters = original.heightMeters
                     next[index].originalDimensions = nil
-                } else if next[index].originalDimensions == nil {
-                    next[index].originalDimensions = OriginalItemDimensions(
-                        lengthMeters: current.lengthMeters,
-                        widthMeters: current.widthMeters,
-                        heightMeters: current.heightMeters
-                    )
+                } else {
+                    if next[index].originalDimensions == nil {
+                        next[index].originalDimensions = OriginalItemDimensions(
+                            lengthMeters: current.lengthMeters,
+                            widthMeters: current.widthMeters,
+                            heightMeters: current.heightMeters
+                        )
+                    }
+                    next[index].lengthMeters = lengthMeters
+                    next[index].widthMeters = widthMeters
+                    next[index].heightMeters = heightMeters
                 }
-                next[index].lengthMeters = lengthMeters
-                next[index].widthMeters = widthMeters
-                next[index].heightMeters = heightMeters
             }
         }
         next[index].name = normalizedName(name)

@@ -509,6 +509,20 @@ struct AppModelInventoryTests {
             heightMeters: 0.9
         ))
         #expect(model.items.first?.lengthMeters == 1.30)
+
+        // Restoring original dimensions clears originalDimensions and restores scan agreement copy.
+        #expect(model.updateItem(
+            id: id,
+            name: "Dresser",
+            quantity: 1,
+            stackability: .notStackable,
+            orientationPolicy: .keepUpright,
+            restoreOriginalDimensions: true
+        ))
+        let restored = try #require(model.items.first)
+        #expect(restored.lengthMeters == 1.2)
+        #expect(restored.originalDimensions == nil)
+        #expect(SavedMeasurementCopy.qualitySummary(for: restored) == "3-angle agreement — approximate; verify tight clearances")
     }
 
     @Test func shareTextIncludesSummaryVehicleAndItemsInSelectedUnits() throws {
