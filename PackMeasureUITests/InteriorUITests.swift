@@ -90,6 +90,67 @@ final class InteriorUITests: XCTestCase {
         screenshot(app,"zoomed-exact-corner")
         app.buttons["Undo"].tap();XCTAssertTrue(app.staticTexts["0 corners"].exists)
     }
+    @MainActor func testCloseAndSwipeDismissalGuardOneAndTwoPlacedCorners() {
+        let app=XCUIApplication();app.launchArguments=["interior","sheet"];app.launch()
+        let picker=app.descendants(matching:.any).matching(identifier:"interior-frozen-photo").firstMatch
+        XCTAssertTrue(picker.waitForExistence(timeout:5))
+        let discard=app.buttons["discard-interior-scan"].firstMatch
+        let keepEditing=app.buttons["keep-editing-interior-scan"].firstMatch
+
+        tapImage(app,picker,0.2,0.2)
+        XCTAssertTrue(app.staticTexts["1 corners"].exists)
+        swipeDownSheet(app)
+        XCTAssertFalse(app.staticTexts["interior-scanner-closed"].exists)
+        XCTAssertTrue(app.staticTexts["1 corners"].exists)
+
+        app.buttons["close-interior-scanner"].tap()
+        XCTAssertTrue(discard.waitForExistence(timeout:3))
+        keepEditing.tap()
+        XCTAssertTrue(app.staticTexts["1 corners"].exists)
+
+        tapImage(app,picker,0.8,0.2)
+        XCTAssertTrue(app.staticTexts["2 corners"].exists)
+        swipeDownSheet(app)
+        XCTAssertFalse(app.staticTexts["interior-scanner-closed"].exists)
+        XCTAssertTrue(app.staticTexts["2 corners"].exists)
+
+        app.buttons["close-interior-scanner"].tap()
+        XCTAssertTrue(discard.waitForExistence(timeout:3))
+        keepEditing.tap()
+        XCTAssertTrue(app.staticTexts["2 corners"].exists)
+
+        app.buttons["Undo"].tap()
+        app.buttons["Undo"].tap()
+        XCTAssertTrue(app.staticTexts["0 corners"].exists)
+        swipeDownSheet(app)
+        XCTAssertTrue(app.staticTexts["interior-scanner-closed"].waitForExistence(timeout:3))
+
+        app.buttons["reopen-interior-scanner"].tap()
+        XCTAssertTrue(picker.waitForExistence(timeout:5))
+        tapImage(app,picker,0.2,0.2)
+        XCTAssertTrue(app.staticTexts["1 corners"].exists)
+        app.buttons["close-interior-scanner"].tap()
+        XCTAssertTrue(discard.waitForExistence(timeout:3))
+        discard.tap()
+        XCTAssertTrue(app.staticTexts["interior-scanner-closed"].waitForExistence(timeout:3))
+
+        app.buttons["reopen-interior-scanner"].tap()
+        XCTAssertTrue(picker.waitForExistence(timeout:5))
+        tapImage(app,picker,0.2,0.2)
+        tapImage(app,picker,0.8,0.2)
+        XCTAssertTrue(app.staticTexts["2 corners"].exists)
+        app.buttons["close-interior-scanner"].tap()
+        XCTAssertTrue(discard.waitForExistence(timeout:3))
+        discard.tap()
+        XCTAssertTrue(app.staticTexts["interior-scanner-closed"].waitForExistence(timeout:3))
+    }
+    @MainActor private func swipeDownSheet(_ app:XCUIApplication) {
+        let navBar=app.navigationBars["Inside outline"]
+        XCTAssertTrue(navBar.waitForExistence(timeout:3))
+        let start=navBar.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.5))
+        let end=app.coordinate(withNormalizedOffset:CGVector(dx:0.5,dy:0.95))
+        start.press(forDuration:0.05,thenDragTo:end)
+    }
     @MainActor private func enterHeight(_ app:XCUIApplication,_ value:String) {
         let b=app.buttons["enter-interior-height"];XCTAssertTrue(b.waitForExistence(timeout:3));b.tap()
         let inches=app.buttons["Inches"];XCTAssertTrue(inches.waitForExistence(timeout:3));inches.tap()

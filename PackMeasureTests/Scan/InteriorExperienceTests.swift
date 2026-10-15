@@ -134,4 +134,21 @@ struct InteriorExperienceTests {
         manualState.undo()
         #expect(manualState.loops == world && !manualState.pinned)
     }
+    @Test func partialManualOutlineMarksCaptureAsInProgressAtOneAndTwoPoints() {
+        let state = InteriorScanState(); state.ready = true; state.useManual(); state.freezeView()
+        state.receivePhoto(photo(generation: state.generation))
+        #expect(!state.hasOutline && !state.hasInProgressCapture && !state.canFinish)
+
+        state.placePhotoPoint(CGPoint(x: 0.2, y: 0.2))
+        #expect(state.loops[0].count == 1 && state.hasOutline && state.hasInProgressCapture && !state.canFinish)
+
+        state.placePhotoPoint(CGPoint(x: 0.8, y: 0.2))
+        #expect(state.loops[0].count == 2 && state.hasOutline && state.hasInProgressCapture && !state.canFinish)
+
+        state.undo()
+        #expect(state.loops[0].count == 1 && state.hasOutline && state.hasInProgressCapture && !state.canFinish)
+
+        state.undo()
+        #expect(state.loops[0].isEmpty && !state.hasOutline && !state.hasInProgressCapture && !state.canFinish)
+    }
 }

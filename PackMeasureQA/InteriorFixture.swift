@@ -2,10 +2,11 @@ import SwiftUI
 import simd
 
 struct InteriorFixture: View {
-    @State private var state: InteriorScanState
+    @State private var state = Self.makeState()
     @State private var saved: InteriorMeasurement?
+    @State private var showingScanner = true
     private let store = InteriorStore(url: URL.documentsDirectory.appending(path: "fixture-interiors.json"))
-    init() {
+    private static func makeState() -> InteriorScanState {
         let s = InteriorScanState(); s.ready = true; s.manualPlacement = true
         var pose = simd_float4x4(simd_quatf(angle: -.pi/2, axis: [1,0,0]));pose.columns.3=[0,1,0,1]
         var confidence=[UInt8](repeating:2,count:10000)
@@ -28,7 +29,7 @@ struct InteriorFixture: View {
             s.pinned = true
             if ProcessInfo.processInfo.arguments.contains("automatic-outline") {s.pinned=false;s.automatic=true;s.preview=s.loops;s.stablePreviewFrames=3;s.previewTimestamp=CACurrentMediaTime()}
         }
-        _state=State(initialValue:s)
+        return s
     }
     var body: some View {
         Group {
@@ -36,12 +37,30 @@ struct InteriorFixture: View {
                 NavigationStack {InteriorReviewView(record:record,onSave:{_ in})}
             } else if let saved {
                 Text("Saved \(saved.contours.count) outlines · \(saved.contours[0].count) corners · \(saved.heightMM.formatted()) mm").accessibilityIdentifier("saved-interior")
-            } else {
-                InteriorScannerView(state:state,onSave:{record in try store.save([record]);saved=record})
-                    .task {
-                        while state.automatic {state.previewTimestamp=CACurrentMediaTime();try? await Task.sleep(for:.milliseconds(150))}
+            } else if ProcessInfo.processInfo.arguments.contains("sheet") {
+                VStack(spacing: 16) {
+                    if !showingScanner {
+                        Text("Interior scanner closed").accessibilityIdentifier("interior-scanner-closed")
+                        Button("Reopen interior scanner") {
+                            state = Self.makeState()
+                            showingScanner = true
+                        }
+                        .accessibilityIdentifier("reopen-interior-scanner")
                     }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .sheet(isPresented: $showingScanner) {
+                    scanner
+                }
+            } else {
+                scanner
             }
         }
+    }
+    private var scanner: some View {
+        InteriorScannerView(state:state,onSave:{record in try store.save([record]);saved=record})
+            .task {
+                while state.automatic {state.previewTimestamp=CACurrentMediaTime();try? await Task.sleep(for:.milliseconds(150))}
+            }
     }
 }

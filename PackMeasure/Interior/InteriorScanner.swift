@@ -130,7 +130,8 @@ final class InteriorScanState {
         if manualPlacement { return "Freeze a clear view to tap corners, or aim the cross and add them one at a time." }
         return "Point down at the clear inside base. Keep the drawer or cabinet still."
     }
-    var hasOutline: Bool { (loops.first?.count ?? 0) >= 3 }
+    var hasOutline: Bool { loops.contains { !$0.isEmpty } }
+    var hasInProgressCapture: Bool { result != nil || hasOutline || sweepSeed != nil }
     var canFinish: Bool { (loops.last?.count ?? 0) >= 3 && !isCapturingPoint && !automatic }
     func freezeView() {
         guard ready, !automatic, result == nil, !isCapturingPoint else { return }
