@@ -184,6 +184,7 @@ struct InteriorVerification: Codable, Equatable, Sendable {
     let source: String
     let measuredAt: Date
     var fit: InteriorFitResult?
+    var fitHistory: [InteriorFitResult]
 
     /// Fit/planning-only notes do not establish when a ruler measurement occurred.
     func measurementEntryDate(now: Date = .now) -> Date {
@@ -194,7 +195,7 @@ struct InteriorVerification: Codable, Equatable, Sendable {
     init(alongFirstEdgeMM: Double? = nil, acrossFirstEdgeMM: Double? = nil,
          usableHeightMM: Double? = nil, intendedInsertHeightMM: Double? = nil,
          source: String = "Physical measurement", measuredAt: Date = .now,
-         fit: InteriorFitResult? = nil) throws {
+         fit: InteriorFitResult? = nil, fitHistory: [InteriorFitResult] = []) throws {
         let lengths = [alongFirstEdgeMM, acrossFirstEdgeMM, usableHeightMM, intendedInsertHeightMM]
         guard lengths.compactMap({ $0 }).allSatisfy({ $0.isFinite && $0 > 0 }) else {
             throw InteriorVerificationError.invalidLength
@@ -211,11 +212,12 @@ struct InteriorVerification: Codable, Equatable, Sendable {
         self.source = source
         self.measuredAt = measuredAt
         self.fit = fit
+        self.fitHistory = fitHistory.filter { $0.status != .notTested }
     }
 
     private enum CodingKeys: String, CodingKey {
         case alongFirstEdgeMM, acrossFirstEdgeMM, usableHeightMM, intendedInsertHeightMM
-        case source, measuredAt, fit
+        case source, measuredAt, fit, fitHistory
     }
 
     init(from decoder: Decoder) throws {
@@ -226,7 +228,22 @@ struct InteriorVerification: Codable, Equatable, Sendable {
                       intendedInsertHeightMM: values.decodeIfPresent(Double.self, forKey: .intendedInsertHeightMM),
                       source: values.decodeIfPresent(String.self, forKey: .source) ?? "Physical measurement",
                       measuredAt: values.decode(Date.self, forKey: .measuredAt),
-                      fit: try? values.decodeIfPresent(InteriorFitResult.self, forKey: .fit))
+                      fit: try? values.decodeIfPresent(InteriorFitResult.self, forKey: .fit),
+                      fitHistory: (try? values.decodeIfPresent([InteriorFitResult].self, forKey: .fitHistory)) ?? [])
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(alongFirstEdgeMM, forKey: .alongFirstEdgeMM)
+        try container.encodeIfPresent(acrossFirstEdgeMM, forKey: .acrossFirstEdgeMM)
+        try container.encodeIfPresent(usableHeightMM, forKey: .usableHeightMM)
+        try container.encodeIfPresent(intendedInsertHeightMM, forKey: .intendedInsertHeightMM)
+        try container.encode(source, forKey: .source)
+        try container.encode(measuredAt, forKey: .measuredAt)
+        try container.encodeIfPresent(fit, forKey: .fit)
+        if !fitHistory.isEmpty {
+            try container.encode(fitHistory, forKey: .fitHistory)
+        }
     }
 }
 
@@ -248,6 +265,7 @@ extension InteriorMeasurement {
         preserveOriginalGeometry()
         var new = new
         if new.fit == nil { new.fit = verification?.fit }
+        if new.fitHistory.isEmpty { new.fitHistory = verification?.fitHistory ?? [] }
         verification = new
     }
 
@@ -273,10 +291,20 @@ extension InteriorMeasurement {
         // No physical dimensions are inferred when recording a fit alone.
         guard var values = verification ?? (try? InteriorVerification()) else { return }
         let trimmedNote = note?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let currentSnapshot = status == .notTested ? nil : fitSnapshot
+        if let previous = values.fit,
+           previous.status != .notTested,
+           status != .notTested,
+           previous.snapshot != currentSnapshot || previous.status != status {
+            values.fitHistory.append(previous)
+            if values.fitHistory.count > 10 {
+                values.fitHistory.removeFirst(values.fitHistory.count - 10)
+            }
+        }
         values.fit = InteriorFitResult(status: status,
                                        note: trimmedNote?.isEmpty == false ? trimmedNote : nil,
                                        testedAt: status == .notTested ? nil : date,
-                                       snapshot: status == .notTested ? nil : fitSnapshot)
+                                       snapshot: currentSnapshot)
         verification = values
     }
 }

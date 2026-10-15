@@ -132,8 +132,9 @@ struct InteriorVerificationCard: View {
                     .font(.subheadline.weight(.semibold))
                     .accessibilityIdentifier("verification-fit-state")
                 if let date = fit.testedAt {
-                    Text(date.formatted(date: .abbreviated, time: .omitted))
+                    Text(fitDateSummary(date))
                         .font(.caption).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("verification-fit-history")
                 }
                 if let note = fit.note, !note.isEmpty { Text(note).font(.caption) }
                 if record.fitIsStale {
@@ -147,6 +148,14 @@ struct InteriorVerificationCard: View {
             Text("A recorded fit applies only to the version you physically tested; it does not verify LiDAR accuracy.")
                 .font(.caption).foregroundStyle(.secondary)
         }
+    }
+
+    private func fitDateSummary(_ date: Date) -> String {
+        let base = date.formatted(date: .abbreviated, time: .omitted)
+        let historyCount = record.verification?.fitHistory.count ?? 0
+        guard historyCount > 0 else { return base }
+        let noun = historyCount == 1 ? "test" : "tests"
+        return "\(base) · \(historyCount) earlier \(noun)"
     }
 }
 
@@ -273,7 +282,9 @@ private struct InteriorPhysicalFitEditor: View {
     @State private var note: String
     @State private var testedAt: Date = .now
     let wasStale: Bool
+    let fitHistory: [InteriorFitResult]
     @Environment(\.dismiss) private var dismiss
+    @Environment(AppPreferences.self) private var preferences
 
     init(record: InteriorMeasurement, onApply: @escaping (InteriorFitStatus, String?, Date) -> Void) {
         self.onApply = onApply
@@ -282,6 +293,7 @@ private struct InteriorPhysicalFitEditor: View {
         _note = State(initialValue: record.fitIsStale ? "" : record.verification?.fit?.note ?? "")
         _testedAt = State(initialValue: record.fitIsStale ? .now : record.verification?.fit?.testedAt ?? .now)
         wasStale = record.fitIsStale
+        fitHistory = record.verification?.fitHistory ?? []
     }
 
     var body: some View {
@@ -304,6 +316,13 @@ private struct InteriorPhysicalFitEditor: View {
                             .font(.caption).foregroundStyle(.orange)
                     }
                 }
+                if !fitHistory.isEmpty {
+                    Section("Earlier fit tests") {
+                        ForEach(fitHistory.indices, id: \.self) { index in
+                            priorFitRow(fitHistory[fitHistory.count - 1 - index])
+                        }
+                    }
+                }
             }
             .accessibilityIdentifier("verification-fit-editor")
             .navigationTitle("Physical fit")
@@ -318,6 +337,29 @@ private struct InteriorPhysicalFitEditor: View {
                         dismiss()
                     }.accessibilityIdentifier("apply-interior-fit")
                 }
+            }
+        }
+    }
+
+    private func priorFitRow(_ prior: InteriorFitResult) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(prior.status.title)
+                .font(.subheadline.weight(.semibold))
+            if let snapshot = prior.snapshot {
+                let side = preferences.units.preciseLength(millimeters: snapshot.sideClearanceMM)
+                let top = preferences.units.preciseLength(millimeters: snapshot.topClearanceMM)
+                let height = preferences.units.preciseLength(millimeters: snapshot.heightMM)
+                Text("\(side) side · \(top) top · \(height) height")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            if let note = prior.note, !note.isEmpty {
+                Text(note).font(.caption)
+            }
+            if let date = prior.testedAt {
+                Text(date.formatted(date: .abbreviated, time: .omitted))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
             }
         }
     }

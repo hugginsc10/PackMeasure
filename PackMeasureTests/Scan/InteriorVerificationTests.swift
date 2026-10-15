@@ -247,4 +247,32 @@ struct InteriorVerificationTests {
         #expect(restored.verification?.fit?.snapshot != nil)
         #expect(restored.fitIsStale && restored.currentFitStatus == .notTested)
     }
+
+    @Test func multiAttemptFitHistoryPreservesSupersededTestsAndUpdatesSameTestNoteInPlace() throws {
+        var value = record
+        value.recordFit(status: .tooTight, note: "Coupon 1 at 2.5 mm side clearance", at: date)
+        #expect(value.verification?.fitHistory.isEmpty == true)
+        // Updating the note on the same geometry and status updates in place without duplicating history.
+        value.recordFit(status: .tooTight, note: "Coupon 1 at 2.5 mm clearance (front binds)", at: date.addingTimeInterval(30))
+        #expect(value.verification?.fitHistory.isEmpty == true)
+        #expect(value.verification?.fit?.note == "Coupon 1 at 2.5 mm clearance (front binds)")
+
+        // Adjusting side clearance and recording a second coupon archives Coupon 1 in fitHistory.
+        value.sideClearanceMM = 3.0
+        value.recordFit(status: .fits, note: "Coupon 2 at 3.0 mm clearance", at: date.addingTimeInterval(120))
+        let history = try #require(value.verification?.fitHistory)
+        #expect(history.count == 1)
+        #expect(history[0].status == .tooTight)
+        #expect(history[0].snapshot?.sideClearanceMM == 2.5)
+        #expect(value.verification?.fit?.status == .fits)
+        #expect(value.verification?.fit?.snapshot?.sideClearanceMM == 3.0)
+
+        // Applying measured dimensions preserves both current fit and fitHistory.
+        value.applyVerification(try InteriorVerification(alongFirstEdgeMM: 399.5, source: "Caliper", measuredAt: date))
+        #expect(value.verification?.fitHistory.count == 1)
+        #expect(value.verification?.fit?.status == .fits)
+
+        let restored = try JSONDecoder().decode(InteriorMeasurement.self, from: JSONEncoder().encode(value))
+        #expect(restored.verification?.fitHistory == history)
+    }
 }

@@ -163,6 +163,19 @@ struct MeasuredRoom: Codable, Identifiable, Sendable {
     static func dimension(_ meters: Float) -> String {
         String(format: "%.2f m · %.1f ft", meters, meters * 3.28084)
     }
+
+    var reviewDiagnosticSummary: String {
+        let ceiling = ceilingHeight.map { String(format: "%.4f", locale: Locale(identifier: "en_US_POSIX"), $0.meters) } ?? "none"
+        return String(
+            format: "review_span_m=SIMD2<Float>(%.4f, %.4f) review_wall_height_m=%.4f review_ceiling_height_m=%@ review_shelf_count=%d",
+            locale: Locale(identifier: "en_US_POSIX"),
+            spanLength,
+            spanWidth,
+            wallHeight,
+            ceiling,
+            shelves?.count ?? 0
+        )
+    }
 }
 
 struct RoomScanStore {
