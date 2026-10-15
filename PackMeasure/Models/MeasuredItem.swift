@@ -1,5 +1,11 @@
 import Foundation
 
+struct OriginalItemDimensions: Codable, Hashable, Sendable {
+    var lengthMeters: Double
+    var widthMeters: Double
+    var heightMeters: Double
+}
+
 struct MeasuredItem: Identifiable, Codable, Hashable, Sendable {
     var id: UUID
     var name: String
@@ -13,6 +19,7 @@ struct MeasuredItem: Identifiable, Codable, Hashable, Sendable {
     var capturedAt: Date
     var stackability: ItemStackability
     var orientationPolicy: ItemOrientationPolicy
+    var originalDimensions: OriginalItemDimensions?
 
     init(
         id: UUID = UUID(),
@@ -26,7 +33,8 @@ struct MeasuredItem: Identifiable, Codable, Hashable, Sendable {
         comparisonAgreementCount: Int? = nil,
         capturedAt: Date = .now,
         stackability: ItemStackability = .notStackable,
-        orientationPolicy: ItemOrientationPolicy = .keepUpright
+        orientationPolicy: ItemOrientationPolicy = .keepUpright,
+        originalDimensions: OriginalItemDimensions? = nil
     ) {
         self.id = id
         self.name = name
@@ -40,6 +48,7 @@ struct MeasuredItem: Identifiable, Codable, Hashable, Sendable {
         self.capturedAt = capturedAt
         self.stackability = stackability
         self.orientationPolicy = orientationPolicy
+        self.originalDimensions = originalDimensions
     }
 
     var footprintSquareFeet: Double {
@@ -82,6 +91,7 @@ struct MeasuredItem: Identifiable, Codable, Hashable, Sendable {
         case capturedAt
         case stackability
         case orientationPolicy
+        case originalDimensions
     }
 
     init(from decoder: Decoder) throws {
@@ -107,6 +117,10 @@ struct MeasuredItem: Identifiable, Codable, Hashable, Sendable {
             ItemOrientationPolicy.self,
             forKey: .orientationPolicy
         ) ?? .keepUpright
+        originalDimensions = try? container.decodeIfPresent(
+            OriginalItemDimensions.self,
+            forKey: .originalDimensions
+        )
     }
 
     func encode(to encoder: Encoder) throws {
@@ -126,6 +140,7 @@ struct MeasuredItem: Identifiable, Codable, Hashable, Sendable {
         try container.encode(capturedAt, forKey: .capturedAt)
         try container.encode(stackability, forKey: .stackability)
         try container.encode(orientationPolicy, forKey: .orientationPolicy)
+        try container.encodeIfPresent(originalDimensions, forKey: .originalDimensions)
     }
 }
 

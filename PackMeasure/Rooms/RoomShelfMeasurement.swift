@@ -32,6 +32,7 @@ struct RoomShelfMeasurement: Codable, Identifiable, Sendable {
     let id: UUID
     var name: String
     var wallID: UUID?
+    let usableWidth: Float?
     let depth: Float
     let heightAboveFloor: Float
     let clearanceAbove: Float?
@@ -43,11 +44,12 @@ struct RoomShelfMeasurement: Codable, Identifiable, Sendable {
     let referenceToBack: Float?
     let referenceToFront: Float?
 
-    init(id: UUID = UUID(), name: String, wallID: UUID? = nil, depth: Float,
+    init(id: UUID = UUID(), name: String, wallID: UUID? = nil, usableWidth: Float? = nil, depth: Float,
          heightAboveFloor: Float, clearanceAbove: Float?, source: Source,
          measuredAt: Date = .now, capturedPoints: [SIMD3<Float>]? = nil, selectedTop: SIMD3<Float>? = nil,
          referenceToBack: Float? = nil, referenceToFront: Float? = nil, pointMatches: [ShelfPointMatch]? = nil) throws {
         guard depth.isFinite, depth > 0, depth <= 10,
+              usableWidth.map({ $0.isFinite && $0 > 0 && $0 <= 20 }) ?? true,
               heightAboveFloor.isFinite, (0...20).contains(heightAboveFloor),
               clearanceAbove.map({ $0.isFinite && $0 > 0 && $0 <= 20 }) ?? true else {
             throw RoomDimensionError.invalidShelf
@@ -67,10 +69,11 @@ struct RoomShelfMeasurement: Codable, Identifiable, Sendable {
             }
             let geometry = try ShelfGeometry(points: capturedPoints, selectedTop: selectedTop)
             guard abs(depth - geometry.depth) < 0.001, abs(heightAboveFloor - geometry.height) < 0.001,
+                  usableWidth.map({ abs($0 - geometry.width) < 0.001 }) ?? true,
                   (clearanceAbove == nil && geometry.clearance == nil)
                     || (clearanceAbove != nil && geometry.clearance != nil && abs(clearanceAbove! - geometry.clearance!) < 0.001) else { throw RoomDimensionError.invalidShelf }
         }
-        self.id = id; self.name = name; self.wallID = wallID
+        self.id = id; self.name = name; self.wallID = wallID; self.usableWidth = usableWidth
         self.depth = depth; self.heightAboveFloor = heightAboveFloor; self.clearanceAbove = clearanceAbove
         self.source = source; self.measuredAt = measuredAt; self.capturedPoints = capturedPoints
         self.selectedTop = selectedTop
@@ -107,7 +110,8 @@ struct RoomShelfMeasurement: Codable, Identifiable, Sendable {
     }
 
     private func shareText(format: (Float) -> String) -> String {
-        var result = "\(name): depth \(format(depth)); top above floor \(format(heightAboveFloor))"
+        let widthPrefix = usableWidth.map { "width \(format($0)); " } ?? ""
+        var result = "\(name): \(widthPrefix)depth \(format(depth)); top above floor \(format(heightAboveFloor))"
         result += clearanceAbove.map { "; clear space above \(format($0))" } ?? "; clear space above not measured"
         result += " (\(sourceLabel))"
         if let referenceToBack, let referenceToFront, source == .difference {
@@ -121,6 +125,7 @@ struct RoomShelfMeasurement: Codable, Identifiable, Sendable {
 /// shelf's back edge, front/top edge, underside above. No saved-room AR origin
 /// or changing camera-to-object range is reused in this calculation.
 struct ShelfGeometry {
+    let width: Float
     let depth: Float
     let height: Float
     let clearance: Float?
@@ -131,7 +136,9 @@ struct ShelfGeometry {
         }
         let floor = points[0], a = points[1], b = points[2], front = points[3]
         let edge = SIMD2<Float>(b.x - a.x, b.z - a.z)
-        guard simd_length(edge) >= 0.2 else { throw RoomDimensionError.wallReference }
+        let edgeLength = simd_length(edge)
+        guard edgeLength >= 0.2, edgeLength <= 20 else { throw RoomDimensionError.wallReference }
+        width = edgeLength
         guard abs(a.y - b.y) <= 0.03, abs(front.y - (a.y + b.y) / 2) <= 0.03 else {
             throw RoomDimensionError.unevenShelf
         }
@@ -144,7 +151,7 @@ struct ShelfGeometry {
             let along = simd_dot(delta, axis)
             let frontDepth = simd_dot(SIMD2<Float>(front.x - a.x, front.z - a.z), normal)
             let seedDepth = simd_dot(delta, normal) * (frontDepth >= 0 ? 1 : -1)
-            guard along >= -0.03, along <= simd_length(edge) + 0.03,
+            guard along >= -0.03, along <= edgeLength + 0.03,
                   seedDepth >= -0.03, seedDepth <= depth + 0.03 else { throw RoomDimensionError.outsideSelection }
         }
         height = front.y - floor.y

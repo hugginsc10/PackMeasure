@@ -65,11 +65,14 @@ struct InteriorSVGDocument: FileDocument {
 
 struct InteriorSVGTransfer: Transferable {
     let svg: String
+    var filename: String = "interior-insert.svg"
     static var transferRepresentation: some TransferRepresentation {
         DataRepresentation(exportedContentType: .svg) { value in
             Data(value.svg.utf8)
         }
-        .suggestedFileName("interior-insert.svg")
+        .suggestedFileName { value in
+            value.filename
+        }
     }
 }
 
@@ -117,7 +120,7 @@ struct InteriorReviewView: View {
                 if editing != nil { Text("Finish editing to change units.").font(.caption).foregroundStyle(.secondary) }
                 InteriorOutlineView(contours: record.contours, inset: try? output.get())
                     .frame(height: 220)
-                Text("Gray: current boundary · Teal: insert footprint · Blank cutouts: obstacles")
+                Text("Gray: current boundary · Orange: first edge (1 -> 2) · Teal: insert footprint")
                     .font(.caption).foregroundStyle(.secondary)
                 if let outer = record.contours.first,
                    let minX = outer.map(\.x).min(), let maxX = outer.map(\.x).max(),
@@ -207,7 +210,10 @@ struct InteriorReviewView: View {
                 }
                 .disabled((try? output.get()) == nil)
                 if let svg = try? record.svg() {
-                    ShareLink(item: InteriorSVGTransfer(svg: svg), preview: SharePreview("Interior insert SVG")) {
+                    ShareLink(
+                        item: InteriorSVGTransfer(svg: svg, filename: "\(record.exportBasename).svg"),
+                        preview: SharePreview(record.exportBasename)
+                    ) {
                         Label("Share SVG", systemImage: "square.and.arrow.up")
                     }
                 }
@@ -232,7 +238,7 @@ struct InteriorReviewView: View {
                 Button("Done") { editing = nil }
             }
         }
-        .fileExporter(isPresented: $exporting, document: document, contentType: .svg, defaultFilename: "interior-insert") { result in
+        .fileExporter(isPresented: $exporting, document: document, contentType: .svg, defaultFilename: record.exportBasename) { result in
             switch result {
             case .success: message = "SVG exported. Verify its scale in CAD."
             case .failure(let error): message = error.localizedDescription
@@ -269,6 +275,12 @@ struct InteriorOutlineView: View {
             context.stroke(path(contours), with: .color(.gray), lineWidth: 2)
             if let inset { context.fill(path(inset), with: .color(.teal.opacity(0.35)), style: FillStyle(eoFill: true)) }
             if let outer = contours.first {
+                if outer.count >= 2 {
+                    var firstEdge = Path()
+                    firstEdge.move(to: point(outer[0]))
+                    firstEdge.addLine(to: point(outer[1]))
+                    context.stroke(firstEdge, with: .color(.orange), lineWidth: 3)
+                }
                 let stride = outer.count <= 12 ? 1 : max(2, outer.count / 8)
                 for (i, p) in outer.enumerated() where i <= 1 || i % stride == 0 {
                     let center = point(p)

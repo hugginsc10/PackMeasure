@@ -127,6 +127,23 @@ final class RoomShelfMeasurementTests: XCTestCase {
         XCTAssertTrue(shelf.shareText.contains("Depth calculation:"))
         XCTAssertTrue(shelf.sourceLabel.contains("entered"))
     }
+    func testShelfGeometryProvidesBackEdgeWidthAndShelfMeasurementPersistsUsableWidth() throws {
+        let geometry = try ShelfGeometry(points: points, selectedTop: seed)
+        XCTAssertEqual(geometry.width, 1.0, accuracy: 0.0001)
+        let shelf = try RoomShelfMeasurement(
+            name: "Wide Shelf",
+            usableWidth: 1.0,
+            depth: 0.4,
+            heightAboveFloor: 1.2,
+            clearanceAbove: 0.5,
+            source: .lidar
+        )
+        XCTAssertEqual(shelf.usableWidth, 1.0)
+        XCTAssertTrue(shelf.shareText(units: .centimeters).contains("width 100.00 cm; depth 40.00 cm"))
+        let decoded = try JSONDecoder().decode(RoomShelfMeasurement.self, from: JSONEncoder().encode(shelf))
+        XCTAssertEqual(decoded.usableWidth, 1.0)
+        XCTAssertThrowsError(try RoomShelfMeasurement(name: "ZeroWidth", usableWidth: 0, depth: 0.4, heightAboveFloor: 1.2, clearanceAbove: nil, source: .manual))
+    }
 }
 
 @MainActor final class ShelfScanStateTests: XCTestCase {

@@ -449,6 +449,85 @@ struct AppModelInventoryTests {
         #expect(volume.constraint == .insufficientVolume(requiredCubicFeet:100, availableCubicFeet:50))
     }
 
+    @Test func editingSavedItemDimensionsPreservesOriginalScanAndUpdatesQualitySummary() throws {
+        let harness = try InventoryHarness()
+        let model = AppModel(store: harness.store)
+        model.addItem(
+            name: "Dresser",
+            estimate: .init(
+                lengthMeters: 1.2,
+                widthMeters: 0.5,
+                heightMeters: 0.9,
+                confidence: .high,
+                sampleCount: 1200,
+                frameCount: 6,
+                comparisonAngleCount: 3,
+                comparisonAgreementCount: 3
+            ),
+            quantity: 1
+        )
+        let id = try #require(model.items.first?.id)
+        #expect(model.items.first?.originalDimensions == nil)
+
+        #expect(model.updateItem(
+            id: id,
+            name: "Dresser",
+            quantity: 1,
+            stackability: .notStackable,
+            orientationPolicy: .keepUpright,
+            lengthMeters: 1.25,
+            widthMeters: 0.52,
+            heightMeters: 0.91
+        ))
+        let firstEdit = try #require(model.items.first)
+        #expect(firstEdit.lengthMeters == 1.25)
+        #expect(firstEdit.originalDimensions == OriginalItemDimensions(lengthMeters: 1.2, widthMeters: 0.5, heightMeters: 0.9))
+        #expect(SavedMeasurementCopy.qualitySummary(for: firstEdit) == "Dimensions edited manually · original scan preserved")
+
+        // A second edit keeps the original scan dimensions rather than overwriting them with the first edit.
+        #expect(model.updateItem(
+            id: id,
+            name: "Dresser",
+            quantity: 1,
+            stackability: .notStackable,
+            orientationPolicy: .keepUpright,
+            lengthMeters: 1.30,
+            widthMeters: 0.55,
+            heightMeters: 0.92
+        ))
+        #expect(model.items.first?.originalDimensions == OriginalItemDimensions(lengthMeters: 1.2, widthMeters: 0.5, heightMeters: 0.9))
+
+        // Invalid dimensions are rejected without mutating saved state.
+        #expect(!model.updateItem(
+            id: id,
+            name: "Dresser",
+            quantity: 1,
+            stackability: .notStackable,
+            orientationPolicy: .keepUpright,
+            lengthMeters: -1,
+            widthMeters: 0.5,
+            heightMeters: 0.9
+        ))
+        #expect(model.items.first?.lengthMeters == 1.30)
+    }
+
+    @Test func shareTextIncludesSummaryVehicleAndItemsInSelectedUnits() throws {
+        let harness = try InventoryHarness()
+        let model = AppModel(store: harness.store)
+        model.addItem(
+            name: "Moving box",
+            estimate: .init(lengthMeters: 0.6, widthMeters: 0.4, heightMeters: 0.4, confidence: .high, sampleCount: 0, frameCount: 0),
+            quantity: 3,
+            stackability: .stackable(maxLayers: 3),
+            orientationPolicy: .mayRotate
+        )
+        let metricShare = model.shareText(units: .centimeters)
+        #expect(metricShare.contains("PackMeasure Moving Load"))
+        #expect(metricShare.contains("Saved pieces: 3 (1 entry)"))
+        #expect(metricShare.contains("Recommended vehicle: U-Haul cargo van"))
+        #expect(metricShare.contains("- Moving box ×3: 60.0 cm × 40.0 cm × 40.0 cm (stack 3 high, can rotate)"))
+    }
+
     private func meters(fromInches inches: Double) -> Double {
         inches / 39.370_078_740_157_48
     }

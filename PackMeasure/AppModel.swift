@@ -82,7 +82,10 @@ final class AppModel {
         name: String,
         quantity: Int,
         stackability: ItemStackability,
-        orientationPolicy: ItemOrientationPolicy
+        orientationPolicy: ItemOrientationPolicy,
+        lengthMeters: Double? = nil,
+        widthMeters: Double? = nil,
+        heightMeters: Double? = nil
     ) -> Bool {
         guard loadIfNeeded() else { return false }
         guard let index = items.firstIndex(where: { $0.id == id }) else {
@@ -90,6 +93,38 @@ final class AppModel {
         }
 
         var next = items
+        if lengthMeters != nil || widthMeters != nil || heightMeters != nil {
+            let maxDimensionMeters = ManualEntryDraft.maximumDimensionInches * 0.0254
+            guard let lengthMeters, let widthMeters, let heightMeters,
+                  lengthMeters.isFinite, widthMeters.isFinite, heightMeters.isFinite,
+                  lengthMeters > 0, widthMeters > 0, heightMeters > 0,
+                  lengthMeters <= maxDimensionMeters,
+                  widthMeters <= maxDimensionMeters,
+                  heightMeters <= maxDimensionMeters else {
+                return false
+            }
+            let current = next[index]
+            let changed = abs(current.lengthMeters - lengthMeters) > 0.0001
+                || abs(current.widthMeters - widthMeters) > 0.0001
+                || abs(current.heightMeters - heightMeters) > 0.0001
+            if changed {
+                if let original = next[index].originalDimensions,
+                   abs(original.lengthMeters - lengthMeters) <= 0.0001,
+                   abs(original.widthMeters - widthMeters) <= 0.0001,
+                   abs(original.heightMeters - heightMeters) <= 0.0001 {
+                    next[index].originalDimensions = nil
+                } else if next[index].originalDimensions == nil {
+                    next[index].originalDimensions = OriginalItemDimensions(
+                        lengthMeters: current.lengthMeters,
+                        widthMeters: current.widthMeters,
+                        heightMeters: current.heightMeters
+                    )
+                }
+                next[index].lengthMeters = lengthMeters
+                next[index].widthMeters = widthMeters
+                next[index].heightMeters = heightMeters
+            }
+        }
         next[index].name = normalizedName(name)
         next[index].quantity = max(1, quantity)
         next[index].stackability = stackability
@@ -143,6 +178,39 @@ final class AppModel {
 
     var ignoredPackingItemCount: Int {
         items.count - packingItems.count
+    }
+
+    func shareText(units: MeasurementUnits) -> String {
+        let summary = planningSummary
+        let recommendation = vehicleRecommendation
+        var lines = [
+            "PackMeasure Moving Load",
+            "Saved pieces: \(summary.pieceCount) (\(items.count) \(items.count == 1 ? "entry" : "entries"))",
+            "Load mix: \(loadMix.displayName)",
+            "Cargo floor needed: \(units.areaFromSquareFeet(summary.requiredFloorSquareFeet)) (unstacked \(units.areaFromSquareFeet(summary.rawFootprintSquareFeet)))",
+            "Cargo volume needed: \(units.volumeFromCubicFeet(summary.requiredCubicFeet))"
+        ]
+        if let vehicle = recommendation.vehicle {
+            lines.append("Recommended vehicle: \(vehicle.name)")
+        } else {
+            lines.append("Recommended vehicle: None of the listed profiles fit")
+        }
+        if !items.isEmpty {
+            lines.append("")
+            lines.append("Items:")
+            for item in items {
+                let dims = [item.lengthMeters, item.widthMeters, item.heightMeters]
+                    .map { units.length(meters: $0) }
+                    .joined(separator: " × ")
+                let stackText: String = switch item.stackability {
+                case .notStackable: "no stack"
+                case let .stackable(maxLayers): "stack \(maxLayers) high"
+                }
+                let orientText = item.orientationPolicy == .keepUpright ? "upright" : "can rotate"
+                lines.append("- \(item.name) ×\(item.quantity): \(dims) (\(stackText), \(orientText))")
+            }
+        }
+        return lines.joined(separator: "\n")
     }
 
     private func persist(_ next: [MeasuredItem]) -> Bool {

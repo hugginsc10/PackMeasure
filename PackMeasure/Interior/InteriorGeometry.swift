@@ -93,6 +93,25 @@ struct InteriorMeasurement: Identifiable, Codable, Equatable, Sendable {
         </svg>
         """
     }
+
+    var exportBasename: String {
+        let slug = name.lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+            .joined(separator: "-")
+        let base = slug.isEmpty ? "interior-insert" : slug
+        func mmTag(_ n: Double) -> String {
+            guard n.isFinite else { return "0" }
+            let rounded = (n * 10).rounded() / 10
+            if abs(rounded.rounded() - rounded) < 0.001 {
+                return "\(Int(rounded.rounded()))"
+            }
+            return String(format: "%.1f", locale: Locale(identifier: "en_US_POSIX"), rounded)
+                .replacingOccurrences(of: ".", with: "p")
+        }
+        let draftHeight = max(0, heightMM - topClearanceMM)
+        return "\(base)-clr\(mmTag(sideClearanceMM))mm-h\(mmTag(draftHeight))mm"
+    }
 }
 
 enum InteriorGeometryError: Error, LocalizedError {

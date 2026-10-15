@@ -416,6 +416,12 @@ struct RoomResultView<Header: View>: View {
                             ForEach(room.shelves ?? []) { shelf in
                                 VStack(alignment: .leading, spacing: 5) {
                                     Text(shelf.name).font(.headline)
+                                    if let wallID = shelf.wallID, let wallIndex = room.walls.firstIndex(where: { $0.id == wallID }) {
+                                        LabeledContent("Wall", value: "Wall \(wallIndex + 1)")
+                                    }
+                                    if let width = shelf.usableWidth {
+                                        LabeledContent("Usable width", value: RoomShelfMeasurement.dimension(width, units: preferences.units))
+                                    }
                                     LabeledContent("Depth", value: RoomShelfMeasurement.dimension(shelf.depth, units: preferences.units))
                                     LabeledContent("Top above floor", value: RoomShelfMeasurement.dimension(shelf.heightAboveFloor, units: preferences.units))
                                     LabeledContent("Clear space above", value: shelf.clearanceAbove.map { RoomShelfMeasurement.dimension($0, units: preferences.units) } ?? "Not measured")

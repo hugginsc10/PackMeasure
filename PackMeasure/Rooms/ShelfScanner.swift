@@ -274,6 +274,7 @@ struct ShelfScannerView: View {
                 if let result = state.result {
                     Form {
                         Section("Selected shelf · LiDAR estimate") {
+                            LabeledContent("Usable width", value: RoomShelfMeasurement.dimension(result.width, units: preferences.units))
                             LabeledContent("Depth", value: RoomShelfMeasurement.dimension(result.depth, units: preferences.units))
                             LabeledContent("Top above floor", value: RoomShelfMeasurement.dimension(result.height, units: preferences.units))
                             LabeledContent("Clear space above", value: result.clearance.map { RoomShelfMeasurement.dimension($0, units: preferences.units) } ?? "Not measured")

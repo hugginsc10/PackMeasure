@@ -170,4 +170,16 @@ struct InteriorGeometryTests {
         let hairpin = loop([(0, 0), (200, 0), (0, 0.01), (0, 150)])
         #expect(throws: InteriorGeometryError.self) { try InteriorGeometry.validate([hairpin]) }
     }
+    @Test func exportBasenameEncodesSanitizedNameSideClearanceAndDraftHeight() {
+        let record = InteriorMeasurement(
+            name: "Top Desk Drawer #1",
+            contours: [rectangle],
+            heightMM: 80,
+            sideClearanceMM: 2.5,
+            topClearanceMM: 2
+        )
+        #expect(record.exportBasename == "top-desk-drawer-1-clr2p5mm-h78mm")
+        let blankName = InteriorMeasurement(name: "   ", contours: [rectangle], heightMM: 50, sideClearanceMM: 2, topClearanceMM: 2)
+        #expect(blankName.exportBasename == "interior-insert-clr2mm-h48mm")
+    }
 }
