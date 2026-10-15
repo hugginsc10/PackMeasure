@@ -76,6 +76,12 @@ struct RoomMeasurementsEditor: View {
                         Button { editingShelf = shelf } label: {
                             VStack(alignment: .leading, spacing: 5) {
                                 Text(shelf.name).font(.headline)
+                                if let wallID = shelf.wallID, let wallIndex = room.walls.firstIndex(where: { $0.id == wallID }) {
+                                    Text("Attached to Wall \(wallIndex + 1)").font(.caption).foregroundStyle(.secondary)
+                                }
+                                if let width = shelf.usableWidth {
+                                    Text("Width \(RoomShelfMeasurement.dimension(width, units: preferences.units))").font(.caption)
+                                }
                                 Text("Depth \(RoomShelfMeasurement.dimension(shelf.depth, units: preferences.units))").font(.caption)
                                 Text("Above floor \(RoomShelfMeasurement.dimension(shelf.heightAboveFloor, units: preferences.units))").font(.caption)
                                 Text(shelf.clearanceAbove.map { "Clear above \(RoomShelfMeasurement.dimension($0, units: preferences.units))" } ?? "Clear above not measured").font(.caption)
@@ -135,6 +141,7 @@ struct ShelfMeasurementEditor: View {
     @State private var units: RoomEntryUnits = .inches
     @State private var initializedUnits = false
     @State private var subtractDistances: Bool
+    @State private var usableWidth: RoomLengthEntry
     @State private var depth: RoomLengthEntry
     @State private var floorHeight: RoomLengthEntry
     @State private var clearance: RoomLengthEntry
@@ -153,6 +160,7 @@ struct ShelfMeasurementEditor: View {
         _name = State(initialValue: shelf?.name ?? "Shelf")
         _wallID = State(initialValue: shelf?.wallID)
         _subtractDistances = State(initialValue: shelf?.source == .difference)
+        _usableWidth = State(initialValue: RoomLengthEntry(shelf?.usableWidth))
         _depth = State(initialValue: RoomLengthEntry(shelf?.depth))
         _floorHeight = State(initialValue: RoomLengthEntry(shelf?.heightAboveFloor))
         _clearance = State(initialValue: RoomLengthEntry(shelf?.clearanceAbove))
@@ -197,6 +205,7 @@ struct ShelfMeasurementEditor: View {
                     } else {
                         RoomLengthInput(title: "Shelf depth", identifier: "shelf-depth", entry: edited($depth), units: units)
                     }
+                    RoomLengthInput(title: "Usable width (optional)", identifier: "shelf-width", entry: edited($usableWidth), units: units)
                     RoomLengthInput(title: "Shelf top above floor", identifier: "shelf-height", entry: edited($floorHeight), units: units)
                     RoomLengthInput(title: "Clear space above (optional)", identifier: "shelf-clearance", entry: edited($clearance), units: units)
                     Text("Clear space is measured from this shelf’s top to the underside of the shelf or lowest obstruction above. Leave blank if not measured.").font(.footnote).foregroundStyle(.secondary)
@@ -210,6 +219,7 @@ struct ShelfMeasurementEditor: View {
             }
             .fullScreenCover(isPresented: $scanning) {
                 ShelfCaptureFlow { result, points, selected, source, matches in
+                    usableWidth = RoomLengthEntry(result.width)
                     depth = RoomLengthEntry(result.depth); floorHeight = RoomLengthEntry(result.height)
                     clearance = RoomLengthEntry(result.clearance); capturedPoints = points; selectedTop = selected
                     subtractDistances = false; unchangedCapture = true; capturedSource = source; pointMatches = matches
@@ -228,9 +238,9 @@ struct ShelfMeasurementEditor: View {
     private func changeUnits(_ next: RoomEntryUnits) {
         do {
             // Convert all fields atomically; an invalid value leaves the current units intact.
-            var entries = [depth, floorHeight, clearance, back, front]
+            var entries = [usableWidth, depth, floorHeight, clearance, back, front]
             for index in entries.indices { try entries[index].convert(from: units) }
-            depth = entries[0]; floorHeight = entries[1]; clearance = entries[2]; back = entries[3]; front = entries[4]
+            usableWidth = entries[0]; depth = entries[1]; floorHeight = entries[2]; clearance = entries[3]; back = entries[4]; front = entries[5]
             units = next
         } catch { self.error = error.localizedDescription }
     }
@@ -246,10 +256,11 @@ struct ShelfMeasurementEditor: View {
                 guard let value = try depth.value(in: units) else { throw RoomDimensionError.invalidShelf }
                 shelfDepth = value
             }
+            let width = try usableWidth.value(in: units)
             guard let height = try floorHeight.value(in: units) else { throw RoomDimensionError.invalidShelf }
             let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
             let record = try RoomShelfMeasurement(id: shelf?.id ?? UUID(), name: trimmed.isEmpty ? "Shelf" : trimmed,
-                wallID: wallID, depth: shelfDepth, heightAboveFloor: height, clearanceAbove: clearance.value(in: units),
+                wallID: wallID, usableWidth: width, depth: shelfDepth, heightAboveFloor: height, clearanceAbove: clearance.value(in: units),
                 source: subtractDistances ? .difference : unchangedCapture ? capturedSource : .manual,
                 capturedPoints: capturedPoints, selectedTop: selectedTop, referenceToBack: b, referenceToFront: f, pointMatches: pointMatches)
             onSave(record); dismiss()

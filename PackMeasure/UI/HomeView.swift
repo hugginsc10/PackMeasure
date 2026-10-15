@@ -132,6 +132,19 @@ private struct PackingDashboardView: View {
         }
         .navigationTitle("Your load")
         .measureScreen()
+        .toolbar {
+            if !appModel.items.isEmpty && !appModel.inventoryLoadFailed {
+                ToolbarItem(placement: .topBarTrailing) {
+                    ShareLink(
+                        item: appModel.shareText(units: preferences.units),
+                        preview: SharePreview("PackMeasure Moving Load")
+                    ) {
+                        Label("Share load plan", systemImage: "square.and.arrow.up")
+                    }
+                    .accessibilityIdentifier("share-load-plan")
+                }
+            }
+        }
         .safeAreaInset(edge: .bottom) {
             entryActions
         }
@@ -460,6 +473,9 @@ enum PackingMeasurementCopy {
 
 enum SavedMeasurementCopy {
     static func qualitySummary(for item: MeasuredItem) -> String {
+        if item.originalDimensions != nil {
+            return "Dimensions edited manually · original dimensions preserved"
+        }
         guard let angleCount = item.comparisonAngleCount,
               let agreementCount = item.comparisonAgreementCount,
               angleCount >= 2,
@@ -487,6 +503,15 @@ private struct ItemPackingEditorView: View {
     @State private var isStackable: Bool
     @State private var maxLayers: Int
     @State private var mayRotate: Bool
+    @State private var editingDimensions = false
+    @State private var restoringOriginalDimensions = false
+    @State private var editingInputUnit: MeasurementInputUnit = .inches
+    @State private var lengthText = ""
+    @State private var widthText = ""
+    @State private var heightText = ""
+    @State private var initialLengthText = ""
+    @State private var initialWidthText = ""
+    @State private var initialHeightText = ""
     @State private var saveError: String?
 
     init(item: MeasuredItem) {
@@ -504,6 +529,14 @@ private struct ItemPackingEditorView: View {
         _mayRotate = State(initialValue: item.orientationPolicy == .mayRotate)
     }
 
+    private var activeInputUnit: MeasurementInputUnit {
+        editingDimensions ? editingInputUnit : preferences.units.inputUnit
+    }
+
+    private func formattedValue(_ meters: Double, unit: MeasurementInputUnit) -> String {
+        String(format: "%.15g", locale: Locale(identifier: "en_US_POSIX"), unit.value(fromMeters: meters))
+    }
+
     var body: some View {
         Form {
             Section("Item") {
@@ -513,6 +546,28 @@ private struct ItemPackingEditorView: View {
                     "Measured size",
                     value: "\(preferences.units.length(meters: item.lengthMeters)) × \(preferences.units.length(meters: item.widthMeters)) × \(preferences.units.length(meters: item.heightMeters))"
                 )
+                if let original = item.originalDimensions {
+                    LabeledContent(
+                        "Original dimensions",
+                        value: "\(preferences.units.length(meters: original.lengthMeters)) × \(preferences.units.length(meters: original.widthMeters)) × \(preferences.units.length(meters: original.heightMeters))"
+                    )
+                    Button("Restore original dimensions") {
+                        let unit = activeInputUnit
+                        editingInputUnit = unit
+                        lengthText = formattedValue(original.lengthMeters, unit: unit)
+                        widthText = formattedValue(original.widthMeters, unit: unit)
+                        heightText = formattedValue(original.heightMeters, unit: unit)
+                        restoringOriginalDimensions = true
+                    }
+                    .accessibilityIdentifier("item-restore-original-dimensions")
+                }
+                Toggle("Edit dimensions", isOn: $editingDimensions)
+                    .accessibilityIdentifier("item-edit-dimensions")
+                if editingDimensions {
+                    dimensionField("Length", text: $lengthText, identifier: "item-length")
+                    dimensionField("Width", text: $widthText, identifier: "item-width")
+                    dimensionField("Height", text: $heightText, identifier: "item-height")
+                }
             }
 
             Section {
@@ -533,23 +588,25 @@ private struct ItemPackingEditorView: View {
         .measureScreen()
         .navigationTitle("Packing details")
         .navigationBarTitleDisplayMode(.inline)
+        .onChange(of: editingDimensions) { _, isEditing in
+            if isEditing && lengthText.isEmpty && widthText.isEmpty && heightText.isEmpty {
+                let unit = preferences.units.inputUnit
+                editingInputUnit = unit
+                let l = formattedValue(item.lengthMeters, unit: unit)
+                let w = formattedValue(item.widthMeters, unit: unit)
+                let h = formattedValue(item.heightMeters, unit: unit)
+                lengthText = l
+                widthText = w
+                heightText = h
+                initialLengthText = l
+                initialWidthText = w
+                initialHeightText = h
+            }
+        }
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
                 Button("Save") {
-                    if appModel.updateItem(
-                        id: item.id,
-                        name: name,
-                        quantity: quantity,
-                        stackability: isStackable
-                            ? .stackable(maxLayers: maxLayers)
-                            : .notStackable,
-                        orientationPolicy: mayRotate ? .mayRotate : .keepUpright
-                    ) {
-                        dismiss()
-                    } else {
-                        saveError = appModel.bannerMessage ?? InventoryPersistenceError.saveFailed.localizedDescription
-                        appModel.bannerMessage = nil
-                    }
+                    save()
                 }
                 .fontWeight(.semibold)
             }
@@ -560,5 +617,73 @@ private struct ItemPackingEditorView: View {
         )) {
             Button("OK", role: .cancel) { saveError = nil }
         } message: { Text(saveError ?? "") }
+    }
+
+    private func dimensionField(_ title: String, text: Binding<String>, identifier: String) -> some View {
+        LabeledContent(title) {
+            HStack(spacing: 6) {
+                TextField(
+                    "0",
+                    text: Binding(
+                        get: { text.wrappedValue },
+                        set: {
+                            text.wrappedValue = $0
+                            restoringOriginalDimensions = false
+                        }
+                    )
+                )
+                .keyboardType(.decimalPad)
+                .multilineTextAlignment(.trailing)
+                .frame(minWidth: 80)
+                .accessibilityLabel("\(title) in \(activeInputUnit.title.lowercased())")
+                .accessibilityIdentifier(identifier)
+                Text(activeInputUnit.symbol)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func save() {
+        var editedLength: Double?
+        var editedWidth: Double?
+        var editedHeight: Double?
+        if editingDimensions && !restoringOriginalDimensions {
+            let trimmedL = lengthText.trimmingCharacters(in: .whitespacesAndNewlines)
+            let trimmedW = widthText.trimmingCharacters(in: .whitespacesAndNewlines)
+            let trimmedH = heightText.trimmingCharacters(in: .whitespacesAndNewlines)
+            func parse(_ text: String) -> Double? {
+                Double(text.replacingOccurrences(of: ",", with: "."))
+            }
+            guard let l = parse(trimmedL),
+                  let w = parse(trimmedW),
+                  let h = parse(trimmedH),
+                  l.isFinite, w.isFinite, h.isFinite, l > 0, w > 0, h > 0 else {
+                saveError = "Enter positive length, width, and height in \(activeInputUnit.title.lowercased())."
+                return
+            }
+            if trimmedL != initialLengthText || trimmedW != initialWidthText || trimmedH != initialHeightText {
+                editedLength = trimmedL == initialLengthText ? item.lengthMeters : activeInputUnit.meters(from: l)
+                editedWidth = trimmedW == initialWidthText ? item.widthMeters : activeInputUnit.meters(from: w)
+                editedHeight = trimmedH == initialHeightText ? item.heightMeters : activeInputUnit.meters(from: h)
+            }
+        }
+        if appModel.updateItem(
+            id: item.id,
+            name: name,
+            quantity: quantity,
+            stackability: isStackable
+                ? .stackable(maxLayers: maxLayers)
+                : .notStackable,
+            orientationPolicy: mayRotate ? .mayRotate : .keepUpright,
+            lengthMeters: editedLength,
+            widthMeters: editedWidth,
+            heightMeters: editedHeight,
+            restoreOriginalDimensions: restoringOriginalDimensions
+        ) {
+            dismiss()
+        } else {
+            saveError = appModel.bannerMessage ?? "Enter valid dimensions within 40 ft (480 in) and try saving again."
+            appModel.bannerMessage = nil
+        }
     }
 }
