@@ -110,6 +110,7 @@ private struct PackingDashboardView: View {
     @Environment(AppModel.self) private var appModel
     @Environment(AppPreferences.self) private var preferences
     @Binding var manualEntryPresented: Bool
+    @State private var assignedVehicleEditorPresented = false
 
     var body: some View {
         List {
@@ -126,12 +127,18 @@ private struct PackingDashboardView: View {
                 spaceNeededSection.listRowBackground(MeasureStyle.panel)
                 loadMixSection.listRowBackground(MeasureStyle.panel)
                 vehicleSection.listRowBackground(MeasureStyle.panel)
+                assignedVehicleSection.listRowBackground(MeasureStyle.panel)
                 inventorySection.listRowBackground(MeasureStyle.panel)
             }
             planningDisclaimerSection.listRowBackground(Color.clear)
         }
         .navigationTitle("Your load")
         .measureScreen()
+        .sheet(isPresented: $assignedVehicleEditorPresented) {
+            AssignedVehicleEditorView(existing: appModel.assignedVehicle)
+                .environment(appModel)
+                .environment(preferences)
+        }
         .toolbar {
             if !appModel.items.isEmpty && !appModel.inventoryLoadFailed {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -244,6 +251,33 @@ private struct PackingDashboardView: View {
                 )
                 .font(.footnote)
                 .foregroundStyle(.orange)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var assignedVehicleSection: some View {
+        Section("Assigned vehicle check") {
+            if let evaluation = appModel.assignedVehicleEvaluation {
+                AssignedVehicleEvaluationView(evaluation: evaluation)
+                Button("Edit assigned vehicle") {
+                    assignedVehicleEditorPresented = true
+                }
+                .accessibilityIdentifier("assigned-vehicle-edit")
+                Button("Clear assigned vehicle", role: .destructive) {
+                    appModel.setAssignedVehicle(nil)
+                }
+                .accessibilityIdentifier("assigned-vehicle-clear")
+            } else {
+                Text("Have a specific rental truck or van lined up? Enter its inside cargo bay and rear-door opening to check it against your saved load.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Button {
+                    assignedVehicleEditorPresented = true
+                } label: {
+                    Label("Check a specific vehicle", systemImage: "checkmark.shield")
+                }
+                .accessibilityIdentifier("assigned-vehicle-configure")
             }
         }
     }
@@ -690,5 +724,499 @@ private struct ItemPackingEditorView: View {
             saveError = appModel.bannerMessage ?? "Enter valid dimensions within 40 ft (480 in) and try saving again."
             appModel.bannerMessage = nil
         }
+    }
+}
+
+private struct AssignedVehicleEvaluationView: View {
+    @Environment(AppPreferences.self) private var preferences
+    let evaluation: AssignedVehicleEvaluation
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                Label(evaluation.spec.name, systemImage: "truck.box")
+                    .font(.headline)
+                    .accessibilityIdentifier("assigned-vehicle-name")
+                Spacer()
+                Label(
+                    evaluation.headline,
+                    systemImage: evaluation.passesListedChecks ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
+                )
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(evaluation.passesListedChecks ? .green : .orange)
+                .accessibilityIdentifier("assigned-vehicle-status")
+            }
+
+            if let interior = evaluation.spec.interiorDimensions {
+                DetailLine(
+                    title: "Interior (\(evaluation.spec.interiorProvenance.title))",
+                    value: dimensionString(interior)
+                )
+                .accessibilityIdentifier("assigned-vehicle-interior-provenance")
+            } else {
+                DetailLine(
+                    title: "Interior (\(evaluation.spec.interiorProvenance.title))",
+                    value: "Unmeasured"
+                )
+                .accessibilityIdentifier("assigned-vehicle-interior-provenance")
+            }
+
+            if let door = evaluation.spec.rearDoorOpening {
+                DetailLine(
+                    title: "Rear door (\(evaluation.spec.doorProvenance.title))",
+                    value: [door.widthInches, door.heightInches]
+                        .map { preferences.units.length(meters: $0 * 0.0254) }
+                        .joined(separator: " × ")
+                )
+                .accessibilityIdentifier("assigned-vehicle-door-provenance")
+            } else {
+                DetailLine(
+                    title: "Rear door (\(evaluation.spec.doorProvenance.title))",
+                    value: "Unmeasured"
+                )
+                .accessibilityIdentifier("assigned-vehicle-door-provenance")
+            }
+
+            DetailLine(
+                title: "Cargo floor",
+                value: "\(preferences.units.areaFromSquareFeet(evaluation.summary.requiredFloorSquareFeet)) of \(preferences.units.areaFromSquareFeet(evaluation.vehicle.cargoFloorAreaSquareFeet ?? 0))"
+            )
+            DetailLine(
+                title: "Usable volume",
+                value: "\(preferences.units.volumeFromCubicFeet(evaluation.summary.requiredCubicFeet)) of \(preferences.units.volumeFromCubicFeet(evaluation.vehicle.usableCargoVolumeCubicFeet))"
+            )
+
+            if !evaluation.rejections.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(Array(evaluation.rejections.enumerated()), id: \.offset) { index, rejection in
+                        Label(
+                            PackingMeasurementCopy.rejection(rejection, units: preferences.units),
+                            systemImage: "xmark.octagon.fill"
+                        )
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
+                        .accessibilityIdentifier("assigned-vehicle-rejection-\(index)")
+                    }
+                }
+            }
+
+            if !evaluation.unverifiedConstraintsNote.isEmpty {
+                Label(evaluation.unverifiedConstraintsNote, systemImage: "info.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("assigned-vehicle-unverified-note")
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func dimensionString(_ dimensions: ItemDimensions) -> String {
+        [dimensions.lengthInches, dimensions.widthInches, dimensions.heightInches]
+            .map { preferences.units.length(meters: $0 * 0.0254) }
+            .joined(separator: " × ")
+    }
+}
+
+private struct AssignedVehicleEditorView: View {
+    @Environment(AppModel.self) private var appModel
+    @Environment(AppPreferences.self) private var preferences
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var name: String
+    @State private var inputUnit: MeasurementInputUnit
+    @State private var interiorLengthText: String
+    @State private var interiorWidthText: String
+    @State private var interiorHeightText: String
+    @State private var doorMeasured: Bool
+    @State private var doorWidthText: String
+    @State private var doorHeightText: String
+    @State private var catalogInteriorDimensions: ItemDimensions?
+    @State private var catalogInteriorSnapshot: [String]?
+    @State private var catalogCargoVolumeCubicFeet: Double?
+    @State private var catalogDoorOpening: DoorOpening?
+    @State private var catalogDoorSnapshot: [String]?
+    @State private var validationMessage: String?
+
+    init(existing: AssignedVehicleSpec?) {
+        let defaultUnit: MeasurementInputUnit = .inches
+        _inputUnit = State(initialValue: defaultUnit)
+        if let existing {
+            _name = State(initialValue: existing.name)
+            if let interior = existing.interiorDimensions {
+                let l = Self.formatInches(interior.lengthInches, unit: defaultUnit)
+                let w = Self.formatInches(interior.widthInches, unit: defaultUnit)
+                let h = Self.formatInches(interior.heightInches, unit: defaultUnit)
+                _interiorLengthText = State(initialValue: l)
+                _interiorWidthText = State(initialValue: w)
+                _interiorHeightText = State(initialValue: h)
+                if existing.interiorProvenance == .catalog {
+                    _catalogInteriorDimensions = State(initialValue: interior)
+                    _catalogInteriorSnapshot = State(initialValue: [l, w, h])
+                    _catalogCargoVolumeCubicFeet = State(initialValue: existing.catalogCargoVolumeCubicFeet)
+                } else {
+                    _catalogInteriorDimensions = State(initialValue: nil)
+                    _catalogInteriorSnapshot = State(initialValue: nil)
+                    _catalogCargoVolumeCubicFeet = State(initialValue: nil)
+                }
+            } else {
+                _interiorLengthText = State(initialValue: "")
+                _interiorWidthText = State(initialValue: "")
+                _interiorHeightText = State(initialValue: "")
+                _catalogInteriorDimensions = State(initialValue: nil)
+                _catalogInteriorSnapshot = State(initialValue: nil)
+                _catalogCargoVolumeCubicFeet = State(initialValue: nil)
+            }
+            if let door = existing.rearDoorOpening {
+                let dw = Self.formatInches(door.widthInches, unit: defaultUnit)
+                let dh = Self.formatInches(door.heightInches, unit: defaultUnit)
+                _doorMeasured = State(initialValue: true)
+                _doorWidthText = State(initialValue: dw)
+                _doorHeightText = State(initialValue: dh)
+                if existing.doorProvenance == .catalog {
+                    _catalogDoorOpening = State(initialValue: door)
+                    _catalogDoorSnapshot = State(initialValue: [dw, dh])
+                } else {
+                    _catalogDoorOpening = State(initialValue: nil)
+                    _catalogDoorSnapshot = State(initialValue: nil)
+                }
+            } else {
+                _doorMeasured = State(initialValue: false)
+                _doorWidthText = State(initialValue: "")
+                _doorHeightText = State(initialValue: "")
+                _catalogDoorOpening = State(initialValue: nil)
+                _catalogDoorSnapshot = State(initialValue: nil)
+            }
+        } else {
+            _name = State(initialValue: "")
+            _interiorLengthText = State(initialValue: "")
+            _interiorWidthText = State(initialValue: "")
+            _interiorHeightText = State(initialValue: "")
+            _doorMeasured = State(initialValue: true)
+            _doorWidthText = State(initialValue: "")
+            _doorHeightText = State(initialValue: "")
+            _catalogInteriorDimensions = State(initialValue: nil)
+            _catalogInteriorSnapshot = State(initialValue: nil)
+            _catalogCargoVolumeCubicFeet = State(initialValue: nil)
+            _catalogDoorOpening = State(initialValue: nil)
+            _catalogDoorSnapshot = State(initialValue: nil)
+        }
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Group {
+                    Section {
+                        Menu {
+                            ForEach(PackingVehicleCatalog.conservativeMovingFleet(loadMix: appModel.loadMix)) { profile in
+                                if profile.interiorDimensions != nil {
+                                    Button(profile.name) {
+                                        applyCatalogProfile(profile)
+                                    }
+                                }
+                            }
+                        } label: {
+                            Label("Pre-fill from catalog profile", systemImage: "truck.box")
+                        }
+                        .accessibilityIdentifier("assigned-vehicle-catalog-menu")
+
+                        TextField("Vehicle name (e.g., Rented 10' box truck)", text: $name)
+                            .accessibilityIdentifier("assigned-vehicle-name-field")
+
+                        Picker(
+                            "Input unit",
+                            selection: Binding(
+                                get: { inputUnit },
+                                set: { changeInputUnit(to: $0) }
+                            )
+                        ) {
+                            ForEach(MeasurementInputUnit.allCases, id: \.self) { unit in
+                                Text(unit.title).tag(unit)
+                            }
+                        }
+                    } header: {
+                        Text("Vehicle")
+                    } footer: {
+                        Text("Catalog values and entered measurements stay labeled separately so you can tell what was measured on the lot.")
+                    }
+
+                    Section("Inside cargo bay") {
+                        dimensionField("Length", text: $interiorLengthText, identifier: "assigned-vehicle-interior-length")
+                        dimensionField("Width", text: $interiorWidthText, identifier: "assigned-vehicle-interior-width")
+                        dimensionField("Height", text: $interiorHeightText, identifier: "assigned-vehicle-interior-height")
+                    }
+
+                    Section {
+                        Toggle("Rear door opening measured", isOn: $doorMeasured)
+                            .accessibilityIdentifier("assigned-vehicle-door-measured")
+                        if doorMeasured {
+                            dimensionField("Opening width", text: $doorWidthText, identifier: "assigned-vehicle-door-width")
+                            dimensionField("Opening height", text: $doorHeightText, identifier: "assigned-vehicle-door-height")
+                        }
+                    } header: {
+                        Text("Rear door opening")
+                    } footer: {
+                        Text("Roll-up and hinged doors are often narrower or lower than the cargo bay. Unmeasured doors cannot pass the vehicle check.")
+                    }
+                }
+                .listRowBackground(MeasureStyle.panel)
+            }
+            .measureScreen()
+            .navigationTitle("Assigned vehicle")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                    .accessibilityIdentifier("assigned-vehicle-cancel")
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        save()
+                    }
+                    .fontWeight(.semibold)
+                    .accessibilityIdentifier("assigned-vehicle-save")
+                }
+            }
+            .alert(
+                "Vehicle not saved",
+                isPresented: Binding(
+                    get: { validationMessage != nil },
+                    set: { if !$0 { validationMessage = nil } }
+                )
+            ) {
+                Button("OK", role: .cancel) { validationMessage = nil }
+            } message: {
+                Text(validationMessage ?? "")
+            }
+        }
+    }
+
+    private func dimensionField(_ title: String, text: Binding<String>, identifier: String) -> some View {
+        LabeledContent(title) {
+            HStack(spacing: 6) {
+                TextField("0", text: text)
+                    .keyboardType(.decimalPad)
+                    .multilineTextAlignment(.trailing)
+                    .frame(minWidth: 80)
+                    .accessibilityLabel("\(title) in \(inputUnit.title.lowercased())")
+                    .accessibilityIdentifier(identifier)
+                Text(inputUnit.symbol)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func applyCatalogProfile(_ profile: PackingVehicleProfile) {
+        let spec = AssignedVehicleSpec.fromCatalog(profile)
+        name = spec.name
+        if let interior = spec.interiorDimensions {
+            let l = Self.formatInches(interior.lengthInches, unit: inputUnit)
+            let w = Self.formatInches(interior.widthInches, unit: inputUnit)
+            let h = Self.formatInches(interior.heightInches, unit: inputUnit)
+            interiorLengthText = l
+            interiorWidthText = w
+            interiorHeightText = h
+            catalogInteriorDimensions = interior
+            catalogInteriorSnapshot = [l, w, h]
+            catalogCargoVolumeCubicFeet = spec.catalogCargoVolumeCubicFeet
+        }
+        if let door = spec.rearDoorOpening {
+            let dw = Self.formatInches(door.widthInches, unit: inputUnit)
+            let dh = Self.formatInches(door.heightInches, unit: inputUnit)
+            doorMeasured = true
+            doorWidthText = dw
+            doorHeightText = dh
+            catalogDoorOpening = door
+            catalogDoorSnapshot = [dw, dh]
+        } else {
+            doorMeasured = false
+            doorWidthText = ""
+            doorHeightText = ""
+            catalogDoorOpening = nil
+            catalogDoorSnapshot = nil
+        }
+    }
+
+    private func changeInputUnit(to newUnit: MeasurementInputUnit) {
+        guard newUnit != inputUnit else { return }
+        let oldUnit = inputUnit
+
+        let trimmedInterior = [
+            interiorLengthText.trimmingCharacters(in: .whitespacesAndNewlines),
+            interiorWidthText.trimmingCharacters(in: .whitespacesAndNewlines),
+            interiorHeightText.trimmingCharacters(in: .whitespacesAndNewlines)
+        ]
+        if let catalogInteriorDimensions,
+           let snapshot = catalogInteriorSnapshot {
+            let newL = Self.formatInches(catalogInteriorDimensions.lengthInches, unit: newUnit)
+            let newW = Self.formatInches(catalogInteriorDimensions.widthInches, unit: newUnit)
+            let newH = Self.formatInches(catalogInteriorDimensions.heightInches, unit: newUnit)
+            interiorLengthText = trimmedInterior[0] == snapshot[0]
+                ? newL
+                : Self.convertedText(interiorLengthText, from: oldUnit, to: newUnit)
+            interiorWidthText = trimmedInterior[1] == snapshot[1]
+                ? newW
+                : Self.convertedText(interiorWidthText, from: oldUnit, to: newUnit)
+            interiorHeightText = trimmedInterior[2] == snapshot[2]
+                ? newH
+                : Self.convertedText(interiorHeightText, from: oldUnit, to: newUnit)
+            catalogInteriorSnapshot = [newL, newW, newH]
+        } else {
+            interiorLengthText = Self.convertedText(interiorLengthText, from: oldUnit, to: newUnit)
+            interiorWidthText = Self.convertedText(interiorWidthText, from: oldUnit, to: newUnit)
+            interiorHeightText = Self.convertedText(interiorHeightText, from: oldUnit, to: newUnit)
+        }
+
+        let trimmedDoor = [
+            doorWidthText.trimmingCharacters(in: .whitespacesAndNewlines),
+            doorHeightText.trimmingCharacters(in: .whitespacesAndNewlines)
+        ]
+        if let catalogDoorOpening,
+           let snapshot = catalogDoorSnapshot {
+            let newDW = Self.formatInches(catalogDoorOpening.widthInches, unit: newUnit)
+            let newDH = Self.formatInches(catalogDoorOpening.heightInches, unit: newUnit)
+            doorWidthText = trimmedDoor[0] == snapshot[0]
+                ? newDW
+                : Self.convertedText(doorWidthText, from: oldUnit, to: newUnit)
+            doorHeightText = trimmedDoor[1] == snapshot[1]
+                ? newDH
+                : Self.convertedText(doorHeightText, from: oldUnit, to: newUnit)
+            catalogDoorSnapshot = [newDW, newDH]
+        } else {
+            doorWidthText = Self.convertedText(doorWidthText, from: oldUnit, to: newUnit)
+            doorHeightText = Self.convertedText(doorHeightText, from: oldUnit, to: newUnit)
+        }
+
+        inputUnit = newUnit
+    }
+
+    private func save() {
+        let trimmedL = interiorLengthText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedW = interiorWidthText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedH = interiorHeightText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let parsedL = Self.parsePositive(trimmedL),
+              let parsedW = Self.parsePositive(trimmedW),
+              let parsedH = Self.parsePositive(trimmedH) else {
+            validationMessage = "Enter positive interior length, width, and height in \(inputUnit.title.lowercased())."
+            return
+        }
+
+        let interiorDimensions: ItemDimensions
+        let interiorProvenance: PackingDimensionProvenance
+        if let catalogInteriorDimensions,
+           let catalogInteriorSnapshot,
+           [trimmedL, trimmedW, trimmedH] == catalogInteriorSnapshot {
+            interiorDimensions = catalogInteriorDimensions
+            interiorProvenance = .catalog
+        } else {
+            let lengthInches = (catalogInteriorDimensions != nil && trimmedL == catalogInteriorSnapshot?[0])
+                ? catalogInteriorDimensions!.lengthInches
+                : inputUnit.meters(from: parsedL) / 0.0254
+            let widthInches = (catalogInteriorDimensions != nil && trimmedW == catalogInteriorSnapshot?[1])
+                ? catalogInteriorDimensions!.widthInches
+                : inputUnit.meters(from: parsedW) / 0.0254
+            let heightInches = (catalogInteriorDimensions != nil && trimmedH == catalogInteriorSnapshot?[2])
+                ? catalogInteriorDimensions!.heightInches
+                : inputUnit.meters(from: parsedH) / 0.0254
+            guard lengthInches <= ManualEntryDraft.maximumDimensionInches,
+                  widthInches <= ManualEntryDraft.maximumDimensionInches,
+                  heightInches <= ManualEntryDraft.maximumDimensionInches,
+                  let dimensions = try? ItemDimensions(
+                      lengthInches: lengthInches,
+                      widthInches: widthInches,
+                      heightInches: heightInches
+                  ) else {
+                validationMessage = "Enter interior dimensions within 40 ft (480 in)."
+                return
+            }
+            interiorDimensions = dimensions
+            interiorProvenance = .measured
+        }
+
+        let rearDoorOpening: DoorOpening?
+        let doorProvenance: PackingDimensionProvenance
+        if doorMeasured {
+            let trimmedDW = doorWidthText.trimmingCharacters(in: .whitespacesAndNewlines)
+            let trimmedDH = doorHeightText.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let parsedDW = Self.parsePositive(trimmedDW),
+                  let parsedDH = Self.parsePositive(trimmedDH) else {
+                validationMessage = "Enter positive rear-door width and height, or turn off Rear door opening measured."
+                return
+            }
+            if let catalogDoorOpening,
+               let catalogDoorSnapshot,
+               [trimmedDW, trimmedDH] == catalogDoorSnapshot {
+                rearDoorOpening = catalogDoorOpening
+                doorProvenance = .catalog
+            } else {
+                let doorWidthInches = (catalogDoorOpening != nil && trimmedDW == catalogDoorSnapshot?[0])
+                    ? catalogDoorOpening!.widthInches
+                    : inputUnit.meters(from: parsedDW) / 0.0254
+                let doorHeightInches = (catalogDoorOpening != nil && trimmedDH == catalogDoorSnapshot?[1])
+                    ? catalogDoorOpening!.heightInches
+                    : inputUnit.meters(from: parsedDH) / 0.0254
+                guard doorWidthInches <= ManualEntryDraft.maximumDimensionInches,
+                      doorHeightInches <= ManualEntryDraft.maximumDimensionInches,
+                      let door = try? DoorOpening(
+                          widthInches: doorWidthInches,
+                          heightInches: doorHeightInches
+                      ) else {
+                    validationMessage = "Enter rear-door dimensions within 40 ft (480 in)."
+                    return
+                }
+                rearDoorOpening = door
+                doorProvenance = .measured
+            }
+        } else {
+            rearDoorOpening = nil
+            doorProvenance = .unmeasured
+        }
+
+        let spec = AssignedVehicleSpec(
+            name: name,
+            interiorDimensions: interiorDimensions,
+            rearDoorOpening: rearDoorOpening,
+            interiorProvenance: interiorProvenance,
+            doorProvenance: doorProvenance,
+            catalogCargoVolumeCubicFeet: interiorProvenance == .catalog ? catalogCargoVolumeCubicFeet : nil
+        )
+        if appModel.setAssignedVehicle(spec) {
+            dismiss()
+        } else {
+            validationMessage = appModel.bannerMessage ?? "Could not save assigned vehicle."
+            appModel.bannerMessage = nil
+        }
+    }
+
+    private static func formatInches(_ inches: Double, unit: MeasurementInputUnit) -> String {
+        let meters = inches * 0.0254
+        return String(format: "%.15g", locale: Locale(identifier: "en_US_POSIX"), unit.value(fromMeters: meters))
+    }
+
+    private static func parsePositive(_ text: String) -> Double? {
+        guard let value = Double(text.replacingOccurrences(of: ",", with: ".")),
+              value.isFinite,
+              value > 0 else {
+            return nil
+        }
+        return value
+    }
+
+    private static func convertedText(
+        _ text: String,
+        from unit: MeasurementInputUnit,
+        to destination: MeasurementInputUnit
+    ) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard unit != destination,
+              let value = Double(trimmed.replacingOccurrences(of: ",", with: ".")),
+              value.isFinite else {
+            return text
+        }
+        let converted = unit.converted(value: value, to: destination)
+        guard converted.isFinite else { return text }
+        return String(format: "%.15g", locale: Locale(identifier: "en_US_POSIX"), converted)
     }
 }

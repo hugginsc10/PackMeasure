@@ -22,6 +22,7 @@ final class AppModel {
     var bannerMessage: String?
     private(set) var inventoryLoadFailed = false
     private(set) var loadMix: PackingLoadMix = .mixedHousehold
+    private(set) var assignedVehicle: AssignedVehicleSpec?
 
     @ObservationIgnored private let store: any InventoryStoring
     @ObservationIgnored private var hasLoaded = false
@@ -29,6 +30,7 @@ final class AppModel {
     init(store: any InventoryStoring = InventoryStore()) {
         self.store = store
         self.loadMix = store.loadLoadMix()
+        self.assignedVehicle = store.loadAssignedVehicle()
     }
 
     @discardableResult
@@ -38,6 +40,7 @@ final class AppModel {
         do {
             items = try store.load()
             loadMix = store.loadLoadMix()
+            assignedVehicle = store.loadAssignedVehicle()
             hasLoaded = true
             inventoryLoadFailed = false
             bannerMessage = nil
@@ -158,6 +161,20 @@ final class AppModel {
     }
 
     @discardableResult
+    func setAssignedVehicle(_ assignedVehicle: AssignedVehicleSpec?) -> Bool {
+        guard loadIfNeeded() else { return false }
+        do {
+            try store.saveAssignedVehicle(assignedVehicle)
+            self.assignedVehicle = assignedVehicle
+            bannerMessage = nil
+            return true
+        } catch {
+            bannerMessage = InventoryPersistenceError.saveFailed.localizedDescription
+            return false
+        }
+    }
+
+    @discardableResult
     func deleteItems(at offsets: IndexSet) -> Bool {
         guard loadIfNeeded(), offsets.allSatisfy({ items.indices.contains($0) }) else { return false }
         var next = items
@@ -177,6 +194,15 @@ final class AppModel {
         PackingPlanner().recommendVehicle(
             for: packingItems,
             from: PackingVehicleCatalog.conservativeMovingFleet(loadMix: loadMix)
+        )
+    }
+
+    var assignedVehicleEvaluation: AssignedVehicleEvaluation? {
+        guard let assignedVehicle else { return nil }
+        return PackingPlanner().evaluateAssignedVehicle(
+            assignedVehicle,
+            carrying: packingItems,
+            loadMix: loadMix
         )
     }
 
@@ -207,6 +233,10 @@ final class AppModel {
             lines.append("Recommended vehicle: \(recommendation.reason)")
         } else {
             lines.append("Recommended vehicle: \(PackingMeasurementCopy.recommendation(recommendation, units: units))")
+        }
+        if let evaluation = assignedVehicleEvaluation {
+            lines.append("Assigned vehicle: \(evaluation.spec.name) (\(evaluation.spec.interiorProvenance.title), rear door: \(evaluation.spec.doorProvenance.title))")
+            lines.append("Assigned vehicle status: \(evaluation.headline)")
         }
         if ignoredPackingItemCount > 0 {
             let count = ignoredPackingItemCount

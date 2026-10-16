@@ -5,11 +5,15 @@ protocol InventoryStoring {
     func save(_ items: [MeasuredItem]) throws
     func loadLoadMix() -> PackingLoadMix
     func saveLoadMix(_ loadMix: PackingLoadMix) throws
+    func loadAssignedVehicle() -> AssignedVehicleSpec?
+    func saveAssignedVehicle(_ vehicle: AssignedVehicleSpec?) throws
 }
 
 extension InventoryStoring {
     func loadLoadMix() -> PackingLoadMix { .mixedHousehold }
     func saveLoadMix(_ loadMix: PackingLoadMix) throws {}
+    func loadAssignedVehicle() -> AssignedVehicleSpec? { nil }
+    func saveAssignedVehicle(_ vehicle: AssignedVehicleSpec?) throws {}
 }
 
 struct InventoryStore: InventoryStoring {
@@ -83,6 +87,29 @@ struct InventoryStore: InventoryStoring {
         try data.write(to: url, options: .atomic)
     }
 
+    func loadAssignedVehicle() -> AssignedVehicleSpec? {
+        guard let url = try? assignedVehicleURL(),
+              let data = try? Data(contentsOf: url),
+              let vehicle = try? decoder.decode(AssignedVehicleSpec.self, from: data) else {
+            return nil
+        }
+        return vehicle
+    }
+
+    func saveAssignedVehicle(_ vehicle: AssignedVehicleSpec?) throws {
+        let url = try assignedVehicleURL()
+        guard let vehicle else {
+            if fileManager.fileExists(atPath: url.path) {
+                try fileManager.removeItem(at: url)
+            }
+            return
+        }
+        let directory = url.deletingLastPathComponent()
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        let data = try encoder.encode(vehicle)
+        try data.write(to: url, options: .atomic)
+    }
+
     func storageURL() throws -> URL {
         if let explicitStorageURL {
             return explicitStorageURL
@@ -103,6 +130,12 @@ struct InventoryStore: InventoryStoring {
         try storageURL()
             .deletingLastPathComponent()
             .appendingPathComponent("load-mix.json")
+    }
+
+    private func assignedVehicleURL() throws -> URL {
+        try storageURL()
+            .deletingLastPathComponent()
+            .appendingPathComponent("assigned-vehicle.json")
     }
 
     private static func decodeDate(_ string: String) -> Date? {
