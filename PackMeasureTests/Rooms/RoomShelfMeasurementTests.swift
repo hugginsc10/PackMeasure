@@ -144,6 +144,125 @@ final class RoomShelfMeasurementTests: XCTestCase {
         XCTAssertEqual(decoded.usableWidth, 1.0)
         XCTAssertThrowsError(try RoomShelfMeasurement(name: "ZeroWidth", usableWidth: 0, depth: 0.4, heightAboveFloor: 1.2, clearanceAbove: nil, source: .manual))
     }
+
+    func testShelfBinFitPassesWithMeasuredWidthAndHeadroomAndDisclosesLimitations() throws {
+        let bin = try ShelfBinSpec(
+            name: "Pantry Bin",
+            width: 0.28,
+            depth: 0.35,
+            height: 0.25,
+            clearanceAllowance: 0.01,
+            allowQuarterTurnOnShelf: false
+        )
+        let shelf = try RoomShelfMeasurement(
+            name: "Middle Pantry Shelf",
+            usableWidth: 0.90,
+            depth: 0.40,
+            heightAboveFloor: 1.20,
+            clearanceAbove: 0.35,
+            source: .manual,
+            intendedBin: bin
+        )
+        let evaluation = try XCTUnwrap(shelf.binFitEvaluation(units: .centimeters))
+        XCTAssertEqual(evaluation.status, .passesListedChecks)
+        XCTAssertEqual(evaluation.headline, "Pantry Bin passes listed shelf envelope checks")
+        XCTAssertEqual(evaluation.matchedOrientation, .asEntered)
+        XCTAssertEqual(evaluation.maxSideBySideCount, 3)
+        XCTAssertTrue(evaluation.constraintDetails.isEmpty)
+        XCTAssertTrue(evaluation.limitationsNote.contains("weight capacity"))
+        XCTAssertTrue(evaluation.limitationsNote.contains("not certified"))
+
+        let share = shelf.shareText(units: .centimeters)
+        XCTAssertTrue(share.contains("Bin check (Pantry Bin 28.00 cm × 35.00 cm × 25.00 cm, clearance 1.00 cm): Pantry Bin passes listed shelf envelope checks."))
+        XCTAssertTrue(share.contains("up to 3 side-by-side along measured width"))
+        XCTAssertTrue(share.contains("shelf weight capacity are not certified"))
+
+        let decoded = try JSONDecoder().decode(RoomShelfMeasurement.self, from: JSONEncoder().encode(shelf))
+        XCTAssertEqual(decoded.intendedBin, bin)
+    }
+
+    func testShelfBinFitReturnsInsufficientInformationWhenWidthOrHeadroomIsMissingAndNeverUsesFloorHeight() throws {
+        let bin = try ShelfBinSpec(
+            name: "Closet Tote",
+            width: 0.30,
+            depth: 0.30,
+            height: 0.25,
+            clearanceAllowance: 0.01
+        )
+        // High heightAboveFloor (1.80 m) must NEVER substitute for missing clearanceAbove (headroom).
+        let missingHeadroom = try RoomShelfMeasurement(
+            name: "Top Closet Shelf",
+            usableWidth: 0.90,
+            depth: 0.40,
+            heightAboveFloor: 1.80,
+            clearanceAbove: nil,
+            source: .manual,
+            intendedBin: bin
+        )
+        let headroomEval = try XCTUnwrap(missingHeadroom.binFitEvaluation(units: .centimeters))
+        XCTAssertEqual(headroomEval.status, .insufficientInformation)
+        XCTAssertEqual(headroomEval.headline, "Insufficient information to verify Closet Tote")
+        XCTAssertNil(headroomEval.matchedOrientation)
+        XCTAssertTrue(headroomEval.constraintDetails.contains(where: { $0.contains("cannot substitute for headroom") }))
+
+        let missingWidth = try RoomShelfMeasurement(
+            name: "Unmeasured Width Shelf",
+            usableWidth: nil,
+            depth: 0.40,
+            heightAboveFloor: 1.20,
+            clearanceAbove: 0.40,
+            source: .manual,
+            intendedBin: bin
+        )
+        let widthEval = try XCTUnwrap(missingWidth.binFitEvaluation(units: .centimeters))
+        XCTAssertEqual(widthEval.status, .insufficientInformation)
+        XCTAssertTrue(widthEval.constraintDetails.contains("Usable shelf width not measured."))
+    }
+
+    func testShelfBinFitChecksQuarterTurnOrientationAndReportsExceedingAxes() throws {
+        let fixedBin = try ShelfBinSpec(
+            name: "Deep Crate",
+            width: 0.38,
+            depth: 0.50,
+            height: 0.25,
+            clearanceAllowance: 0.01,
+            allowQuarterTurnOnShelf: false
+        )
+        let fixedShelf = try RoomShelfMeasurement(
+            name: "Utility Shelf",
+            usableWidth: 0.60,
+            depth: 0.40,
+            heightAboveFloor: 1.00,
+            clearanceAbove: 0.35,
+            source: .manual,
+            intendedBin: fixedBin
+        )
+        let failedEval = try XCTUnwrap(fixedShelf.binFitEvaluation(units: .centimeters))
+        XCTAssertEqual(failedEval.status, .exceedsShelfEnvelope)
+        XCTAssertTrue(failedEval.constraintDetails.contains(where: { $0.contains("exceeds shelf depth") }))
+
+        let rotatableBin = try ShelfBinSpec(
+            name: "Deep Crate",
+            width: 0.38,
+            depth: 0.50,
+            height: 0.25,
+            clearanceAllowance: 0.01,
+            allowQuarterTurnOnShelf: true
+        )
+        let rotatableShelf = try RoomShelfMeasurement(
+            name: "Utility Shelf",
+            usableWidth: 0.60,
+            depth: 0.40,
+            heightAboveFloor: 1.00,
+            clearanceAbove: 0.35,
+            source: .manual,
+            intendedBin: rotatableBin
+        )
+        let rotatedEval = try XCTUnwrap(rotatableShelf.binFitEvaluation(units: .centimeters))
+        XCTAssertEqual(rotatedEval.status, .passesListedChecks)
+        XCTAssertEqual(rotatedEval.matchedOrientation, .quarterTurnOnShelf)
+        XCTAssertEqual(rotatedEval.maxSideBySideCount, 1)
+    }
 }
 
 @MainActor final class ShelfScanStateTests: XCTestCase {

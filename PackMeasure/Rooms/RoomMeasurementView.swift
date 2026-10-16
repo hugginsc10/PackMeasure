@@ -426,6 +426,44 @@ struct RoomResultView<Header: View>: View {
                                     LabeledContent("Top above floor", value: RoomShelfMeasurement.dimension(shelf.heightAboveFloor, units: preferences.units))
                                     LabeledContent("Clear space above", value: shelf.clearanceAbove.map { RoomShelfMeasurement.dimension($0, units: preferences.units) } ?? "Not measured")
                                     Text(shelf.sourceLabel).font(.caption).foregroundStyle(.secondary)
+                                    if let evaluation = shelf.binFitEvaluation(units: preferences.units) {
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            LabeledContent(
+                                                "Bin (\(evaluation.bin.name))",
+                                                value: [evaluation.bin.width, evaluation.bin.depth, evaluation.bin.height]
+                                                    .map { RoomShelfMeasurement.dimension($0, units: preferences.units) }
+                                                    .joined(separator: " × ")
+                                            )
+                                            Label(
+                                                evaluation.headline,
+                                                systemImage: evaluation.status == .passesListedChecks
+                                                    ? "checkmark.circle.fill"
+                                                    : "exclamationmark.triangle.fill"
+                                            )
+                                            .font(.caption.weight(.semibold))
+                                            .foregroundStyle(evaluation.status == .passesListedChecks ? .green : .orange)
+                                            .accessibilityIdentifier("shelf-bin-status-\(shelf.id)")
+
+                                            if let orientation = evaluation.matchedOrientation,
+                                               let count = evaluation.maxSideBySideCount {
+                                                Text("\(orientation.description) · up to \(count) side-by-side")
+                                                    .font(.caption)
+                                                    .foregroundStyle(.secondary)
+                                                    .accessibilityIdentifier("shelf-bin-orientation-\(shelf.id)")
+                                            }
+                                            ForEach(Array(evaluation.constraintDetails.enumerated()), id: \.offset) { index, detail in
+                                                Text(detail)
+                                                    .font(.caption)
+                                                    .foregroundStyle(.orange)
+                                                    .accessibilityIdentifier("shelf-bin-detail-\(shelf.id)-\(index)")
+                                            }
+                                            Text(evaluation.limitationsNote)
+                                                .font(.caption2)
+                                                .foregroundStyle(.secondary)
+                                                .accessibilityIdentifier("shelf-bin-limitations-\(shelf.id)")
+                                        }
+                                        .padding(.top, 4)
+                                    }
                                 }.font(.subheadline)
                             }
                             if let onEditMeasurements {
