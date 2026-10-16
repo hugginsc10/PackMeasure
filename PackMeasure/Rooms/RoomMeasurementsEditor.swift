@@ -275,13 +275,43 @@ struct ShelfMeasurementEditor: View {
     }
     private func changeUnits(_ next: RoomEntryUnits) {
         do {
-            // Convert all fields atomically; an invalid value leaves the current units intact.
-            var entries = [usableWidth, depth, floorHeight, clearance, back, front, binWidth, binDepth, binHeight, binClearance]
-            for index in entries.indices { try entries[index].convert(from: units) }
-            usableWidth = entries[0]; depth = entries[1]; floorHeight = entries[2]; clearance = entries[3]; back = entries[4]; front = entries[5]
-            binWidth = entries[6]; binDepth = entries[7]; binHeight = entries[8]; binClearance = entries[9]
+            // Convert active fields atomically; an invalid active value leaves the current units intact.
+            var shelfEntries = [usableWidth, depth, floorHeight, clearance, back, front]
+            for index in shelfEntries.indices { try shelfEntries[index].convert(from: units) }
+            var convertedBins: [RoomLengthEntry]?
+            if checkBin {
+                var binEntries = [binWidth, binDepth, binHeight, binClearance]
+                for index in binEntries.indices { try binEntries[index].convert(from: units) }
+                convertedBins = binEntries
+            }
+            usableWidth = shelfEntries[0]; depth = shelfEntries[1]; floorHeight = shelfEntries[2]
+            clearance = shelfEntries[3]; back = shelfEntries[4]; front = shelfEntries[5]
+            if let convertedBins {
+                binWidth = convertedBins[0]; binDepth = convertedBins[1]
+                binHeight = convertedBins[2]; binClearance = convertedBins[3]
+            } else {
+                binWidth = Self.convertOrReset(binWidth, from: units)
+                binDepth = Self.convertOrReset(binDepth, from: units)
+                binHeight = Self.convertOrReset(binHeight, from: units)
+                binClearance = Self.convertOrReset(
+                    binClearance,
+                    from: units,
+                    fallback: RoomLengthEntry(ShelfBinSpec.defaultClearanceAllowanceMeters)
+                )
+            }
             units = next
         } catch { self.error = error.localizedDescription }
+    }
+    private static func convertOrReset(
+        _ entry: RoomLengthEntry,
+        from units: RoomEntryUnits,
+        fallback: RoomLengthEntry = RoomLengthEntry()
+    ) -> RoomLengthEntry {
+        var copy = entry
+        if (try? copy.convert(from: units)) != nil {
+            return copy
+        }
+        return fallback
     }
     private func save() {
         do {
