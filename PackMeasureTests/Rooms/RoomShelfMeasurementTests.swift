@@ -262,6 +262,29 @@ final class RoomShelfMeasurementTests: XCTestCase {
         XCTAssertEqual(rotatedEval.status, .passesListedChecks)
         XCTAssertEqual(rotatedEval.matchedOrientation, .quarterTurnOnShelf)
         XCTAssertEqual(rotatedEval.maxSideBySideCount, 1)
+
+        // When both orientations fit, choose the orientation that yields the larger side-by-side count.
+        let wideBin = try ShelfBinSpec(
+            name: "Wide Organizer",
+            width: 0.40,
+            depth: 0.20,
+            height: 0.20,
+            clearanceAllowance: 0.0,
+            allowQuarterTurnOnShelf: true
+        )
+        let deepShelf = try RoomShelfMeasurement(
+            name: "Deep Pantry Shelf",
+            usableWidth: 0.90,
+            depth: 0.50,
+            heightAboveFloor: 1.00,
+            clearanceAbove: 0.35,
+            source: .manual,
+            intendedBin: wideBin
+        )
+        let maxCountEval = try XCTUnwrap(deepShelf.binFitEvaluation(units: .centimeters))
+        XCTAssertEqual(maxCountEval.status, .passesListedChecks)
+        XCTAssertEqual(maxCountEval.matchedOrientation, .quarterTurnOnShelf)
+        XCTAssertEqual(maxCountEval.maxSideBySideCount, 4)
     }
 }
 

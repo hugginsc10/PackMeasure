@@ -208,14 +208,27 @@ struct RoomShelfMeasurement: Codable, Identifiable, Sendable {
                 && requiredDepth <= usableWidth + epsilon
                 && requiredWidth <= depth + epsilon
 
-            if fitsAsEntered {
+            let asEnteredCount = fitsAsEntered
+                ? max(1, Int(floor(Double((usableWidth + epsilon) / max(0.001, requiredWidth)))))
+                : nil
+            let quarterTurnCount = fitsQuarterTurn
+                ? max(1, Int(floor(Double((usableWidth + epsilon) / max(0.001, requiredDepth)))))
+                : nil
+
+            if let asEnteredCount, let quarterTurnCount {
+                if quarterTurnCount > asEnteredCount {
+                    matchedOrientation = .quarterTurnOnShelf
+                    maxSideBySideCount = quarterTurnCount
+                } else {
+                    matchedOrientation = .asEntered
+                    maxSideBySideCount = asEnteredCount
+                }
+            } else if let asEnteredCount {
                 matchedOrientation = .asEntered
-                let perBinSpan = max(0.001, requiredWidth)
-                maxSideBySideCount = max(1, Int(floor(Double((usableWidth + epsilon) / perBinSpan))))
-            } else if fitsQuarterTurn {
+                maxSideBySideCount = asEnteredCount
+            } else if let quarterTurnCount {
                 matchedOrientation = .quarterTurnOnShelf
-                let perBinSpan = max(0.001, requiredDepth)
-                maxSideBySideCount = max(1, Int(floor(Double((usableWidth + epsilon) / perBinSpan))))
+                maxSideBySideCount = quarterTurnCount
             } else {
                 exceedsMeasuredAxis = true
                 if requiredWidth > usableWidth + epsilon {
