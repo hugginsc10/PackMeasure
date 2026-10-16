@@ -916,7 +916,13 @@ private struct AssignedVehicleEditorView: View {
                         TextField("Vehicle name (e.g., Rented 10' box truck)", text: $name)
                             .accessibilityIdentifier("assigned-vehicle-name-field")
 
-                        Picker("Input unit", selection: $inputUnit) {
+                        Picker(
+                            "Input unit",
+                            selection: Binding(
+                                get: { inputUnit },
+                                set: { changeInputUnit(to: $0) }
+                            )
+                        ) {
                             ForEach(MeasurementInputUnit.allCases, id: \.self) { unit in
                                 Text(unit.title).tag(unit)
                             }
@@ -1025,6 +1031,59 @@ private struct AssignedVehicleEditorView: View {
         }
     }
 
+    private func changeInputUnit(to newUnit: MeasurementInputUnit) {
+        guard newUnit != inputUnit else { return }
+        let oldUnit = inputUnit
+
+        let trimmedInterior = [
+            interiorLengthText.trimmingCharacters(in: .whitespacesAndNewlines),
+            interiorWidthText.trimmingCharacters(in: .whitespacesAndNewlines),
+            interiorHeightText.trimmingCharacters(in: .whitespacesAndNewlines)
+        ]
+        if let catalogInteriorDimensions,
+           let snapshot = catalogInteriorSnapshot {
+            let newL = Self.formatInches(catalogInteriorDimensions.lengthInches, unit: newUnit)
+            let newW = Self.formatInches(catalogInteriorDimensions.widthInches, unit: newUnit)
+            let newH = Self.formatInches(catalogInteriorDimensions.heightInches, unit: newUnit)
+            interiorLengthText = trimmedInterior[0] == snapshot[0]
+                ? newL
+                : Self.convertedText(interiorLengthText, from: oldUnit, to: newUnit)
+            interiorWidthText = trimmedInterior[1] == snapshot[1]
+                ? newW
+                : Self.convertedText(interiorWidthText, from: oldUnit, to: newUnit)
+            interiorHeightText = trimmedInterior[2] == snapshot[2]
+                ? newH
+                : Self.convertedText(interiorHeightText, from: oldUnit, to: newUnit)
+            catalogInteriorSnapshot = [newL, newW, newH]
+        } else {
+            interiorLengthText = Self.convertedText(interiorLengthText, from: oldUnit, to: newUnit)
+            interiorWidthText = Self.convertedText(interiorWidthText, from: oldUnit, to: newUnit)
+            interiorHeightText = Self.convertedText(interiorHeightText, from: oldUnit, to: newUnit)
+        }
+
+        let trimmedDoor = [
+            doorWidthText.trimmingCharacters(in: .whitespacesAndNewlines),
+            doorHeightText.trimmingCharacters(in: .whitespacesAndNewlines)
+        ]
+        if let catalogDoorOpening,
+           let snapshot = catalogDoorSnapshot {
+            let newDW = Self.formatInches(catalogDoorOpening.widthInches, unit: newUnit)
+            let newDH = Self.formatInches(catalogDoorOpening.heightInches, unit: newUnit)
+            doorWidthText = trimmedDoor[0] == snapshot[0]
+                ? newDW
+                : Self.convertedText(doorWidthText, from: oldUnit, to: newUnit)
+            doorHeightText = trimmedDoor[1] == snapshot[1]
+                ? newDH
+                : Self.convertedText(doorHeightText, from: oldUnit, to: newUnit)
+            catalogDoorSnapshot = [newDW, newDH]
+        } else {
+            doorWidthText = Self.convertedText(doorWidthText, from: oldUnit, to: newUnit)
+            doorHeightText = Self.convertedText(doorHeightText, from: oldUnit, to: newUnit)
+        }
+
+        inputUnit = newUnit
+    }
+
     private func save() {
         let trimmedL = interiorLengthText.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedW = interiorWidthText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1044,9 +1103,15 @@ private struct AssignedVehicleEditorView: View {
             interiorDimensions = catalogInteriorDimensions
             interiorProvenance = .catalog
         } else {
-            let lengthInches = inputUnit.meters(from: parsedL) / 0.0254
-            let widthInches = inputUnit.meters(from: parsedW) / 0.0254
-            let heightInches = inputUnit.meters(from: parsedH) / 0.0254
+            let lengthInches = (catalogInteriorDimensions != nil && trimmedL == catalogInteriorSnapshot?[0])
+                ? catalogInteriorDimensions!.lengthInches
+                : inputUnit.meters(from: parsedL) / 0.0254
+            let widthInches = (catalogInteriorDimensions != nil && trimmedW == catalogInteriorSnapshot?[1])
+                ? catalogInteriorDimensions!.widthInches
+                : inputUnit.meters(from: parsedW) / 0.0254
+            let heightInches = (catalogInteriorDimensions != nil && trimmedH == catalogInteriorSnapshot?[2])
+                ? catalogInteriorDimensions!.heightInches
+                : inputUnit.meters(from: parsedH) / 0.0254
             guard lengthInches <= ManualEntryDraft.maximumDimensionInches,
                   widthInches <= ManualEntryDraft.maximumDimensionInches,
                   heightInches <= ManualEntryDraft.maximumDimensionInches,
@@ -1078,8 +1143,12 @@ private struct AssignedVehicleEditorView: View {
                 rearDoorOpening = catalogDoorOpening
                 doorProvenance = .catalog
             } else {
-                let doorWidthInches = inputUnit.meters(from: parsedDW) / 0.0254
-                let doorHeightInches = inputUnit.meters(from: parsedDH) / 0.0254
+                let doorWidthInches = (catalogDoorOpening != nil && trimmedDW == catalogDoorSnapshot?[0])
+                    ? catalogDoorOpening!.widthInches
+                    : inputUnit.meters(from: parsedDW) / 0.0254
+                let doorHeightInches = (catalogDoorOpening != nil && trimmedDH == catalogDoorSnapshot?[1])
+                    ? catalogDoorOpening!.heightInches
+                    : inputUnit.meters(from: parsedDH) / 0.0254
                 guard doorWidthInches <= ManualEntryDraft.maximumDimensionInches,
                       doorHeightInches <= ManualEntryDraft.maximumDimensionInches,
                       let door = try? DoorOpening(
@@ -1124,5 +1193,21 @@ private struct AssignedVehicleEditorView: View {
             return nil
         }
         return value
+    }
+
+    private static func convertedText(
+        _ text: String,
+        from unit: MeasurementInputUnit,
+        to destination: MeasurementInputUnit
+    ) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard unit != destination,
+              let value = Double(trimmed.replacingOccurrences(of: ",", with: ".")),
+              value.isFinite else {
+            return text
+        }
+        let converted = unit.converted(value: value, to: destination)
+        guard converted.isFinite else { return text }
+        return String(format: "%.15g", locale: Locale(identifier: "en_US_POSIX"), converted)
     }
 }
