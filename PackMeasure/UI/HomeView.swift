@@ -830,6 +830,7 @@ private struct AssignedVehicleEditorView: View {
     @State private var doorHeightText: String
     @State private var catalogInteriorDimensions: ItemDimensions?
     @State private var catalogInteriorSnapshot: [String]?
+    @State private var catalogCargoVolumeCubicFeet: Double?
     @State private var catalogDoorOpening: DoorOpening?
     @State private var catalogDoorSnapshot: [String]?
     @State private var validationMessage: String?
@@ -849,9 +850,11 @@ private struct AssignedVehicleEditorView: View {
                 if existing.interiorProvenance == .catalog {
                     _catalogInteriorDimensions = State(initialValue: interior)
                     _catalogInteriorSnapshot = State(initialValue: [l, w, h])
+                    _catalogCargoVolumeCubicFeet = State(initialValue: existing.catalogCargoVolumeCubicFeet)
                 } else {
                     _catalogInteriorDimensions = State(initialValue: nil)
                     _catalogInteriorSnapshot = State(initialValue: nil)
+                    _catalogCargoVolumeCubicFeet = State(initialValue: nil)
                 }
             } else {
                 _interiorLengthText = State(initialValue: "")
@@ -859,6 +862,7 @@ private struct AssignedVehicleEditorView: View {
                 _interiorHeightText = State(initialValue: "")
                 _catalogInteriorDimensions = State(initialValue: nil)
                 _catalogInteriorSnapshot = State(initialValue: nil)
+                _catalogCargoVolumeCubicFeet = State(initialValue: nil)
             }
             if let door = existing.rearDoorOpening {
                 let dw = Self.formatInches(door.widthInches, unit: defaultUnit)
@@ -890,6 +894,7 @@ private struct AssignedVehicleEditorView: View {
             _doorHeightText = State(initialValue: "")
             _catalogInteriorDimensions = State(initialValue: nil)
             _catalogInteriorSnapshot = State(initialValue: nil)
+            _catalogCargoVolumeCubicFeet = State(initialValue: nil)
             _catalogDoorOpening = State(initialValue: nil)
             _catalogDoorSnapshot = State(initialValue: nil)
         }
@@ -1013,6 +1018,7 @@ private struct AssignedVehicleEditorView: View {
             interiorHeightText = h
             catalogInteriorDimensions = interior
             catalogInteriorSnapshot = [l, w, h]
+            catalogCargoVolumeCubicFeet = spec.catalogCargoVolumeCubicFeet
         }
         if let door = spec.rearDoorOpening {
             let dw = Self.formatInches(door.widthInches, unit: inputUnit)
@@ -1171,7 +1177,8 @@ private struct AssignedVehicleEditorView: View {
             interiorDimensions: interiorDimensions,
             rearDoorOpening: rearDoorOpening,
             interiorProvenance: interiorProvenance,
-            doorProvenance: doorProvenance
+            doorProvenance: doorProvenance,
+            catalogCargoVolumeCubicFeet: interiorProvenance == .catalog ? catalogCargoVolumeCubicFeet : nil
         )
         if appModel.setAssignedVehicle(spec) {
             dismiss()

@@ -628,6 +628,32 @@ final class PackingPlannerTests: XCTestCase {
             if case .insufficientVolume = $0 { return true }
             return false
         }))
+        XCTAssertTrue(evaluation.rejections.contains(where: { $0.reason.contains("measured cargo bay") }))
+        XCTAssertTrue(evaluation.rejections.contains(where: { $0.reason.contains("measured rear door") }))
+    }
+
+    func testAssignedVehiclePreservesCatalogVolumeAndProvenanceWording() throws {
+        let fifteenFootTruck = try XCTUnwrap(
+            PackingVehicleCatalog.conservativeMovingFleet().first(where: { $0.id == "uhaul-15-foot" })
+        )
+        let spec = AssignedVehicleSpec.fromCatalog(fifteenFootTruck)
+        let profile = spec.profile(loadMix: .mixedHousehold)
+
+        XCTAssertEqual(profile.advertisedCargoVolumeCubicFeet, 764, accuracy: 0.001)
+        XCTAssertEqual(profile.usableCargoVolumeCubicFeet, 573, accuracy: 0.001)
+
+        let oversizedItem = try PackingItem(
+            name: "Tall wardrobe",
+            dimensions: try ItemDimensions(lengthInches: 200, widthInches: 40, heightInches: 85),
+            quantity: 1,
+            stackability: .notStackable,
+            orientationPolicy: .keepUpright
+        )
+        let evaluation = PackingPlanner().evaluateAssignedVehicle(spec, carrying: [oversizedItem])
+        XCTAssertTrue(evaluation.rejections.contains(where: { $0.reason.contains("catalog cargo bay") }))
+        XCTAssertTrue(evaluation.rejections.contains(where: { $0.reason.contains("catalog rear door") }))
+        XCTAssertFalse(evaluation.rejections.contains(where: { $0.reason.contains("measured cargo bay") }))
+        XCTAssertFalse(evaluation.rejections.contains(where: { $0.reason.contains("measured rear door") }))
     }
 
     private func makeVehicle(

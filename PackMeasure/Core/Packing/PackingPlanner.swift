@@ -72,7 +72,7 @@ struct PackingPlanner: Sendable {
             )
         }
 
-        let rejections = allRejections(for: vehicle, carrying: items)
+        let rejections = allRejections(for: vehicle, spec: spec, carrying: items)
         let passes = rejections.isEmpty
         let headline = passes
             ? "Passes listed dimensional checks"
@@ -322,6 +322,7 @@ struct PackingPlanner: Sendable {
 
     private func allRejections(
         for vehicle: PackingVehicleProfile,
+        spec: AssignedVehicleSpec,
         carrying items: [PackingItem]
     ) -> [PackingVehicleRejection] {
         var failures: [PackingVehicleRejection] = []
@@ -346,26 +347,32 @@ struct PackingPlanner: Sendable {
         }
 
         if let interior = vehicle.interiorDimensions {
+            let cargoBayDescription = spec.interiorProvenance == .catalog
+                ? "catalog cargo bay"
+                : "measured cargo bay"
             for candidate in items where !item(candidate, fitsInside: interior) {
                 let itemName = displayName(for: candidate)
                 failures.append(
                     rejection(
                         vehicle: vehicle,
                         constraint: .interiorClearance(itemName: itemName),
-                        reason: "\(vehicle.name) cannot fit “\(itemName)” inside its measured cargo bay."
+                        reason: "\(vehicle.name) cannot fit “\(itemName)” inside its \(cargoBayDescription)."
                     )
                 )
             }
         }
 
         if let door = vehicle.rearDoorOpening {
+            let doorDescription = spec.doorProvenance == .catalog
+                ? "catalog rear door"
+                : "measured rear door"
             for candidate in items where !item(candidate, fitsThrough: door) {
                 let itemName = displayName(for: candidate)
                 failures.append(
                     rejection(
                         vehicle: vehicle,
                         constraint: .doorClearance(itemName: itemName),
-                        reason: "\(vehicle.name) cannot load “\(itemName)” through its measured rear door."
+                        reason: "\(vehicle.name) cannot load “\(itemName)” through its \(doorDescription)."
                     )
                 )
             }

@@ -252,13 +252,15 @@ struct AssignedVehicleSpec: Codable, Equatable, Sendable {
     var rearDoorOpening: DoorOpening?
     var interiorProvenance: PackingDimensionProvenance
     var doorProvenance: PackingDimensionProvenance
+    var catalogCargoVolumeCubicFeet: Double?
 
     init(
         name: String,
         interiorDimensions: ItemDimensions?,
         rearDoorOpening: DoorOpening?,
         interiorProvenance: PackingDimensionProvenance = .measured,
-        doorProvenance: PackingDimensionProvenance? = nil
+        doorProvenance: PackingDimensionProvenance? = nil,
+        catalogCargoVolumeCubicFeet: Double? = nil
     ) {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         self.name = trimmed.isEmpty ? "Assigned vehicle" : trimmed
@@ -266,6 +268,14 @@ struct AssignedVehicleSpec: Codable, Equatable, Sendable {
         self.rearDoorOpening = rearDoorOpening
         self.interiorProvenance = interiorDimensions == nil ? .unmeasured : interiorProvenance
         self.doorProvenance = rearDoorOpening == nil ? .unmeasured : (doorProvenance ?? .measured)
+        if self.interiorProvenance == .catalog,
+           let catalogCargoVolumeCubicFeet,
+           catalogCargoVolumeCubicFeet.isFinite,
+           catalogCargoVolumeCubicFeet > 0 {
+            self.catalogCargoVolumeCubicFeet = catalogCargoVolumeCubicFeet
+        } else {
+            self.catalogCargoVolumeCubicFeet = nil
+        }
     }
 
     static func fromCatalog(_ profile: PackingVehicleProfile) -> AssignedVehicleSpec {
@@ -274,12 +284,21 @@ struct AssignedVehicleSpec: Codable, Equatable, Sendable {
             interiorDimensions: profile.interiorDimensions,
             rearDoorOpening: profile.rearDoorOpening,
             interiorProvenance: profile.interiorDimensions == nil ? .unmeasured : .catalog,
-            doorProvenance: profile.rearDoorOpening == nil ? .unmeasured : .catalog
+            doorProvenance: profile.rearDoorOpening == nil ? .unmeasured : .catalog,
+            catalogCargoVolumeCubicFeet: profile.advertisedCargoVolumeCubicFeet
         )
     }
 
     func profile(loadMix: PackingLoadMix) -> PackingVehicleProfile {
-        let grossVolume = max(0.1, interiorDimensions?.cubicFeet ?? 1)
+        let grossVolume: Double
+        if interiorProvenance == .catalog,
+           let catalogVolume = catalogCargoVolumeCubicFeet,
+           catalogVolume.isFinite,
+           catalogVolume > 0 {
+            grossVolume = catalogVolume
+        } else {
+            grossVolume = max(0.1, interiorDimensions?.cubicFeet ?? 1)
+        }
         do {
             return try PackingVehicleProfile(
                 id: "assigned-vehicle",
