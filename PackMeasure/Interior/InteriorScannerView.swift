@@ -15,14 +15,14 @@ struct InteriorScannerView: View {
     var onSave: (InteriorMeasurement) throws -> Void
 
     private var supported: Bool { ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) }
-    private var hasInProgressCapture: Bool { state.result != nil || state.hasOutline || state.sweepSeed != nil }
+    private var hasInProgressCapture: Bool { state.hasInProgressCapture }
     var body: some View {
         NavigationStack {
             Group {
                 if let result = state.result {
                     InteriorReviewView(record: result, showsUnsavedBackGuard: false, onSave: { record in try onSave(record); dismiss() })
 
-                } else if !supported && state.photo == nil && !state.hasOutline && state.sweepSeed == nil {
+                } else if !supported && state.photo == nil && !state.hasInProgressCapture {
                     ContentUnavailableView("LiDAR needed for interiors", systemImage: "viewfinder",
                         description: Text("Use a LiDAR-equipped iPhone or iPad to capture the inside outline."))
                 } else {
@@ -80,14 +80,14 @@ struct InteriorScannerView: View {
             .confirmationDialog("Start this scan over?", isPresented: $confirmingReset, titleVisibility: .visible) {
                 Button("Start over", role: .destructive) { reset() }
             } message: { Text("This clears the unfinished outline and its points.") }
-            .confirmationDialog(
+            .alert(
                 state.result != nil ? "Close without saving this interior?" : "Close and discard this scan?",
-                isPresented: $confirmingClose,
-                titleVisibility: .visible
+                isPresented: $confirmingClose
             ) {
                 Button("Discard scan", role: .destructive) { dismiss() }
                     .accessibilityIdentifier("discard-interior-scan")
                 Button("Keep editing", role: .cancel) {}
+                    .accessibilityIdentifier("keep-editing-interior-scan")
             } message: {
                 Text(state.result != nil
                      ? "Save this interior first if you want to keep its outline and settings."
