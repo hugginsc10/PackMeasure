@@ -24,7 +24,7 @@ struct PackingVehicleRecommendation: Equatable, Sendable {
 
 struct AssignedVehicleEvaluation: Equatable, Sendable {
     static let defaultUnverifiedConstraintsNote =
-        "Passes listed dimensional checks only. Payload capacity, 3D arrangement, and maneuvering path remain unverified."
+        "Checks listed dimensions only. Payload capacity, 3D arrangement, and maneuvering path remain unverified."
 
     let spec: AssignedVehicleSpec
     let vehicle: PackingVehicleProfile

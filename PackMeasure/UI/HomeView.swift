@@ -800,10 +800,12 @@ private struct AssignedVehicleEvaluationView: View {
                 }
             }
 
-            Label(evaluation.unverifiedConstraintsNote, systemImage: "info.circle")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .accessibilityIdentifier("assigned-vehicle-unverified-note")
+            if !evaluation.unverifiedConstraintsNote.isEmpty {
+                Label(evaluation.unverifiedConstraintsNote, systemImage: "info.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("assigned-vehicle-unverified-note")
+            }
         }
         .padding(.vertical, 4)
     }

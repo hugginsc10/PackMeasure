@@ -307,7 +307,7 @@ struct AssignedVehicleSpec: Codable, Equatable, Sendable {
                 rearDoorOpening: rearDoorOpening,
                 advertisedCargoVolumeCubicFeet: grossVolume,
                 usableVolumeFraction: loadMix.usableVolumeFraction,
-                notes: "Passes listed dimensional checks only. Payload capacity, 3D arrangement, and maneuvering path remain unverified."
+                notes: "Checks listed dimensions only. Payload capacity, 3D arrangement, and maneuvering path remain unverified."
             )
         } catch {
             preconditionFailure("AssignedVehicleSpec produced invalid profile: \(error)")
