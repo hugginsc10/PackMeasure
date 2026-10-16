@@ -12,11 +12,12 @@ struct RoomCeilingHeight: Codable, Sendable {
 }
 
 enum RoomDimensionError: LocalizedError {
-    case invalidHeight, invalidShelf, invalidDifference, invalidInput, wallReference, unevenShelf, upperPoint, outsideSelection
+    case invalidHeight, invalidShelf, invalidShelfBin, invalidDifference, invalidInput, wallReference, unevenShelf, upperPoint, outsideSelection
     var errorDescription: String? {
         switch self {
         case .invalidHeight: "Enter a ceiling height greater than zero and no more than 20 meters."
         case .invalidShelf: "Check the shelf dimensions: depth must be positive, height cannot be negative, and clear space must be positive if entered."
+        case .invalidShelfBin: "Enter positive bin width, depth, and height, and a nonnegative clearance allowance."
         case .invalidDifference: "The distance to the back edge must be greater than the distance to the front edge. Measure both from the same reference along the same direction."
         case .invalidInput: "Enter a valid, nonnegative length. When using feet and inches, feet must be whole and inches must be less than 12."
         case .wallReference: "Capture two points at least 20 cm apart along the same straight back edge."
@@ -25,6 +26,73 @@ enum RoomDimensionError: LocalizedError {
         case .upperPoint: "Aim at the underside directly above the front point. It must be above the shelf and within 15 cm horizontally of that point."
         }
     }
+}
+
+struct ShelfBinSpec: Codable, Equatable, Sendable {
+    static let defaultClearanceAllowanceMeters: Float = 0.0127 // 0.5 in (12.7 mm)
+
+    var name: String
+    let width: Float
+    let depth: Float
+    let height: Float
+    let clearanceAllowance: Float
+    let allowQuarterTurnOnShelf: Bool
+
+    init(
+        name: String = "Bin",
+        width: Float,
+        depth: Float,
+        height: Float,
+        clearanceAllowance: Float = ShelfBinSpec.defaultClearanceAllowanceMeters,
+        allowQuarterTurnOnShelf: Bool = false
+    ) throws {
+        guard width.isFinite, width > 0, width <= 10,
+              depth.isFinite, depth > 0, depth <= 10,
+              height.isFinite, height > 0, height <= 10,
+              clearanceAllowance.isFinite, clearanceAllowance >= 0, clearanceAllowance <= 1 else {
+            throw RoomDimensionError.invalidShelfBin
+        }
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.name = trimmed.isEmpty ? "Bin" : trimmed
+        self.width = width
+        self.depth = depth
+        self.height = height
+        self.clearanceAllowance = clearanceAllowance
+        self.allowQuarterTurnOnShelf = allowQuarterTurnOnShelf
+    }
+}
+
+struct ShelfBinFitEvaluation: Equatable, Sendable {
+    enum Status: String, Equatable, Sendable {
+        case passesListedChecks
+        case insufficientInformation
+        case exceedsShelfEnvelope
+    }
+
+    enum Orientation: String, Equatable, Sendable {
+        case asEntered
+        case quarterTurnOnShelf
+
+        var description: String {
+            switch self {
+            case .asEntered:
+                "As entered (width along shelf, depth front-to-back)"
+            case .quarterTurnOnShelf:
+                "Rotated 90° on shelf (depth along shelf, width front-to-back)"
+            }
+        }
+    }
+
+    static let defaultLimitationsNote =
+        "Checks the measured shelf surface and vertical headroom only. Face-frame openings, brackets, slide-in tilt clearance, and shelf weight capacity are not certified."
+
+    let bin: ShelfBinSpec
+    let status: Status
+    let headline: String
+    let matchedOrientation: Orientation?
+    let maxSideBySideCount: Int?
+    let constraintDetails: [String]
+    let limitationsNote: String
 }
 
 struct RoomShelfMeasurement: Codable, Identifiable, Sendable {
@@ -43,11 +111,13 @@ struct RoomShelfMeasurement: Codable, Identifiable, Sendable {
     let pointMatches: [ShelfPointMatch]?
     let referenceToBack: Float?
     let referenceToFront: Float?
+    let intendedBin: ShelfBinSpec?
 
     init(id: UUID = UUID(), name: String, wallID: UUID? = nil, usableWidth: Float? = nil, depth: Float,
          heightAboveFloor: Float, clearanceAbove: Float?, source: Source,
          measuredAt: Date = .now, capturedPoints: [SIMD3<Float>]? = nil, selectedTop: SIMD3<Float>? = nil,
-         referenceToBack: Float? = nil, referenceToFront: Float? = nil, pointMatches: [ShelfPointMatch]? = nil) throws {
+         referenceToBack: Float? = nil, referenceToFront: Float? = nil, pointMatches: [ShelfPointMatch]? = nil,
+         intendedBin: ShelfBinSpec? = nil) throws {
         guard depth.isFinite, depth > 0, depth <= 10,
               usableWidth.map({ $0.isFinite && $0 > 0 && $0 <= 20 }) ?? true,
               heightAboveFloor.isFinite, (0...20).contains(heightAboveFloor),
@@ -79,6 +149,7 @@ struct RoomShelfMeasurement: Codable, Identifiable, Sendable {
         self.selectedTop = selectedTop
         self.pointMatches = pointMatches
         self.referenceToBack = referenceToBack; self.referenceToFront = referenceToFront
+        self.intendedBin = intendedBin
     }
 
     static func depthFromDistances(back: Float, front: Float) throws -> Float {
@@ -103,6 +174,113 @@ struct RoomShelfMeasurement: Codable, Identifiable, Sendable {
         String(format: "%.1f in · %.1f cm", meters / 0.0254, meters * 100)
     }
 
+    func binFitEvaluation(units: MeasurementUnits = .inches) -> ShelfBinFitEvaluation? {
+        evaluateBinFit { Self.dimension($0, units: units) }
+    }
+
+    private func evaluateBinFit(format: (Float) -> String) -> ShelfBinFitEvaluation? {
+        guard let bin = intendedBin else { return nil }
+        let epsilon: Float = 0.0001
+        let requiredWidth = bin.width + bin.clearanceAllowance
+        let requiredDepth = bin.depth + bin.clearanceAllowance
+        let requiredHeight = bin.height + bin.clearanceAllowance
+
+        var details: [String] = []
+        var missingInformation = false
+
+        if usableWidth == nil {
+            missingInformation = true
+            details.append("Usable shelf width not measured.")
+        }
+        // Floor elevation (heightAboveFloor) never substitutes for headroom.
+        if clearanceAbove == nil {
+            missingInformation = true
+            details.append("Clear space above (headroom) not measured; shelf top height above floor cannot substitute for headroom.")
+        }
+
+        var matchedOrientation: ShelfBinFitEvaluation.Orientation?
+        var maxSideBySideCount: Int?
+        var exceedsMeasuredAxis = false
+
+        if let usableWidth {
+            let fitsAsEntered = requiredWidth <= usableWidth + epsilon && requiredDepth <= depth + epsilon
+            let fitsQuarterTurn = bin.allowQuarterTurnOnShelf
+                && requiredDepth <= usableWidth + epsilon
+                && requiredWidth <= depth + epsilon
+
+            let asEnteredCount = fitsAsEntered
+                ? max(1, Int(floor(Double((usableWidth + epsilon) / max(0.001, requiredWidth)))))
+                : nil
+            let quarterTurnCount = fitsQuarterTurn
+                ? max(1, Int(floor(Double((usableWidth + epsilon) / max(0.001, requiredDepth)))))
+                : nil
+
+            if let asEnteredCount, let quarterTurnCount {
+                if quarterTurnCount > asEnteredCount {
+                    matchedOrientation = .quarterTurnOnShelf
+                    maxSideBySideCount = quarterTurnCount
+                } else {
+                    matchedOrientation = .asEntered
+                    maxSideBySideCount = asEnteredCount
+                }
+            } else if let asEnteredCount {
+                matchedOrientation = .asEntered
+                maxSideBySideCount = asEnteredCount
+            } else if let quarterTurnCount {
+                matchedOrientation = .quarterTurnOnShelf
+                maxSideBySideCount = quarterTurnCount
+            } else {
+                exceedsMeasuredAxis = true
+                if requiredWidth > usableWidth + epsilon {
+                    details.append("\(bin.name) width with clearance (\(format(requiredWidth))) exceeds usable shelf width (\(format(usableWidth))).")
+                }
+                if requiredDepth > depth + epsilon {
+                    details.append("\(bin.name) depth with clearance (\(format(requiredDepth))) exceeds shelf depth (\(format(depth))).")
+                }
+                if bin.allowQuarterTurnOnShelf {
+                    details.append("Rotating 90° on the shelf (\(format(requiredDepth)) along shelf × \(format(requiredWidth)) deep) also exceeds the measured footprint.")
+                }
+            }
+        } else {
+            let fitsDepthDirect = requiredDepth <= depth + epsilon
+            let fitsDepthRotated = bin.allowQuarterTurnOnShelf && requiredWidth <= depth + epsilon
+            if !fitsDepthDirect && !fitsDepthRotated {
+                exceedsMeasuredAxis = true
+                details.append("\(bin.name) depth with clearance (\(format(requiredDepth))) exceeds shelf depth (\(format(depth))).")
+            }
+        }
+
+        if let clearanceAbove {
+            if requiredHeight > clearanceAbove + epsilon {
+                exceedsMeasuredAxis = true
+                details.append("\(bin.name) height with clearance (\(format(requiredHeight))) exceeds clear space above (\(format(clearanceAbove))).")
+            }
+        }
+
+        let status: ShelfBinFitEvaluation.Status
+        let headline: String
+        if missingInformation {
+            status = .insufficientInformation
+            headline = "Insufficient information to verify \(bin.name)"
+        } else if exceedsMeasuredAxis {
+            status = .exceedsShelfEnvelope
+            headline = "\(bin.name) does not fit measured shelf envelope"
+        } else {
+            status = .passesListedChecks
+            headline = "\(bin.name) passes listed shelf envelope checks"
+        }
+
+        return ShelfBinFitEvaluation(
+            bin: bin,
+            status: status,
+            headline: headline,
+            matchedOrientation: status == .passesListedChecks ? matchedOrientation : nil,
+            maxSideBySideCount: status == .passesListedChecks ? maxSideBySideCount : nil,
+            constraintDetails: details,
+            limitationsNote: ShelfBinFitEvaluation.defaultLimitationsNote
+        )
+    }
+
     var shareText: String { shareText(format: Self.dimension) }
 
     func shareText(units: MeasurementUnits) -> String {
@@ -116,6 +294,17 @@ struct RoomShelfMeasurement: Codable, Identifiable, Sendable {
         result += " (\(sourceLabel))"
         if let referenceToBack, let referenceToFront, source == .difference {
             result += "\nDepth calculation: \(format(referenceToBack)) − \(format(referenceToFront)) from the same reference/direction."
+        }
+        if let evaluation = evaluateBinFit(format: format) {
+            let bin = evaluation.bin
+            result += "\nBin check (\(bin.name) \(format(bin.width)) × \(format(bin.depth)) × \(format(bin.height)), clearance \(format(bin.clearanceAllowance))): \(evaluation.headline)."
+            if let orientation = evaluation.matchedOrientation, let count = evaluation.maxSideBySideCount {
+                result += " Orientation: \(orientation.description); up to \(count) side-by-side along measured width."
+            }
+            if !evaluation.constraintDetails.isEmpty {
+                result += " " + evaluation.constraintDetails.joined(separator: " ")
+            }
+            result += " \(evaluation.limitationsNote)"
         }
         return result
     }

@@ -85,6 +85,12 @@ struct RoomMeasurementsEditor: View {
                                 Text("Depth \(RoomShelfMeasurement.dimension(shelf.depth, units: preferences.units))").font(.caption)
                                 Text("Above floor \(RoomShelfMeasurement.dimension(shelf.heightAboveFloor, units: preferences.units))").font(.caption)
                                 Text(shelf.clearanceAbove.map { "Clear above \(RoomShelfMeasurement.dimension($0, units: preferences.units))" } ?? "Clear above not measured").font(.caption)
+                                if let evaluation = shelf.binFitEvaluation(units: preferences.units) {
+                                    Text(evaluation.headline)
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundStyle(evaluation.status == .passesListedChecks ? .green : .orange)
+                                        .accessibilityIdentifier("editor-shelf-bin-status-\(shelf.id)")
+                                }
                             }.foregroundStyle(.primary)
                         }
                     }.onDelete { offsets in room.shelves?.remove(atOffsets: offsets) }
@@ -147,6 +153,13 @@ struct ShelfMeasurementEditor: View {
     @State private var clearance: RoomLengthEntry
     @State private var back: RoomLengthEntry
     @State private var front: RoomLengthEntry
+    @State private var checkBin: Bool
+    @State private var binName: String
+    @State private var binWidth: RoomLengthEntry
+    @State private var binDepth: RoomLengthEntry
+    @State private var binHeight: RoomLengthEntry
+    @State private var binClearance: RoomLengthEntry
+    @State private var binAllowQuarterTurn: Bool
     @State private var scanning = false
     @State private var capturedPoints: [SIMD3<Float>]?
     @State private var selectedTop: SIMD3<Float>?
@@ -166,6 +179,14 @@ struct ShelfMeasurementEditor: View {
         _clearance = State(initialValue: RoomLengthEntry(shelf?.clearanceAbove))
         _back = State(initialValue: RoomLengthEntry(shelf?.referenceToBack))
         _front = State(initialValue: RoomLengthEntry(shelf?.referenceToFront))
+        let existingBin = shelf?.intendedBin
+        _checkBin = State(initialValue: existingBin != nil)
+        _binName = State(initialValue: existingBin?.name ?? "Bin")
+        _binWidth = State(initialValue: RoomLengthEntry(existingBin?.width))
+        _binDepth = State(initialValue: RoomLengthEntry(existingBin?.depth))
+        _binHeight = State(initialValue: RoomLengthEntry(existingBin?.height))
+        _binClearance = State(initialValue: RoomLengthEntry(existingBin?.clearanceAllowance ?? ShelfBinSpec.defaultClearanceAllowanceMeters))
+        _binAllowQuarterTurn = State(initialValue: existingBin?.allowQuarterTurnOnShelf ?? false)
         _capturedPoints = State(initialValue: shelf?.capturedPoints)
         _selectedTop = State(initialValue: shelf?.selectedTop)
         _unchangedCapture = State(initialValue: shelf?.source == .lidar || shelf?.source == .twoView)
@@ -211,6 +232,23 @@ struct ShelfMeasurementEditor: View {
                     Text("Clear space is measured from this shelf’s top to the underside of the shelf or lowest obstruction above. Leave blank if not measured.").font(.footnote).foregroundStyle(.secondary)
                     if unchangedCapture { Text(capturedSource == .twoView ? "Matched-point estimate · verify with a tape or laser measure." : "LiDAR estimate · verify with a tape or laser measure.").font(.footnote).foregroundStyle(.orange) }
                 }
+                Section("Bin or tote fit check") {
+                    Toggle("Check a bin or tote on this shelf", isOn: $checkBin)
+                        .accessibilityIdentifier("shelf-check-bin")
+                    if checkBin {
+                        TextField("Bin name", text: $binName)
+                            .accessibilityIdentifier("shelf-bin-name")
+                        RoomLengthInput(title: "Bin width (along shelf)", identifier: "shelf-bin-width", entry: $binWidth, units: units)
+                        RoomLengthInput(title: "Bin depth (front to back)", identifier: "shelf-bin-depth", entry: $binDepth, units: units)
+                        RoomLengthInput(title: "Bin height", identifier: "shelf-bin-height", entry: $binHeight, units: units)
+                        RoomLengthInput(title: "Clearance allowance", identifier: "shelf-bin-clearance", entry: $binClearance, units: units)
+                        Toggle("Allow 90° horizontal turn on shelf", isOn: $binAllowQuarterTurn)
+                            .accessibilityIdentifier("shelf-bin-quarter-turn")
+                        Text("Requires both usable shelf width and clear space above (headroom). Shelf height above the floor is never used as headroom. Checks the shelf surface envelope only; face-frame openings, brackets, and shelf weight capacity are not certified.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
             .navigationTitle(shelf == nil ? "Add shelf" : "Edit shelf").navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -237,12 +275,43 @@ struct ShelfMeasurementEditor: View {
     }
     private func changeUnits(_ next: RoomEntryUnits) {
         do {
-            // Convert all fields atomically; an invalid value leaves the current units intact.
-            var entries = [usableWidth, depth, floorHeight, clearance, back, front]
-            for index in entries.indices { try entries[index].convert(from: units) }
-            usableWidth = entries[0]; depth = entries[1]; floorHeight = entries[2]; clearance = entries[3]; back = entries[4]; front = entries[5]
+            // Convert active fields atomically; an invalid active value leaves the current units intact.
+            var shelfEntries = [usableWidth, depth, floorHeight, clearance, back, front]
+            for index in shelfEntries.indices { try shelfEntries[index].convert(from: units) }
+            var convertedBins: [RoomLengthEntry]?
+            if checkBin {
+                var binEntries = [binWidth, binDepth, binHeight, binClearance]
+                for index in binEntries.indices { try binEntries[index].convert(from: units) }
+                convertedBins = binEntries
+            }
+            usableWidth = shelfEntries[0]; depth = shelfEntries[1]; floorHeight = shelfEntries[2]
+            clearance = shelfEntries[3]; back = shelfEntries[4]; front = shelfEntries[5]
+            if let convertedBins {
+                binWidth = convertedBins[0]; binDepth = convertedBins[1]
+                binHeight = convertedBins[2]; binClearance = convertedBins[3]
+            } else {
+                binWidth = Self.convertOrReset(binWidth, from: units)
+                binDepth = Self.convertOrReset(binDepth, from: units)
+                binHeight = Self.convertOrReset(binHeight, from: units)
+                binClearance = Self.convertOrReset(
+                    binClearance,
+                    from: units,
+                    fallback: RoomLengthEntry(ShelfBinSpec.defaultClearanceAllowanceMeters)
+                )
+            }
             units = next
         } catch { self.error = error.localizedDescription }
+    }
+    private static func convertOrReset(
+        _ entry: RoomLengthEntry,
+        from units: RoomEntryUnits,
+        fallback: RoomLengthEntry = RoomLengthEntry()
+    ) -> RoomLengthEntry {
+        var copy = entry
+        if (try? copy.convert(from: units)) != nil {
+            return copy
+        }
+        return fallback
     }
     private func save() {
         do {
@@ -258,11 +327,31 @@ struct ShelfMeasurementEditor: View {
             }
             let width = try usableWidth.value(in: units)
             guard let height = try floorHeight.value(in: units) else { throw RoomDimensionError.invalidShelf }
+            let intendedBin: ShelfBinSpec?
+            if checkBin {
+                guard let bw = try binWidth.value(in: units),
+                      let bd = try binDepth.value(in: units),
+                      let bh = try binHeight.value(in: units) else {
+                    throw RoomDimensionError.invalidShelfBin
+                }
+                let bc = try binClearance.value(in: units) ?? ShelfBinSpec.defaultClearanceAllowanceMeters
+                intendedBin = try ShelfBinSpec(
+                    name: binName,
+                    width: bw,
+                    depth: bd,
+                    height: bh,
+                    clearanceAllowance: bc,
+                    allowQuarterTurnOnShelf: binAllowQuarterTurn
+                )
+            } else {
+                intendedBin = nil
+            }
             let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
             let record = try RoomShelfMeasurement(id: shelf?.id ?? UUID(), name: trimmed.isEmpty ? "Shelf" : trimmed,
                 wallID: wallID, usableWidth: width, depth: shelfDepth, heightAboveFloor: height, clearanceAbove: clearance.value(in: units),
                 source: subtractDistances ? .difference : unchangedCapture ? capturedSource : .manual,
-                capturedPoints: capturedPoints, selectedTop: selectedTop, referenceToBack: b, referenceToFront: f, pointMatches: pointMatches)
+                capturedPoints: capturedPoints, selectedTop: selectedTop, referenceToBack: b, referenceToFront: f, pointMatches: pointMatches,
+                intendedBin: intendedBin)
             onSave(record); dismiss()
         } catch { self.error = error.localizedDescription }
     }

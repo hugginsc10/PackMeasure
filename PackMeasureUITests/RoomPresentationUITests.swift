@@ -103,6 +103,84 @@ final class RoomPresentationUITests: XCTestCase {
         XCTAssertTrue(app.descendants(matching: .any)["live-outline-warning"].waitForExistence(timeout: 5))
     }
 
+    @MainActor func testShelfBinFitChecksHeadroomAndPersistsOnSavedRoom() {
+        let app = XCUIApplication()
+        app.launchArguments = ["room-library", "dark"]
+        app.launch()
+
+        let practiceRoom = app.staticTexts["Practice room"]
+        XCTAssertTrue(practiceRoom.waitForExistence(timeout: 5))
+        practiceRoom.tap()
+
+        let extraGroup = app.buttons["Ceiling & shelves"]
+        for _ in 0..<6 where !extraGroup.isHittable { app.swipeUp() }
+        XCTAssertTrue(extraGroup.waitForExistence(timeout: 5))
+        extraGroup.tap()
+
+        let editMeasurements = app.buttons["Edit ceiling & shelves"]
+        for _ in 0..<4 where !editMeasurements.isHittable { app.swipeUp() }
+        XCTAssertTrue(editMeasurements.waitForExistence(timeout: 5))
+        editMeasurements.tap()
+
+        let addShelf = app.buttons["add-shelf"]
+        XCTAssertTrue(addShelf.waitForExistence(timeout: 5))
+        addShelf.tap()
+
+        let shelfFields = [
+            ("shelf-depth-total-inches", "16"),
+            ("shelf-width-total-inches", "36"),
+            ("shelf-height-total-inches", "48")
+        ]
+        for (id, value) in shelfFields {
+            let field = app.textFields[id]
+            for _ in 0..<6 where !field.isHittable { app.swipeUp() }
+            XCTAssertTrue(field.waitForExistence(timeout: 5))
+            field.tap()
+            field.typeText(value)
+        }
+
+        let binToggle = app.switches["shelf-check-bin"]
+        for _ in 0..<6 where !binToggle.isHittable { app.swipeUp() }
+        XCTAssertTrue(binToggle.waitForExistence(timeout: 5))
+        binToggle.switches.firstMatch.tap()
+
+        let binFields = [
+            ("shelf-bin-width-total-inches", "11"),
+            ("shelf-bin-depth-total-inches", "14"),
+            ("shelf-bin-height-total-inches", "10")
+        ]
+        for (id, value) in binFields {
+            let field = app.textFields[id]
+            for _ in 0..<6 where !field.isHittable { app.swipeUp() }
+            XCTAssertTrue(field.waitForExistence(timeout: 5))
+            field.tap()
+            field.typeText(value)
+        }
+
+        app.buttons["keep-shelf"].tap()
+
+        // Without clear space above (headroom), floor height (48 in) must not substitute for headroom.
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Insufficient information to verify Bin")).firstMatch.waitForExistence(timeout: 5))
+
+        // Open the shelf and enter 12 in of clear space above so the bin passes listed checks.
+        app.staticTexts["Shelf"].tap()
+        let clearanceField = app.textFields["shelf-clearance-total-inches"]
+        for _ in 0..<6 where !clearanceField.isHittable { app.swipeUp() }
+        XCTAssertTrue(clearanceField.waitForExistence(timeout: 5))
+        clearanceField.tap()
+        clearanceField.typeText("12")
+        app.buttons["keep-shelf"].tap()
+
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Bin passes listed shelf envelope checks")).firstMatch.waitForExistence(timeout: 5))
+        app.buttons["apply-room-measurements"].tap()
+
+        let passedLabel = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Bin passes listed shelf envelope checks")).firstMatch
+        for _ in 0..<6 where !passedLabel.exists { app.swipeUp() }
+        XCTAssertTrue(passedLabel.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "up to 3 side-by-side")).firstMatch.exists)
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "shelf weight capacity are not certified")).firstMatch.exists)
+    }
+
     @MainActor private func isFullyVisible(_ element: XCUIElement, in app: XCUIApplication) -> Bool {
         let viewport = app.scrollViews.firstMatch.frame.insetBy(dx: 0, dy: 8)
         // Leave room for the native floating bottom toolbar.
