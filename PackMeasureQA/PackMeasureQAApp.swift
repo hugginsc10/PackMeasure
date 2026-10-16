@@ -2,7 +2,7 @@ import SwiftUI
 import simd
 
 @main struct PackMeasureQAApp: App {
-    @State private var appModel = AppModel()
+    @State private var appModel: AppModel
     @State private var preferences: AppPreferences
     @State private var accepted = false
     @State private var pickerPoint: CGPoint?
@@ -20,6 +20,10 @@ import simd
         if args.contains("centimeters") { preferences.units = .centimeters }
         if args.contains("both-units") { preferences.units = .both }
         _preferences = State(initialValue: preferences)
+        let storeURL = URL.temporaryDirectory
+            .appending(path: "qa-home-\(UUID().uuidString)", directoryHint: .isDirectory)
+            .appending(path: "inventory.json")
+        _appModel = State(initialValue: AppModel(store: InventoryStore(storageURL: storeURL)))
     }
     @MainActor private var rejected: ShelfScanState {
         let s=ShelfScanState();s.ready=true;s.request();s.receive([0,1,0],horizontalSurface:false,request:s.requestID);return s

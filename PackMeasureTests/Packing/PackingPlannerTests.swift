@@ -537,6 +537,99 @@ final class PackingPlannerTests: XCTestCase {
         XCTAssertTrue(cargoVan?.notes.contains("approximate") == true)
     }
 
+    func testEvaluateAssignedVehiclePassesAndUsesPassesListedDimensionalChecksWording() throws {
+        let catalogVan = try XCTUnwrap(PackingVehicleCatalog.conservativeMovingFleet().first(where: { $0.id == "cargo-van" }))
+        let spec = AssignedVehicleSpec.fromCatalog(catalogVan)
+        XCTAssertEqual(spec.interiorProvenance, .catalog)
+        XCTAssertEqual(spec.doorProvenance, .catalog)
+
+        let item = try PackingItem(
+            name: "Medium box",
+            dimensions: try ItemDimensions(lengthInches: 18, widthInches: 18, heightInches: 16),
+            quantity: 2,
+            stackability: .stackable(maxLayers: 3),
+            orientationPolicy: .mayRotate
+        )
+        let evaluation = PackingPlanner().evaluateAssignedVehicle(spec, carrying: [item])
+
+        XCTAssertTrue(evaluation.passesListedChecks)
+        XCTAssertTrue(evaluation.rejections.isEmpty)
+        XCTAssertEqual(evaluation.headline, "Passes listed dimensional checks")
+        XCTAssertFalse(evaluation.headline.lowercased().contains("will load"))
+        XCTAssertTrue(evaluation.unverifiedConstraintsNote.contains("Payload capacity"))
+        XCTAssertTrue(evaluation.unverifiedConstraintsNote.contains("3D arrangement"))
+        XCTAssertTrue(evaluation.unverifiedConstraintsNote.contains("maneuvering path"))
+    }
+
+    func testEvaluateAssignedVehicleRejectsUnmeasuredRearDoor() throws {
+        let spec = AssignedVehicleSpec(
+            name: "Lot cargo van",
+            interiorDimensions: try ItemDimensions(lengthInches: 114, widthInches: 56, heightInches: 53),
+            rearDoorOpening: nil,
+            interiorProvenance: .measured,
+            doorProvenance: .unmeasured
+        )
+        let item = try PackingItem(
+            name: "Tote",
+            dimensions: try ItemDimensions(lengthInches: 20, widthInches: 14, heightInches: 12),
+            quantity: 1
+        )
+        let evaluation = PackingPlanner().evaluateAssignedVehicle(spec, carrying: [item])
+
+        XCTAssertFalse(evaluation.passesListedChecks)
+        XCTAssertEqual(evaluation.headline, "Does not pass listed dimensional checks")
+        XCTAssertEqual(evaluation.rejections.map(\.constraint), [.missingDoorOpening])
+    }
+
+    func testEvaluateAssignedVehicleReportsEveryFailingItemAndConstraint() throws {
+        let spec = AssignedVehicleSpec(
+            name: "Measured compact van",
+            interiorDimensions: try ItemDimensions(lengthInches: 72, widthInches: 48, heightInches: 48),
+            rearDoorOpening: try DoorOpening(widthInches: 42, heightInches: 40),
+            interiorProvenance: .measured,
+            doorProvenance: .measured
+        )
+        let tooLongSofa = try PackingItem(
+            name: "Long sofa",
+            dimensions: try ItemDimensions(lengthInches: 84, widthInches: 34, heightInches: 32),
+            quantity: 1,
+            stackability: .notStackable,
+            orientationPolicy: .keepUpright
+        )
+        let tallCabinet = try PackingItem(
+            name: "Tall cabinet",
+            dimensions: try ItemDimensions(lengthInches: 30, widthInches: 24, heightInches: 44),
+            quantity: 1,
+            stackability: .notStackable,
+            orientationPolicy: .keepUpright
+        )
+        let bulkyCrates = try PackingItem(
+            name: "Storage crate",
+            dimensions: try ItemDimensions(lengthInches: 36, widthInches: 24, heightInches: 24),
+            quantity: 5,
+            stackability: .notStackable,
+            orientationPolicy: .keepUpright
+        )
+
+        let evaluation = PackingPlanner().evaluateAssignedVehicle(
+            spec,
+            carrying: [tooLongSofa, tallCabinet, bulkyCrates]
+        )
+
+        XCTAssertFalse(evaluation.passesListedChecks)
+        let constraints = evaluation.rejections.map(\.constraint)
+        XCTAssertTrue(constraints.contains(.interiorClearance(itemName: "Long sofa")))
+        XCTAssertTrue(constraints.contains(.doorClearance(itemName: "Tall cabinet")))
+        XCTAssertTrue(constraints.contains(where: {
+            if case .insufficientFloor = $0 { return true }
+            return false
+        }))
+        XCTAssertTrue(constraints.contains(where: {
+            if case .insufficientVolume = $0 { return true }
+            return false
+        }))
+    }
+
     private func makeVehicle(
         id: String,
         name: String,

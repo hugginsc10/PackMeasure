@@ -22,6 +22,19 @@ struct PackingVehicleRecommendation: Equatable, Sendable {
     let rejections: [PackingVehicleRejection]
 }
 
+struct AssignedVehicleEvaluation: Equatable, Sendable {
+    static let defaultUnverifiedConstraintsNote =
+        "Passes listed dimensional checks only. Payload capacity, 3D arrangement, and maneuvering path remain unverified."
+
+    let spec: AssignedVehicleSpec
+    let vehicle: PackingVehicleProfile
+    let summary: PackingSummary
+    let passesListedChecks: Bool
+    let headline: String
+    let rejections: [PackingVehicleRejection]
+    let unverifiedConstraintsNote: String
+}
+
 struct PackingPlanner: Sendable {
     let policy: PackingPolicy
 
@@ -38,6 +51,42 @@ struct PackingPlanner: Sendable {
         in vehicle: PackingVehicleProfile
     ) -> PackingSummary {
         makeSummary(for: items, interior: vehicle.interiorDimensions)
+    }
+
+    func evaluateAssignedVehicle(
+        _ spec: AssignedVehicleSpec,
+        carrying items: [PackingItem],
+        loadMix: PackingLoadMix = .mixedHousehold
+    ) -> AssignedVehicleEvaluation {
+        let vehicle = spec.profile(loadMix: loadMix)
+        let vehicleSummary = summary(for: items, in: vehicle)
+        guard !items.isEmpty else {
+            return AssignedVehicleEvaluation(
+                spec: spec,
+                vehicle: vehicle,
+                summary: vehicleSummary,
+                passesListedChecks: false,
+                headline: "Add at least one item before checking this vehicle.",
+                rejections: [],
+                unverifiedConstraintsNote: AssignedVehicleEvaluation.defaultUnverifiedConstraintsNote
+            )
+        }
+
+        let rejections = allRejections(for: vehicle, carrying: items)
+        let passes = rejections.isEmpty
+        let headline = passes
+            ? "Passes listed dimensional checks"
+            : "Does not pass listed dimensional checks"
+
+        return AssignedVehicleEvaluation(
+            spec: spec,
+            vehicle: vehicle,
+            summary: vehicleSummary,
+            passesListedChecks: passes,
+            headline: headline,
+            rejections: rejections,
+            unverifiedConstraintsNote: AssignedVehicleEvaluation.defaultUnverifiedConstraintsNote
+        )
     }
 
     func recommendVehicle(
@@ -269,6 +318,91 @@ struct PackingPlanner: Sendable {
         }
 
         return nil
+    }
+
+    private func allRejections(
+        for vehicle: PackingVehicleProfile,
+        carrying items: [PackingItem]
+    ) -> [PackingVehicleRejection] {
+        var failures: [PackingVehicleRejection] = []
+
+        if vehicle.interiorDimensions == nil {
+            failures.append(
+                rejection(
+                    vehicle: vehicle,
+                    constraint: .missingInteriorDimensions,
+                    reason: "\(vehicle.name) is missing complete interior dimensions, so clearance cannot be verified."
+                )
+            )
+        }
+        if vehicle.rearDoorOpening == nil {
+            failures.append(
+                rejection(
+                    vehicle: vehicle,
+                    constraint: .missingDoorOpening,
+                    reason: "\(vehicle.name) is missing door-opening dimensions, so loading clearance cannot be verified."
+                )
+            )
+        }
+
+        if let interior = vehicle.interiorDimensions {
+            for candidate in items where !item(candidate, fitsInside: interior) {
+                let itemName = displayName(for: candidate)
+                failures.append(
+                    rejection(
+                        vehicle: vehicle,
+                        constraint: .interiorClearance(itemName: itemName),
+                        reason: "\(vehicle.name) cannot fit “\(itemName)” inside its measured cargo bay."
+                    )
+                )
+            }
+        }
+
+        if let door = vehicle.rearDoorOpening {
+            for candidate in items where !item(candidate, fitsThrough: door) {
+                let itemName = displayName(for: candidate)
+                failures.append(
+                    rejection(
+                        vehicle: vehicle,
+                        constraint: .doorClearance(itemName: itemName),
+                        reason: "\(vehicle.name) cannot load “\(itemName)” through its measured rear door."
+                    )
+                )
+            }
+        }
+
+        if let interior = vehicle.interiorDimensions {
+            let vehicleSummary = summary(for: items, in: vehicle)
+            let availableFloor = interior.footprintSquareFeet
+            if vehicleSummary.requiredFloorSquareFeet > availableFloor {
+                failures.append(
+                    rejection(
+                        vehicle: vehicle,
+                        constraint: .insufficientFloor(
+                            requiredSquareFeet: vehicleSummary.requiredFloorSquareFeet,
+                            availableSquareFeet: availableFloor
+                        ),
+                        reason: "\(vehicle.name) has \(oneDecimal(availableFloor)) ft² of cargo floor, below the \(oneDecimal(vehicleSummary.requiredFloorSquareFeet)) ft² estimate."
+                    )
+                )
+            }
+
+            let availableVolume = vehicle.usableCargoVolumeCubicFeet
+            if vehicleSummary.requiredCubicFeet > availableVolume {
+                failures.append(
+                    rejection(
+                        vehicle: vehicle,
+                        constraint: .insufficientVolume(
+                            requiredCubicFeet: vehicleSummary.requiredCubicFeet,
+                            availableCubicFeet: availableVolume
+                        ),
+                        reason: "\(vehicle.name) has \(oneDecimal(availableVolume)) usable ft³, below the \(oneDecimal(vehicleSummary.requiredCubicFeet)) ft³ estimate."
+                    )
+                )
+            }
+        }
+
+        return failures
     }
 
     private func item(

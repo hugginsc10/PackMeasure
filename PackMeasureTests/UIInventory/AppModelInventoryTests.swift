@@ -560,6 +560,65 @@ struct AppModelInventoryTests {
         #expect(!onlyInvalidShare.contains("No listed vehicle is suitable"))
     }
 
+    @Test
+    func assignedVehiclePersistsRecomputesOnItemEditsAndAppearsInShareText() throws {
+        let harness = try InventoryHarness()
+        let model = AppModel(store: harness.store)
+        model.addItem(
+            name: "Wardrobe box",
+            estimate: .init(
+                lengthMeters: meters(fromInches: 24),
+                widthMeters: meters(fromInches: 24),
+                heightMeters: meters(fromInches: 40),
+                confidence: .high,
+                sampleCount: 800,
+                frameCount: 8
+            ),
+            quantity: 1,
+            stackability: .notStackable,
+            orientationPolicy: .keepUpright
+        )
+
+        let spec = AssignedVehicleSpec(
+            name: "Lot 10' truck",
+            interiorDimensions: try ItemDimensions(lengthInches: 119, widthInches: 75, heightInches: 73),
+            rearDoorOpening: try DoorOpening(widthInches: 67, heightInches: 48),
+            interiorProvenance: .catalog,
+            doorProvenance: .measured
+        )
+        #expect(model.setAssignedVehicle(spec))
+        let initialEval = try #require(model.assignedVehicleEvaluation)
+        #expect(initialEval.passesListedChecks)
+        #expect(initialEval.spec.interiorProvenance == .catalog)
+        #expect(initialEval.spec.doorProvenance == .measured)
+
+        let share = model.shareText(units: .inches)
+        #expect(share.contains("Assigned vehicle: Lot 10' truck (Catalog profile, rear door: Entered measurements)"))
+        #expect(share.contains("Assigned vehicle status: Passes listed dimensional checks"))
+
+        // Updating the item height above the 48 in door opening recomputes the evaluation to fail.
+        let id = try #require(model.items.first?.id)
+        #expect(model.updateItem(
+            id: id,
+            name: "Wardrobe box",
+            quantity: 1,
+            stackability: .notStackable,
+            orientationPolicy: .keepUpright,
+            lengthMeters: meters(fromInches: 24),
+            widthMeters: meters(fromInches: 24),
+            heightMeters: meters(fromInches: 52)
+        ))
+        let updatedEval = try #require(model.assignedVehicleEvaluation)
+        #expect(!updatedEval.passesListedChecks)
+        #expect(updatedEval.rejections.map(\.constraint).contains(.doorClearance(itemName: "Wardrobe box")))
+
+        let reloaded = AppModel(store: harness.store)
+        reloaded.loadIfNeeded()
+        #expect(reloaded.assignedVehicle == spec)
+        #expect(reloaded.setAssignedVehicle(nil))
+        #expect(reloaded.assignedVehicle == nil)
+    }
+
     private func meters(fromInches inches: Double) -> Double {
         inches / 39.370_078_740_157_48
     }
@@ -568,6 +627,7 @@ struct AppModelInventoryTests {
 private final class RecoveryTestStore: InventoryStoring {
     var items: [MeasuredItem] = []
     var loadMix: PackingLoadMix = .mixedHousehold
+    var assignedVehicle: AssignedVehicleSpec?
     var failReads = false
     var failWrites = false
     private(set) var saveCalls = 0
@@ -591,6 +651,16 @@ private final class RecoveryTestStore: InventoryStoring {
         saveCalls += 1
         if failWrites { throw CocoaError(.fileWriteOutOfSpace) }
         self.loadMix = loadMix
+    }
+
+    func loadAssignedVehicle() -> AssignedVehicleSpec? {
+        assignedVehicle
+    }
+
+    func saveAssignedVehicle(_ vehicle: AssignedVehicleSpec?) throws {
+        saveCalls += 1
+        if failWrites { throw CocoaError(.fileWriteOutOfSpace) }
+        assignedVehicle = vehicle
     }
 }
 
